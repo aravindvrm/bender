@@ -1,10 +1,12 @@
 import type { ProjectState } from "../hooks/useApi";
+import { ProjectSelector } from "./ProjectSelector";
 import {
   FileText,
+  FilePlus,
   FolderTree,
   GitCompareArrows,
-  LayoutGrid,
   MonitorCog,
+  ScanSearch,
   Settings,
   TerminalSquare,
   type LucideIcon,
@@ -16,12 +18,9 @@ interface SidebarProps {
   activeView: View;
   onViewChange: (view: View) => void;
   state: ProjectState | null;
+  onProjectChange: () => void;
+  onGlobalAction: (action: "new-project" | "analyze") => void;
 }
-
-// Left icon rail — global actions
-const globalNav: { id: View; label: string; icon: LucideIcon }[] = [
-  { id: "console", label: "Console", icon: TerminalSquare },
-];
 
 // Right panel — project-scoped nav
 const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
@@ -31,46 +30,58 @@ const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "changes", label: "Changes", icon: GitCompareArrows },
 ];
 
-export function Sidebar({ activeView, onViewChange, state }: SidebarProps) {
+export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGlobalAction }: SidebarProps) {
   const taskCount = state?.currentTasks?.match(/###\s*Task\s*\d+/g)?.length ?? 0;
   const completedCount = state?.completedTasks?.length ?? 0;
   const decisionCount = state?.decisions?.length ?? 0;
   const projectName = state?.projectRoot?.split(/[\\/]/).filter(Boolean).pop() ?? "No Project";
+  const hasProject = !!state?.projectRoot;
 
   return (
     <aside className="w-[280px] shrink-0 border-r border-zinc-800 bg-zinc-950 flex overflow-hidden">
 
-      {/* Narrow icon rail */}
+      {/* Narrow icon rail — global controls */}
       <div className="w-[52px] shrink-0 border-r border-zinc-800/60 flex flex-col items-center py-3 gap-1">
 
-        {/* Logo / all-projects button */}
+        {/* Console */}
         <button
           onClick={() => onViewChange("console")}
-          title="All Projects"
-          className="w-9 h-9 rounded-lg flex items-center justify-center text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors mb-2"
+          title="Console"
+          className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
+            activeView === "console"
+              ? "bg-zinc-800 text-zinc-100"
+              : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
+          }`}
         >
-          <LayoutGrid className="h-4 w-4" />
+          <TerminalSquare className="h-4 w-4" />
         </button>
 
-        {/* Global nav items */}
-        {globalNav.map((item) => {
-          const Icon = item.icon;
-          const isActive = activeView === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => onViewChange(item.id)}
-              title={item.label}
-              className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
-                isActive
-                  ? "bg-zinc-800 text-zinc-100"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-            </button>
-          );
-        })}
+        {/* Project switcher */}
+        <ProjectSelector
+          compact
+          currentPath={state?.projectRoot ?? null}
+          onProjectChange={onProjectChange}
+        />
+
+        {/* New project */}
+        <button
+          onClick={() => onGlobalAction("new-project")}
+          disabled={!hasProject}
+          title="New Project"
+          className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <FilePlus className="h-4 w-4" />
+        </button>
+
+        {/* Analyze project */}
+        <button
+          onClick={() => onGlobalAction("analyze")}
+          disabled={!hasProject}
+          title="Analyze Project"
+          className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <ScanSearch className="h-4 w-4" />
+        </button>
 
         {/* Spacer */}
         <div className="flex-1" />
@@ -99,11 +110,12 @@ export function Sidebar({ activeView, onViewChange, state }: SidebarProps) {
         </button>
       </div>
 
-      {/* Main panel */}
+      {/* Main panel — project-specific */}
       <div className="flex-1 flex flex-col min-w-0">
 
         {/* Project header */}
-        <div className="px-4 pt-4 pb-3 border-b border-zinc-800/60">
+        <div className="px-4 pt-2 pb-2 border-b border-zinc-800/60">
+          <img src="/bender_logo_alpha.png" alt="Bender" className="h-6 w-auto mb-1" />
           <p className="text-[10px] font-medium text-zinc-600 uppercase tracking-widest mb-1">Project</p>
           <p className="text-sm font-semibold text-zinc-100 truncate">{projectName}</p>
         </div>

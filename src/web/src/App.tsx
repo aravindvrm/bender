@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useProjectState } from "./hooks/useApi";
 import { Sidebar, type View } from "./components/Sidebar";
-import { ProjectSelector } from "./components/ProjectSelector";
 import { ConsoleView } from "./pages/ConsoleView";
 import { PlanView } from "./pages/PlanView";
 import { ArchitectureView } from "./pages/ArchitectureView";
@@ -20,6 +19,7 @@ const VIEW_LABELS: Record<View, string> = {
 
 export function App() {
   const [activeView, setActiveView] = useState<View>("console");
+  const [pendingConsoleAction, setPendingConsoleAction] = useState<"new-project" | "analyze" | null>(null);
   const { state, loading, error, refresh } = useProjectState();
 
   if (loading && !state) {
@@ -54,19 +54,26 @@ export function App() {
   const needsProject = !hasProject && activeView !== "settings";
   const needsInit = hasProject && !isInitialized && activeView !== "console" && activeView !== "settings";
 
+  function handleGlobalAction(action: "new-project" | "analyze") {
+    setActiveView("console");
+    setPendingConsoleAction(action);
+  }
+
   return (
     <div className="h-screen flex overflow-hidden bg-zinc-950">
-      <Sidebar activeView={activeView} onViewChange={setActiveView} state={state} />
+      <Sidebar
+        activeView={activeView}
+        onViewChange={setActiveView}
+        state={state}
+        onProjectChange={refresh}
+        onGlobalAction={handleGlobalAction}
+      />
 
       <main className="flex-1 overflow-y-auto flex flex-col">
         {/* Top bar */}
         <header className="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-800 px-6 py-3 shrink-0">
           <div className="flex items-center gap-4">
             <h2 className="text-sm font-medium text-zinc-300 w-28 shrink-0">{VIEW_LABELS[activeView]}</h2>
-            <ProjectSelector
-              currentPath={state?.projectRoot ?? null}
-              onProjectChange={refresh}
-            />
             <div className="flex-1" />
             {state?.git?.recentCommits[0] && (
               <span className="text-xs text-zinc-600 font-mono hidden lg:block">
@@ -82,7 +89,7 @@ export function App() {
             <div className="text-center max-w-sm space-y-4">
               <p className="text-zinc-400 font-medium">No project selected</p>
               <p className="text-sm text-zinc-500">
-                Use the project picker above to open an existing project or create a new one.
+                Use the project switcher in the left rail to open an existing project or create a new one.
               </p>
               <p className="text-sm text-zinc-600">
                 Or run <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">bender bend --dir /your/project</code> (or <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">npm run start -- bend --dir /your/project</code>)
@@ -103,7 +110,14 @@ export function App() {
           </div>
         ) : (
           <div className={`${activeView === "console" ? "flex-1 flex flex-col p-6" : "p-6"}`}>
-            {activeView === "console" && <ConsoleView state={state} onStateChange={refresh} />}
+            {activeView === "console" && (
+              <ConsoleView
+                state={state}
+                onStateChange={refresh}
+                pendingAction={pendingConsoleAction}
+                onActionConsumed={() => setPendingConsoleAction(null)}
+              />
+            )}
             {activeView === "plan" && state && <PlanView state={state} />}
             {activeView === "architecture" && state && <ArchitectureView state={state} />}
             {activeView === "brief" && state && <BriefView state={state} />}

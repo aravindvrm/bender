@@ -4,6 +4,9 @@ import type { ProjectState } from "../hooks/useApi";
 interface ConsoleViewProps {
   state: ProjectState | null;
   onStateChange?: () => void;
+  /** Action triggered from the sidebar global controls */
+  pendingAction?: "new-project" | "analyze" | null;
+  onActionConsumed?: () => void;
 }
 
 // ── SSE event types (mirrors server.ts) ──────────────────────────────────────
@@ -88,7 +91,7 @@ async function sendAnswer(id: string, answer: string) {
 type Status = "idle" | "running" | "done" | "error";
 type Modal = { kind: "init" } | { kind: "plan" } | null;
 
-export function ConsoleView({ state, onStateChange }: ConsoleViewProps) {
+export function ConsoleView({ state, onStateChange, pendingAction, onActionConsumed }: ConsoleViewProps) {
   const [lines, setLines] = useState<OutputLine[]>([]);
   const [status, setStatus] = useState<Status>("idle");
   const [modal, setModal] = useState<Modal>(null);
@@ -222,6 +225,24 @@ export function ConsoleView({ state, onStateChange }: ConsoleViewProps) {
 
   const canRun = status !== "running";
   const hasProject = !!state?.projectRoot;
+  const actionLocked = !canRun || !hasProject;
+
+  useEffect(() => {
+    if (!pendingAction) return;
+
+    if (pendingAction === "new-project") {
+      if (!actionLocked) {
+        setModal({ kind: "init" });
+      }
+      onActionConsumed?.();
+      return;
+    }
+
+    if (!actionLocked) {
+      void startOperation("/api/run/analyze", {});
+    }
+    onActionConsumed?.();
+  }, [pendingAction, actionLocked, onActionConsumed]);
 
   return (
     <div className="flex flex-col h-full">

@@ -4,6 +4,8 @@ import { fetchProjects, selectProject, openProject, removeProject, type ProjectE
 interface ProjectSelectorProps {
   currentPath: string | null;
   onProjectChange: () => void;
+  /** Render as a compact icon-only trigger (for sidebar icon rail) */
+  compact?: boolean;
 }
 
 interface BrowseResult {
@@ -19,7 +21,7 @@ async function browseDir(path: string): Promise<BrowseResult> {
   return res.json();
 }
 
-export function ProjectSelector({ currentPath, onProjectChange }: ProjectSelectorProps) {
+export function ProjectSelector({ currentPath, onProjectChange, compact }: ProjectSelectorProps) {
   const [open, setOpen] = useState(false);
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [inputPath, setInputPath] = useState("");
@@ -92,17 +94,33 @@ export function ProjectSelector({ currentPath, onProjectChange }: ProjectSelecto
   return (
     <>
       <div className="relative" ref={dropdownRef}>
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 transition-colors text-sm text-zinc-200 max-w-64"
-        >
-          <span className="text-zinc-500 text-xs">◈</span>
-          <span className="truncate">{displayName}</span>
-          <span className="text-zinc-600 text-xs ml-1 shrink-0">▾</span>
-        </button>
+        {compact ? (
+          <button
+            onClick={() => setOpen((v) => !v)}
+            title={`Project: ${displayName}`}
+            className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
+              open
+                ? "bg-zinc-800 text-zinc-100"
+                : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
+            }`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
+        ) : (
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 transition-colors text-sm text-zinc-200 max-w-64"
+          >
+            <span className="text-zinc-500 text-xs">◈</span>
+            <span className="truncate">{displayName}</span>
+            <span className="text-zinc-600 text-xs ml-1 shrink-0">▾</span>
+          </button>
+        )}
 
         {open && !showBrowser && (
-          <div className="absolute top-full mt-1 left-0 w-80 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-50 overflow-hidden">
+          <div className={`absolute top-0 w-80 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-50 overflow-hidden ${compact ? "left-full ml-2" : "top-full mt-1 left-0"}`}>
             {/* Path input row */}
             <div className="p-3 border-b border-zinc-800 space-y-2">
               <div className="flex gap-2">
