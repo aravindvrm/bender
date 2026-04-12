@@ -12,6 +12,7 @@ import { readRegistry, addToRegistry, removeFromRegistry } from "../state/regist
 import { initCommand } from "./init.js";
 import { planCommand } from "./plan.js";
 import { implementCommand } from "./implement.js";
+import { analyzeCommand } from "./analyze.js";
 import type { UIAdapter, SpinnerAdapter } from "./adapter.js";
 
 const API_PORT = 3142;
@@ -407,6 +408,10 @@ export async function startServer(initialProject?: string): Promise<void> {
 
   app.post("/api/run/implement", async (_req, res) => {
     await runOperation(res, (adapter) => implementCommand(getProject(), adapter));
+  });
+
+  app.post("/api/run/analyze", async (_req, res) => {
+    await runOperation(res, (adapter) => analyzeCommand(getProject(), adapter));
   });
 
   // ── SPA fallback ──────────────────────────────────────────────────────────

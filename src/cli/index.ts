@@ -7,6 +7,7 @@ import { planCommand } from "./plan.js";
 import { implementCommand } from "./implement.js";
 import { statusCommand } from "./status.js";
 import { reviewCommand } from "./review.js";
+import { analyzeCommand } from "./analyze.js";
 
 const program = new Command();
 
@@ -58,6 +59,15 @@ program
   .option("-d, --dir <path>", "Project directory (optional — can be set from the UI)")
   .action(async (opts) => {
     await reviewCommand(opts.dir);
+  });
+
+program
+  .command("analyze")
+  .description("Analyze an existing codebase and generate .bender/ project state")
+  .option("-d, --dir <path>", "Project directory", ".")
+  .action(async (opts) => {
+    const projectRoot = resolve(opts.dir);
+    await analyzeCommand(projectRoot);
   });
 
 program.parse();

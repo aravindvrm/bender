@@ -221,6 +221,7 @@ export function ConsoleView({ state, onStateChange }: ConsoleViewProps) {
   }
 
   const canRun = status !== "running";
+  const hasProject = !!state?.projectRoot;
 
   return (
     <div className="flex flex-col h-full">
@@ -228,10 +229,18 @@ export function ConsoleView({ state, onStateChange }: ConsoleViewProps) {
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <button
           onClick={() => setModal({ kind: "init" })}
-          disabled={!canRun}
+          disabled={!canRun || !hasProject}
           className="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700 disabled:opacity-40 transition-colors border border-zinc-700"
         >
           ◎ New Project
+        </button>
+        <button
+          onClick={() => startOperation("/api/run/analyze", {})}
+          disabled={!canRun || !hasProject}
+          className="px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700 disabled:opacity-40 transition-colors border border-zinc-700"
+          title="Analyze existing codebase and generate .bender/ state"
+        >
+          ⊕ Analyze Project
         </button>
         <button
           onClick={() => setModal({ kind: "plan" })}
