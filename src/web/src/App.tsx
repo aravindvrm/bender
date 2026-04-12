@@ -13,7 +13,7 @@ const VIEW_LABELS: Record<View, string> = {
   console: "Console",
   plan: "Tasks",
   architecture: "Architecture",
-  brief: "Brief",
+  brief: "Plan",
   changes: "Changes",
   settings: "Settings",
 };
