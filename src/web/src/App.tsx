@@ -39,7 +39,7 @@ export function App() {
         <div className="text-center max-w-md">
           <p className="text-zinc-400">Could not connect to bender</p>
           <p className="text-sm text-zinc-500 mt-2">
-            Make sure <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">bender open</code> (or <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">npm run open</code>) is running.
+            Make sure <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">bender bend</code> (or <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">npm run bend</code>) is running.
           </p>
           <p className="text-xs text-red-400/60 mt-4 font-mono">{error}</p>
         </div>
@@ -85,7 +85,7 @@ export function App() {
                 Use the project picker above to open an existing project or create a new one.
               </p>
               <p className="text-sm text-zinc-600">
-                Or run <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">bender open --dir /your/project</code> (or <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">npm run start -- open --dir /your/project</code>)
+                Or run <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">bender bend --dir /your/project</code> (or <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">npm run start -- bend --dir /your/project</code>)
               </p>
             </div>
           </div>

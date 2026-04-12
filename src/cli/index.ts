@@ -6,7 +6,7 @@ import { initCommand } from "./init.js";
 import { planCommand } from "./plan.js";
 import { implementCommand } from "./implement.js";
 import { statusCommand } from "./status.js";
-import { openCommand } from "./review.js";
+import { bendCommand } from "./review.js";
 import { analyzeCommand } from "./analyze.js";
 
 const program = new Command();
@@ -54,12 +54,13 @@ program
   });
 
 program
-  .command("open")
+  .command("bend")
+  .alias("open")
   .alias("review")
   .description("Open the local web dashboard")
   .option("-d, --dir <path>", "Project directory (optional — can be set from the UI)")
   .action(async (opts) => {
-    await openCommand(opts.dir);
+    await bendCommand(opts.dir);
   });
 
 program

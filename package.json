@@ -12,7 +12,8 @@
     "build:web": "vite build --config src/web/vite.config.ts",
     "dev": "tsc --watch",
     "dev:web": "vite --config src/web/vite.config.ts",
-    "open": "npm run build:cli && node dist/cli/index.js open",
+    "bend": "npm run build:cli && node dist/cli/index.js bend",
+    "open": "npm run bend",
     "start": "node dist/cli/index.js",
     "test": "vitest run",
     "test:watch": "vitest"
