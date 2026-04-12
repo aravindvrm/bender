@@ -77,8 +77,12 @@ export function SettingsView() {
   useEffect(() => {
     // Load config
     fetch("/api/config")
-      .then((r) => r.json())
-      .then((data: FullConfig) => {
+      .then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error ?? "Failed to load config");
+        return data as FullConfig;
+      })
+      .then((data) => {
         // Ensure all providers have an entry
         const providers: FullConfig["providers"] = {};
         for (const p of PROVIDERS) {
@@ -216,23 +220,26 @@ export function SettingsView() {
         </div>
       </section>
 
-      <div className="h-px bg-zinc-800" />
-
       {/* Stack (read-only) */}
-      <section>
-        <h3 className="text-sm font-semibold text-zinc-300 mb-1">Stack</h3>
-        <p className="text-xs text-zinc-600 mb-3">Set during <code className="text-zinc-500">bender init</code>. Edit <code className="text-zinc-500">.bender/config.yaml</code> directly to change.</p>
-        <div className="grid grid-cols-2 gap-2">
-          {Object.entries(config.stack)
-            .filter(([k]) => k !== "template")
-            .map(([key, val]) => (
-              <div key={key} className="flex items-center justify-between px-3 py-2 bg-zinc-900 rounded-md">
-                <span className="text-xs text-zinc-500">{key}</span>
-                <span className="text-xs text-zinc-300">{val}</span>
-              </div>
-            ))}
-        </div>
-      </section>
+      {config.stack && (
+        <>
+          <div className="h-px bg-zinc-800" />
+          <section>
+            <h3 className="text-sm font-semibold text-zinc-300 mb-1">Stack</h3>
+            <p className="text-xs text-zinc-600 mb-3">Set during <code className="text-zinc-500">bender init</code>. Edit <code className="text-zinc-500">.bender/config.yaml</code> directly to change.</p>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(config.stack)
+                .filter(([k]) => k !== "template")
+                .map(([key, val]) => (
+                  <div key={key} className="flex items-center justify-between px-3 py-2 bg-zinc-900 rounded-md">
+                    <span className="text-xs text-zinc-500">{key}</span>
+                    <span className="text-xs text-zinc-300">{val}</span>
+                  </div>
+                ))}
+            </div>
+          </section>
+        </>
+      )}
 
       <div className="h-px bg-zinc-800" />
 
@@ -241,7 +248,7 @@ export function SettingsView() {
         <h3 className="text-sm font-semibold text-zinc-300 mb-4">Test Command</h3>
         <Field label="Override">
           <TextInput
-            value={config.test.command ?? ""}
+            value={config.test?.command ?? ""}
             onChange={(v) => setConfig((c) => c ? { ...c, test: { command: v || undefined } } : c)}
             placeholder="Auto-detected (e.g. npm test)"
             mono

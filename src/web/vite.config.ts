@@ -8,6 +8,7 @@ export default defineConfig({
   build: {
     outDir: "../../dist/web",
     emptyOutDir: true,
+    target: ["chrome87", "firefox78", "safari14", "edge88"],
   },
   server: {
     port: 3141,
