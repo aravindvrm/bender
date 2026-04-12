@@ -13,6 +13,7 @@ export interface ProjectState {
   currentTasks: string | null;
   completedTasks: { name: string; content: string }[];
   apiContracts: string | null;
+  flows: string | null;
   config: {
     llm: { provider: string; models: { fast: string; default: string; strong: string } };
     stack: { framework: string; database: string; orm: string; auth: string; styling: string; language: string };

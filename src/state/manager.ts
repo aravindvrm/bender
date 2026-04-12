@@ -162,6 +162,16 @@ export class StateManager {
     return sessions;
   }
 
+  // --- Flows ---
+
+  async readFlows(): Promise<string | null> {
+    return this.readFileOrNull("flows.md");
+  }
+
+  async writeFlows(content: string): Promise<void> {
+    await this.writeStateFile("flows.md", content);
+  }
+
   // --- API Contracts ---
 
   async readApiContracts(): Promise<string | null> {

@@ -6,6 +6,7 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { readConfig, writeConfig } from "../state/config.js";
+import { createModelSet } from "../llm/provider.js";
 import { StateManager } from "../state/manager.js";
 import { GitOperations } from "../git/operations.js";
 import { readRegistry, addToRegistry, removeFromRegistry } from "../state/registry.js";
@@ -13,6 +14,7 @@ import { initCommand } from "./init.js";
 import { planCommand } from "./plan.js";
 import { implementCommand } from "./implement.js";
 import { analyzeCommand } from "./analyze.js";
+import { generateFlows } from "../roles/flowcharter.js";
 import type { UIAdapter, SpinnerAdapter } from "./adapter.js";
 
 const API_PORT = 3142;
@@ -260,6 +262,7 @@ export async function startServer(initialProject?: string): Promise<void> {
       const context = await state.gatherContext();
       const decisions = await state.readDecisions();
       const completedTasks = await state.readCompletedTasks();
+      const flows = await state.readFlows();
 
       let git = null;
       try {
@@ -283,6 +286,7 @@ export async function startServer(initialProject?: string): Promise<void> {
         currentTasks: context.currentTasks,
         completedTasks,
         apiContracts: context.apiContracts,
+        flows,
         config: {
           llm: { provider: config.llm.provider, models: config.llm.models },
           stack: config.stack,
@@ -412,6 +416,38 @@ export async function startServer(initialProject?: string): Promise<void> {
 
   app.post("/api/run/analyze", async (_req, res) => {
     await runOperation(res, (adapter) => analyzeCommand(getProject(), adapter));
+  });
+
+  app.post("/api/run/flows", async (_req, res) => {
+    await runOperation(res, async (adapter) => {
+      const projectRoot = getProject();
+      const state = new StateManager(projectRoot);
+      const context = await state.gatherContext();
+
+      if (!context.brief || !context.architecture) {
+        throw new Error("Project needs a brief and architecture before flows can be generated. Run init or analyze first.");
+      }
+
+      let models;
+      try {
+        const config = await readConfig(projectRoot);
+        models = createModelSet(config);
+      } catch (err: unknown) {
+        throw new Error(`Failed to initialize LLM provider: ${(err as Error).message}`);
+      }
+
+      adapter.subheader("Generating user flow diagrams...");
+      const flows = await generateFlows(
+        models.default,
+        context.brief,
+        context.architecture,
+        context.schema,
+        adapter.streamWriter(),
+      );
+
+      await state.writeFlows(flows);
+      adapter.success("Flow diagrams saved to .bender/flows.md");
+    });
   });
 
   // ── SPA fallback ──────────────────────────────────────────────────────────

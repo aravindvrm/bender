@@ -38,6 +38,8 @@
     "commander": "^14.0.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "lucide-react": "^1.8.0",
+    "mermaid": "^11.14.0",
     "ora": "^9.3.0",
     "simple-git": "^3.35.2",
     "yaml": "^2.8.3",
