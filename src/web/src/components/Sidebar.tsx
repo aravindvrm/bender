@@ -38,7 +38,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
   const hasProject = !!state?.projectRoot;
 
   return (
-    <aside className="w-[280px] shrink-0 border-r border-zinc-800 bg-zinc-950 flex overflow-hidden">
+    <aside className="w-[280px] shrink-0 border-r border-zinc-800 bg-zinc-950 flex overflow-visible">
 
       {/* Narrow icon rail — global controls */}
       <div className="w-[52px] shrink-0 border-r border-zinc-800/60 flex flex-col items-center py-3 gap-1">

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { ChevronDown, ChevronRight, Folder, FolderOpen, Loader2 } from "lucide-react";
 import { fetchProjects, selectProject, openProject, removeProject, type ProjectEntry } from "../hooks/useApi";
 
 interface ProjectSelectorProps {
@@ -8,15 +9,22 @@ interface ProjectSelectorProps {
   compact?: boolean;
 }
 
-interface BrowseResult {
+interface DirEntry {
+  name: string;
   path: string;
-  parent: string | null;
-  dirs: { name: string; path: string; hasBender: boolean }[];
   hasBender: boolean;
 }
 
-async function browseDir(path: string): Promise<BrowseResult> {
-  const res = await fetch(`/api/fs/browse?path=${encodeURIComponent(path)}`);
+interface BrowseResult {
+  path: string;
+  parent: string | null;
+  dirs: DirEntry[];
+  hasBender: boolean;
+}
+
+async function browseDir(path?: string): Promise<BrowseResult> {
+  const query = path && path.trim().length > 0 ? `?path=${encodeURIComponent(path)}` : "";
+  const res = await fetch(`/api/fs/browse${query}`);
   if (!res.ok) throw new Error((await res.json()).error);
   return res.json();
 }
@@ -28,6 +36,10 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
+  const [browserRoot, setBrowserRoot] = useState<BrowseResult | null>(null);
+  const [browserLoading, setBrowserLoading] = useState(false);
+  const [browserError, setBrowserError] = useState<string | null>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -49,6 +61,34 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
+
+  async function loadBrowserRoot(path?: string) {
+    setBrowserLoading(true);
+    setBrowserError(null);
+    try {
+      const data = await browseDir(path);
+      setBrowserRoot(data);
+      setSelectedPath((prev) => prev ?? data.path);
+      return data;
+    } catch (err) {
+      setBrowserError((err as Error).message);
+      return null;
+    } finally {
+      setBrowserLoading(false);
+    }
+  }
+
+  async function openBrowser() {
+    setShowBrowser(true);
+    if (browserRoot) return;
+    const preferredPath = currentPath ?? (inputPath.trim() || undefined);
+    await loadBrowserRoot(preferredPath);
+  }
+
+  async function goToParent() {
+    if (!browserRoot?.parent) return;
+    await loadBrowserRoot(browserRoot.parent);
+  }
 
   async function handleSelect(path: string) {
     setLoading(true);
@@ -74,6 +114,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
       await openProject(path);
       onProjectChange();
       setOpen(false);
+      setShowBrowser(false);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -81,8 +122,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
     }
   }
 
-  async function handleRemove(e: React.MouseEvent, path: string) {
-    e.stopPropagation();
+  async function handleRemove(path: string) {
     await removeProject(path);
     setProjects((prev) => prev.filter((p) => p.path !== path));
   }
@@ -92,138 +132,202 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
     : "No project";
 
   return (
-    <>
-      <div className="relative" ref={dropdownRef}>
-        {compact ? (
-          <button
-            onClick={() => setOpen((v) => !v)}
-            title={`Project: ${displayName}`}
-            className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
-              open
-                ? "bg-zinc-800 text-zinc-100"
-                : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
-            }`}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-            </svg>
-          </button>
-        ) : (
-          <button
-            onClick={() => setOpen((v) => !v)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 transition-colors text-sm text-zinc-200 max-w-64"
-          >
-            <span className="text-zinc-500 text-xs">◈</span>
-            <span className="truncate">{displayName}</span>
-            <span className="text-zinc-600 text-xs ml-1 shrink-0">▾</span>
-          </button>
-        )}
+    <div className="relative" ref={dropdownRef}>
+      {compact ? (
+        <button
+          onClick={() => setOpen((v) => !v)}
+          title={`Project: ${displayName}`}
+          className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
+            open
+              ? "bg-zinc-800 text-zinc-100"
+              : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
+          }`}
+        >
+          <Folder className="h-4 w-4" />
+        </button>
+      ) : (
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 transition-colors text-sm text-zinc-200 max-w-64"
+        >
+          <span className="text-zinc-500 text-xs">◈</span>
+          <span className="truncate">{displayName}</span>
+          <span className="text-zinc-600 text-xs ml-1 shrink-0">▾</span>
+        </button>
+      )}
 
-        {open && !showBrowser && (
-          <div className={`absolute top-0 w-80 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-50 overflow-hidden ${compact ? "left-full ml-2" : "top-full mt-1 left-0"}`}>
-            {/* Path input row */}
-            <div className="p-3 border-b border-zinc-800 space-y-2">
-              <div className="flex gap-2">
-                <input
-                  autoFocus
-                  type="text"
-                  value={inputPath}
-                  onChange={(e) => setInputPath(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleOpen();
-                    if (e.key === "Escape") setOpen(false);
-                  }}
-                  placeholder="/path/to/project"
-                  className="flex-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-1.5 text-sm text-zinc-200 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
-                />
+      {open && (
+        <div className={`absolute w-80 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-50 overflow-hidden ${compact ? "top-0 left-full ml-2" : "top-full mt-1 left-0"}`}>
+          <div className="p-3 border-b border-zinc-800 space-y-2">
+            <div className="flex gap-2">
+              <input
+                autoFocus
+                type="text"
+                value={inputPath}
+                onChange={(e) => setInputPath(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleOpen();
+                  if (e.key === "Escape") setOpen(false);
+                }}
+                placeholder="/path/to/project"
+                className="flex-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-1.5 text-sm text-zinc-200 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+              />
+              <button
+                onClick={() => void handleOpen()}
+                disabled={!inputPath.trim() || loading}
+                className="px-3 py-1.5 text-xs font-medium bg-zinc-700 text-zinc-200 rounded-md hover:bg-zinc-600 disabled:opacity-40 transition-colors"
+              >
+                Open
+              </button>
+            </div>
+            <button
+              onClick={() => void openBrowser()}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors"
+            >
+              <span>{showBrowser ? "▾" : "▸"}</span>
+              <span>Explorer</span>
+            </button>
+            {error && <p className="text-xs text-red-400">{error}</p>}
+          </div>
+
+          {showBrowser && (
+            <div className="border-b border-zinc-800">
+              <div className="px-3 py-2 border-b border-zinc-800 flex items-center gap-2">
                 <button
-                  onClick={handleOpen}
-                  disabled={!inputPath.trim() || loading}
-                  className="px-3 py-1.5 text-xs font-medium bg-zinc-700 text-zinc-200 rounded-md hover:bg-zinc-600 disabled:opacity-40 transition-colors"
+                  onClick={() => void goToParent()}
+                  disabled={!browserRoot?.parent || browserLoading}
+                  className="px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-40"
                 >
-                  Open
+                  Up
+                </button>
+                <button
+                  onClick={() => void loadBrowserRoot(browserRoot?.path)}
+                  disabled={!browserRoot || browserLoading}
+                  className="px-2 py-1 text-xs rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-40"
+                >
+                  Refresh
+                </button>
+                <span className="text-[11px] text-zinc-500 font-mono truncate">{browserRoot?.path ?? "Loading..."}</span>
+              </div>
+
+              <div className="max-h-72 overflow-y-auto px-2 py-2">
+                {browserLoading && (
+                  <div className="flex items-center gap-2 text-xs text-zinc-500 px-2 py-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Loading directories...</span>
+                  </div>
+                )}
+                {browserError && (
+                  <p className="text-xs text-red-400 px-2 py-2">{browserError}</p>
+                )}
+                {!browserLoading && browserRoot && (
+                  <>
+                    <button
+                      onClick={() => setSelectedPath(browserRoot.path)}
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-xs transition-colors ${
+                        selectedPath === browserRoot.path
+                          ? "bg-zinc-700/70 text-zinc-100"
+                          : "text-zinc-300 hover:bg-zinc-800/70"
+                      }`}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                      <span className="truncate">. (this directory)</span>
+                      {browserRoot.hasBender && <span className="ml-auto text-[10px] text-emerald-500">bender</span>}
+                    </button>
+
+                    {browserRoot.dirs.length === 0 ? (
+                      <p className="text-xs text-zinc-600 px-2 py-2 italic">No subdirectories</p>
+                    ) : (
+                      browserRoot.dirs.map((entry) => (
+                        <DirectoryTreeNode
+                          key={entry.path}
+                          entry={entry}
+                          depth={0}
+                          selectedPath={selectedPath}
+                          onSelect={setSelectedPath}
+                        />
+                      ))
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="px-3 py-2 border-t border-zinc-800 flex items-center gap-2">
+                <span className="text-[11px] text-zinc-500 font-mono truncate flex-1">
+                  {selectedPath ?? "No directory selected"}
+                </span>
+                <button
+                  onClick={() => selectedPath && void handleSelect(selectedPath)}
+                  disabled={!selectedPath || loading}
+                  className="px-3 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-900 rounded-md hover:bg-white disabled:opacity-40 transition-colors"
+                >
+                  Select
                 </button>
               </div>
-              <button
-                onClick={() => setShowBrowser(true)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors"
-              >
-                <span>📁</span>
-                <span>Browse filesystem...</span>
-              </button>
-              {error && <p className="text-xs text-red-400">{error}</p>}
             </div>
+          )}
 
-            {/* Recent projects */}
-            {projects.length > 0 && (
-              <div className="max-h-64 overflow-y-auto">
-                <p className="px-3 pt-2 pb-1 text-xs text-zinc-600 font-medium uppercase tracking-wide">Recent</p>
-                {projects.map((p) => (
+          {projects.length > 0 && (
+            <div className="max-h-52 overflow-y-auto">
+              <p className="px-3 pt-2 pb-1 text-xs text-zinc-600 font-medium uppercase tracking-wide">Recent</p>
+              {projects.map((p) => (
+                <div key={p.path} className={`flex items-center gap-2 px-3 py-2 hover:bg-zinc-800 transition-colors ${p.path === currentPath ? "bg-zinc-800/60" : ""}`}>
                   <button
-                    key={p.path}
-                    onClick={() => handleSelect(p.path)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 hover:bg-zinc-800 transition-colors group text-left ${p.path === currentPath ? "bg-zinc-800/60" : ""}`}
+                    onClick={() => void handleSelect(p.path)}
+                    className="flex-1 min-w-0 text-left"
                   >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-zinc-200 truncate">{p.name}</p>
-                      <p className="text-xs text-zinc-500 font-mono truncate">{p.path}</p>
-                    </div>
-                    {p.path === currentPath && (
-                      <span className="text-xs text-emerald-500 shrink-0">active</span>
-                    )}
-                    <button
-                      onClick={(e) => handleRemove(e, p.path)}
-                      className="text-zinc-700 hover:text-zinc-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0 px-1"
-                      title="Remove from recents"
-                    >
-                      ✕
-                    </button>
+                    <p className="text-sm text-zinc-200 truncate">{p.name}</p>
+                    <p className="text-xs text-zinc-500 font-mono truncate">{p.path}</p>
                   </button>
-                ))}
-              </div>
-            )}
-            {projects.length === 0 && (
-              <p className="px-3 py-4 text-sm text-zinc-600 text-center">No recent projects</p>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Full-screen browser modal — outside the dropdown so it doesn't get clipped */}
-      {open && showBrowser && (
-        <DirectoryBrowser
-          initialPath={currentPath ?? undefined}
-          onSelect={(path) => {
-            handleSelect(path);
-          }}
-          onCancel={() => setShowBrowser(false)}
-        />
+                  {p.path === currentPath && <span className="text-xs text-emerald-500 shrink-0">active</span>}
+                  <button
+                    onClick={() => void handleRemove(p.path)}
+                    className="text-zinc-600 hover:text-zinc-300 text-xs shrink-0 px-1"
+                    title="Remove from recents"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {projects.length === 0 && (
+            <p className="px-3 py-4 text-sm text-zinc-600 text-center">No recent projects</p>
+          )}
+        </div>
       )}
-    </>
+    </div>
   );
 }
 
-// ── Directory browser modal ───────────────────────────────────────────────────
-
-interface DirectoryBrowserProps {
-  initialPath?: string;
+interface DirectoryTreeNodeProps {
+  entry: DirEntry;
+  depth: number;
+  selectedPath: string | null;
   onSelect: (path: string) => void;
-  onCancel: () => void;
 }
 
-function DirectoryBrowser({ initialPath, onSelect, onCancel }: DirectoryBrowserProps) {
-  const [result, setResult] = useState<BrowseResult | null>(null);
-  const [loading, setLoading] = useState(true);
+function DirectoryTreeNode({ entry, depth, selectedPath, onSelect }: DirectoryTreeNodeProps) {
+  const [expanded, setExpanded] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [children, setChildren] = useState<DirEntry[] | null>(null);
 
-  async function navigate(path: string) {
+  async function toggleExpand(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+
+    setExpanded(true);
+    if (children !== null) return;
+
     setLoading(true);
     setError(null);
     try {
-      const data = await browseDir(path);
-      setResult(data);
-      setSelected(null);
+      const data = await browseDir(entry.path);
+      setChildren(data.dirs);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -231,111 +335,58 @@ function DirectoryBrowser({ initialPath, onSelect, onCancel }: DirectoryBrowserP
     }
   }
 
-  useEffect(() => {
-    navigate(initialPath ?? "~");
-  }, []);
-
-  const activePath = selected ?? result?.path ?? null;
+  const rowSelected = selectedPath === entry.path;
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-lg shadow-2xl flex flex-col max-h-[80vh]">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 shrink-0">
-          <h3 className="text-sm font-semibold text-zinc-100">Browse</h3>
-          <button onClick={onCancel} className="text-zinc-500 hover:text-zinc-300 text-lg leading-none">✕</button>
-        </div>
+    <div>
+      <button
+        onClick={() => onSelect(entry.path)}
+        onDoubleClick={(e) => void toggleExpand(e)}
+        className={`w-full flex items-center gap-1.5 py-1.5 rounded text-left text-xs transition-colors ${
+          rowSelected
+            ? "bg-zinc-700/70 text-zinc-100"
+            : "text-zinc-300 hover:bg-zinc-800/70"
+        }`}
+        style={{ paddingLeft: `${8 + depth * 14}px`, paddingRight: "8px" }}
+      >
+        <span
+          onClick={(e) => void toggleExpand(e)}
+          className="h-4 w-4 flex items-center justify-center text-zinc-500 hover:text-zinc-300 shrink-0"
+        >
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </span>
+        {expanded ? (
+          <FolderOpen className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+        ) : (
+          <Folder className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+        )}
+        <span className="truncate">{entry.name}</span>
+        {entry.hasBender && <span className="ml-auto text-[10px] text-emerald-500 shrink-0">bender</span>}
+      </button>
 
-        {/* Current path breadcrumb */}
-        <div className="px-4 py-2 border-b border-zinc-800 shrink-0">
-          <div className="flex items-center gap-1 flex-wrap">
-            {result?.parent !== null && (
-              <button
-                onClick={() => result?.parent && navigate(result.parent)}
-                className="text-xs text-zinc-500 hover:text-zinc-300 px-1 py-0.5 rounded hover:bg-zinc-800 transition-colors"
-              >
-                ←
-              </button>
-            )}
-            <span className="text-xs text-zinc-400 font-mono truncate">{result?.path ?? "…"}</span>
-          </div>
-        </div>
-
-        {/* Directory listing */}
-        <div className="flex-1 overflow-y-auto min-h-0">
+      {expanded && (
+        <div>
           {loading && (
-            <div className="flex items-center justify-center py-12">
-              <div className="w-5 h-5 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
+            <div className="flex items-center gap-2 text-xs text-zinc-500 pl-8 py-1">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span>Loading…</span>
             </div>
           )}
-          {error && <p className="text-sm text-red-400 px-4 py-4">{error}</p>}
-          {!loading && result && (
-            <>
-              {/* Current directory as selectable option */}
-              <button
-                onClick={() => setSelected(result.path)}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors border-b border-zinc-800/50 ${
-                  selected === result.path ? "bg-zinc-700/60" : "hover:bg-zinc-800/40"
-                }`}
-              >
-                <span className="text-base">📂</span>
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm text-zinc-300">. (this directory)</span>
-                </div>
-                {result.hasBender && (
-                  <span className="text-xs text-emerald-500 shrink-0">bender</span>
-                )}
-              </button>
-
-              {result.dirs.length === 0 && (
-                <p className="text-sm text-zinc-600 px-4 py-4 italic">No subdirectories</p>
-              )}
-              {result.dirs.map((dir) => (
-                <button
-                  key={dir.path}
-                  onClick={() => setSelected(dir.path)}
-                  onDoubleClick={() => navigate(dir.path)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors group ${
-                    selected === dir.path ? "bg-zinc-700/60" : "hover:bg-zinc-800/40"
-                  }`}
-                >
-                  <span className="text-base">{dir.hasBender ? "📁" : "📁"}</span>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm text-zinc-200">{dir.name}</span>
-                  </div>
-                  {dir.hasBender && (
-                    <span className="text-xs text-emerald-500 shrink-0">bender</span>
-                  )}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); navigate(dir.path); }}
-                    className="text-xs text-zinc-600 hover:text-zinc-300 opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded hover:bg-zinc-700 transition-all"
-                    title="Open directory"
-                  >
-                    →
-                  </button>
-                </button>
-              ))}
-            </>
+          {error && <p className="text-xs text-red-400 pl-8 py-1">{error}</p>}
+          {!loading && !error && children?.length === 0 && (
+            <p className="text-xs text-zinc-600 pl-8 py-1 italic">No subdirectories</p>
           )}
+          {!loading && !error && children?.map((child) => (
+            <DirectoryTreeNode
+              key={child.path}
+              entry={child}
+              depth={depth + 1}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+            />
+          ))}
         </div>
-
-        {/* Footer */}
-        <div className="px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0">
-          <span className="text-xs text-zinc-500 font-mono truncate flex-1">
-            {activePath ?? "—"}
-          </span>
-          <button onClick={onCancel} className="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
-            Cancel
-          </button>
-          <button
-            onClick={() => activePath && onSelect(activePath)}
-            disabled={!activePath}
-            className="px-4 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-900 rounded-md hover:bg-white disabled:opacity-40 transition-colors"
-          >
-            Select
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

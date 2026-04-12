@@ -1,6 +1,6 @@
 import express, { type Response } from "express";
 import cors from "cors";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -196,12 +196,25 @@ export async function startServer(initialProject?: string): Promise<void> {
 
   app.get("/api/fs/browse", async (req, res) => {
     try {
-      const rawPath = (req.query.path as string) || homedir();
-      // Resolve ".." navigation safely
-      const targetPath = rawPath === ".." ? dirname(rawPath) : rawPath;
+      const queryPath = typeof req.query.path === "string" ? req.query.path.trim() : "";
+      let targetPath = queryPath;
+
+      if (!targetPath || targetPath === "~") {
+        targetPath = homedir();
+      } else if (targetPath.startsWith("~/")) {
+        targetPath = join(homedir(), targetPath.slice(2));
+      }
+
+      targetPath = resolve(targetPath);
 
       if (!existsSync(targetPath)) {
         res.status(400).json({ error: "Path does not exist" });
+        return;
+      }
+
+      const targetStat = await stat(targetPath);
+      if (!targetStat.isDirectory()) {
+        res.status(400).json({ error: "Path is not a directory" });
         return;
       }
 
