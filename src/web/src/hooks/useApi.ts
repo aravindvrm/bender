@@ -4,6 +4,7 @@ const API_BASE = "/api";
 
 export interface ProjectState {
   initialized: boolean;
+  projectRoot: string | null;
   brief: string | null;
   architecture: string | null;
   conventions: string | null;
@@ -23,6 +24,12 @@ export interface ProjectState {
   } | null;
 }
 
+export interface ProjectEntry {
+  path: string;
+  name: string;
+  lastOpened: string;
+}
+
 export async function saveConfig(updates: Record<string, unknown>): Promise<void> {
   const res = await fetch(`${API_BASE}/config`, {
     method: "PUT",
@@ -33,6 +40,40 @@ export async function saveConfig(updates: Record<string, unknown>): Promise<void
     const body = await res.json();
     throw new Error(body.error ?? "Save failed");
   }
+}
+
+export async function selectProject(path: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/project/select`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    const body = await res.json();
+    throw new Error(body.error ?? "Failed to select project");
+  }
+}
+
+export async function openProject(path: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/project/open`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    const body = await res.json();
+    throw new Error(body.error ?? "Failed to open project");
+  }
+}
+
+export async function removeProject(path: string): Promise<void> {
+  await fetch(`${API_BASE}/projects/${encodeURIComponent(path)}`, { method: "DELETE" });
+}
+
+export async function fetchProjects(): Promise<ProjectEntry[]> {
+  const res = await fetch(`${API_BASE}/projects`);
+  if (!res.ok) return [];
+  return res.json();
 }
 
 export function useProjectState() {

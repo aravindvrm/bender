@@ -54,11 +54,10 @@ program
 
 program
   .command("review")
-  .description("Open the local web dashboard for reviewing plans and architecture")
-  .option("-d, --dir <path>", "Project directory", ".")
+  .description("Open the local web dashboard")
+  .option("-d, --dir <path>", "Project directory (optional — can be set from the UI)")
   .action(async (opts) => {
-    const projectRoot = resolve(opts.dir);
-    await reviewCommand(projectRoot);
+    await reviewCommand(opts.dir);
   });
 
 program.parse();
