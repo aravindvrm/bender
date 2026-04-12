@@ -1,6 +1,6 @@
 import type { ProjectState } from "../hooks/useApi";
 
-type View = "plan" | "architecture" | "brief";
+export type View = "plan" | "architecture" | "brief" | "changes" | "settings";
 
 interface SidebarProps {
   activeView: View;
@@ -12,6 +12,8 @@ const navItems: { id: View; label: string; icon: string }[] = [
   { id: "plan", label: "Tasks", icon: "◎" },
   { id: "architecture", label: "Architecture", icon: "△" },
   { id: "brief", label: "Brief", icon: "◻" },
+  { id: "changes", label: "Changes", icon: "±" },
+  { id: "settings", label: "Settings", icon: "⊙" },
 ];
 
 export function Sidebar({ activeView, onViewChange, state }: SidebarProps) {

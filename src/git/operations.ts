@@ -38,6 +38,10 @@ export class GitOperations {
     return this.git.diff();
   }
 
+  async getDiffRange(range: string): Promise<string> {
+    return this.git.diff([range]);
+  }
+
   async getDiffStat(): Promise<string> {
     return this.git.diff(["--stat"]);
   }

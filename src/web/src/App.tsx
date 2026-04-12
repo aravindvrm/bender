@@ -1,11 +1,19 @@
 import { useState } from "react";
 import { useProjectState } from "./hooks/useApi";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, type View } from "./components/Sidebar";
 import { PlanView } from "./pages/PlanView";
 import { ArchitectureView } from "./pages/ArchitectureView";
 import { BriefView } from "./pages/BriefView";
+import { ChangesView } from "./pages/ChangesView";
+import { SettingsView } from "./pages/SettingsView";
 
-type View = "plan" | "architecture" | "brief";
+const VIEW_LABELS: Record<View, string> = {
+  plan: "Tasks",
+  architecture: "Architecture",
+  brief: "Brief",
+  changes: "Changes",
+  settings: "Settings",
+};
 
 export function App() {
   const [activeView, setActiveView] = useState<View>("plan");
@@ -36,16 +44,20 @@ export function App() {
     );
   }
 
-  if (!state?.initialized) {
+  // Settings is accessible even without an initialized project
+  if (!state?.initialized && activeView !== "settings") {
     return (
-      <div className="h-screen flex items-center justify-center bg-zinc-950">
-        <div className="text-center max-w-md">
-          <h1 className="text-2xl font-semibold text-zinc-100">bender</h1>
-          <p className="text-zinc-500 mt-2">No project initialized</p>
-          <p className="text-sm text-zinc-500 mt-4">
-            Run <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">bender init</code> to create a project.
-          </p>
-        </div>
+      <div className="h-screen flex overflow-hidden bg-zinc-950">
+        <Sidebar activeView={activeView} onViewChange={setActiveView} state={state} />
+        <main className="flex-1 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <h1 className="text-2xl font-semibold text-zinc-100">bender</h1>
+            <p className="text-zinc-500 mt-2">No project initialized</p>
+            <p className="text-sm text-zinc-500 mt-4">
+              Run <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">bender init</code> to create a project.
+            </p>
+          </div>
+        </main>
       </div>
     );
   }
@@ -58,8 +70,8 @@ export function App() {
         {/* Top bar */}
         <header className="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-800 px-6 py-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium text-zinc-300 capitalize">{activeView}</h2>
-            {state.git && (
+            <h2 className="text-sm font-medium text-zinc-300">{VIEW_LABELS[activeView]}</h2>
+            {state?.git && (
               <div className="flex items-center gap-3 text-xs text-zinc-500">
                 {state.git.recentCommits[0] && (
                   <span className="font-mono">{state.git.recentCommits[0].hash} {state.git.recentCommits[0].message.slice(0, 50)}</span>
@@ -71,9 +83,11 @@ export function App() {
 
         {/* Content */}
         <div className="p-6">
-          {activeView === "plan" && <PlanView state={state} />}
-          {activeView === "architecture" && <ArchitectureView state={state} />}
-          {activeView === "brief" && <BriefView state={state} />}
+          {activeView === "plan" && state && <PlanView state={state} />}
+          {activeView === "architecture" && state && <ArchitectureView state={state} />}
+          {activeView === "brief" && state && <BriefView state={state} />}
+          {activeView === "changes" && state && <ChangesView state={state} />}
+          {activeView === "settings" && <SettingsView />}
         </div>
       </main>
     </div>

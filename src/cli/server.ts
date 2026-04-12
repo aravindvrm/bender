@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { readConfig } from "../state/config.js";
+import { readConfig, writeConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { GitOperations } from "../git/operations.js";
 
@@ -66,6 +66,73 @@ export async function startServer(projectRoot: string): Promise<void> {
         },
         git,
       });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // API: Get full config (API key masked)
+  app.get("/api/config", async (_req, res) => {
+    try {
+      const config = await readConfig(projectRoot);
+      // Mask API key
+      const safe = {
+        ...config,
+        llm: {
+          ...config.llm,
+          apiKey: config.llm.apiKey ? "••••••••" : undefined,
+        },
+      };
+      res.json(safe);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // API: Update config
+  app.put("/api/config", async (req, res) => {
+    try {
+      const current = await readConfig(projectRoot);
+      const updates = req.body as Partial<typeof current>;
+      // Don't overwrite API key if masked placeholder sent
+      const merged = {
+        ...current,
+        ...updates,
+        llm: {
+          ...current.llm,
+          ...updates.llm,
+          apiKey:
+            updates.llm?.apiKey && updates.llm.apiKey !== "••••••••"
+              ? updates.llm.apiKey
+              : current.llm.apiKey,
+          models: {
+            ...current.llm.models,
+            ...updates.llm?.models,
+          },
+        },
+        stack: { ...current.stack, ...updates.stack },
+        deploy: { ...current.deploy, ...updates.deploy },
+        test: { ...current.test, ...updates.test },
+      };
+      await writeConfig(projectRoot, merged);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // API: Get recent git diffs
+  app.get("/api/git/diff", async (req, res) => {
+    try {
+      const gitOps = new GitOperations(projectRoot);
+      if (!(await gitOps.isRepo())) {
+        res.json({ diff: null });
+        return;
+      }
+      const commits = parseInt((req.query.commits as string) ?? "1", 10);
+      const range = commits > 0 ? `HEAD~${commits}..HEAD` : "HEAD~1..HEAD";
+      const diff = await gitOps.getDiffRange(range);
+      res.json({ diff });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

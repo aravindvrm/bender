@@ -23,6 +23,18 @@ export interface ProjectState {
   } | null;
 }
 
+export async function saveConfig(updates: Record<string, unknown>): Promise<void> {
+  const res = await fetch(`${API_BASE}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const body = await res.json();
+    throw new Error(body.error ?? "Save failed");
+  }
+}
+
 export function useProjectState() {
   const [state, setState] = useState<ProjectState | null>(null);
   const [loading, setLoading] = useState(true);
