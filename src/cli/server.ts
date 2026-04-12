@@ -1,9 +1,10 @@
 import express, { type Response } from "express";
 import cors from "cors";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { readConfig, writeConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { GitOperations } from "../git/operations.js";
@@ -186,6 +187,56 @@ export async function startServer(initialProject?: string): Promise<void> {
     const path = decodeURIComponent(req.params.encodedPath);
     await removeFromRegistry(path);
     res.json({ ok: true });
+  });
+
+  // ── Filesystem browser ───────────────────────────────────────────────────
+
+  app.get("/api/fs/browse", async (req, res) => {
+    try {
+      const rawPath = (req.query.path as string) || homedir();
+      // Resolve ".." navigation safely
+      const targetPath = rawPath === ".." ? dirname(rawPath) : rawPath;
+
+      if (!existsSync(targetPath)) {
+        res.status(400).json({ error: "Path does not exist" });
+        return;
+      }
+
+      const entries = await readdir(targetPath, { withFileTypes: true });
+      const dirs = (
+        await Promise.all(
+          entries
+            .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+            .map(async (e) => {
+              const fullPath = join(targetPath, e.name);
+              const hasBender = existsSync(join(fullPath, ".bender"));
+              return { name: e.name, path: fullPath, hasBender };
+            }),
+        )
+      ).sort((a, b) => a.name.localeCompare(b.name));
+
+      // Also include hidden dirs that are bender projects
+      const hiddenDirs = (
+        await Promise.all(
+          entries
+            .filter((e) => e.isDirectory() && e.name.startsWith("."))
+            .map(async (e) => {
+              const fullPath = join(targetPath, e.name);
+              const hasBender = existsSync(join(fullPath, ".bender"));
+              return hasBender ? { name: e.name, path: fullPath, hasBender } : null;
+            }),
+        )
+      ).filter(Boolean) as { name: string; path: string; hasBender: boolean }[];
+
+      res.json({
+        path: targetPath,
+        parent: dirname(targetPath) !== targetPath ? dirname(targetPath) : null,
+        dirs: [...dirs, ...hiddenDirs],
+        hasBender: existsSync(join(targetPath, ".bender")),
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // ── Project state ─────────────────────────────────────────────────────────
