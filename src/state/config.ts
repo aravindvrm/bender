@@ -21,6 +21,10 @@ export interface BenderConfig {
       strong: string | ModelConfig;
     };
   };
+  /** Per-provider API keys. Key wins over llm.apiKey for the matching provider. */
+  providers?: {
+    [name: string]: { apiKey?: string };
+  };
   stack: {
     template: string;
     framework: string;
@@ -96,6 +100,7 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
         ...overrides.llm?.models,
       },
     },
+    providers: overrides.providers ?? defaults.providers,
     stack: { ...defaults.stack, ...overrides.stack },
     deploy: { ...defaults.deploy, ...overrides.deploy },
     test: { ...defaults.test, ...overrides.test },

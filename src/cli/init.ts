@@ -8,35 +8,35 @@ import { generateClarifyingQuestions, generateBrief } from "../roles/clarifier.j
 import { generateArchitecture } from "../roles/architect.js";
 import { generateInitialPlan } from "../roles/planner.js";
 import { GitOperations } from "../git/operations.js";
-import * as ui from "./ui.js";
+import { terminalAdapter, type UIAdapter } from "./adapter.js";
 
-export async function initCommand(projectRoot: string): Promise<void> {
-  ui.header("Bender Init — New Project Setup");
+export async function initCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
+  adapter.header("Bender Init — New Project Setup");
 
   // Check if already initialized
   const state = new StateManager(projectRoot);
   if (state.isInitialized()) {
-    const proceed = await ui.confirm(
+    const proceed = await adapter.confirm(
       "A .bender/ directory already exists. Re-initialize will overwrite existing state. Continue?",
       false,
     );
     if (!proceed) {
-      ui.info("Cancelled.");
-      ui.cleanup();
+      adapter.info("Cancelled.");
+      adapter.cleanup();
       return;
     }
   }
 
   // Step 1: Get project description from user
-  ui.subheader("Step 1: Describe Your Project");
-  ui.info("Tell me what you want to build. Be as detailed or as vague as you like —");
-  ui.info("the system will ask clarifying questions next.\n");
+  adapter.subheader("Step 1: Describe Your Project");
+  adapter.info("Tell me what you want to build. Be as detailed or as vague as you like —");
+  adapter.info("the system will ask clarifying questions next.\n");
 
-  const description = await ui.promptMultiline(">");
+  const description = await adapter.promptMultiline(">");
 
   if (!description) {
-    ui.error("No description provided. Aborting.");
-    ui.cleanup();
+    adapter.error("No description provided. Aborting.");
+    adapter.cleanup();
     return;
   }
 
@@ -50,27 +50,25 @@ export async function initCommand(projectRoot: string): Promise<void> {
   try {
     models = createModelSet(config);
   } catch (err: unknown) {
-    ui.error(`Failed to initialize LLM provider: ${(err as Error).message}`);
-    ui.error("Check your .bender/config.yaml and ensure API keys are set (e.g., ANTHROPIC_API_KEY env var).");
-    ui.cleanup();
+    adapter.error(`Failed to initialize LLM provider: ${(err as Error).message}`);
+    adapter.error("Check your .bender/config.yaml and ensure API keys are set.");
+    adapter.cleanup();
     return;
   }
 
   // Step 2: Clarification
-  ui.subheader("Step 2: Clarification");
-  ui.info("Generating clarifying questions...\n");
+  adapter.subheader("Step 2: Clarification");
+  adapter.info("Generating clarifying questions...\n");
 
   const clarifierModel = getModelForRole(models, "clarifier");
   const questions = await generateClarifyingQuestions(
     clarifierModel,
     description,
     null,
-    ui.streamWriter(),
+    adapter.streamWriter(),
   );
 
-  console.log("\n");
-  ui.info("Answer the questions above (or type 'skip' to use defaults):\n");
-  const answers = await ui.promptMultiline(">");
+  const answers = await adapter.promptMultiline("Answer the questions above (or leave blank for defaults):");
 
   const clarificationQA: { role: "user" | "assistant"; content: string }[] = [
     { role: "assistant", content: questions },
@@ -78,30 +76,29 @@ export async function initCommand(projectRoot: string): Promise<void> {
   ];
 
   // Step 3: Generate product brief
-  ui.subheader("Step 3: Product Brief");
-  const spin = ui.spinner("Generating product brief...");
+  adapter.subheader("Step 3: Product Brief");
+  const spin = adapter.spinner("Generating product brief...");
   spin.start();
 
   const brief = await generateBrief(clarifierModel, description, clarificationQA, null);
-  spin.stop();
+  spin.succeed("Brief generated");
 
-  console.log(brief);
-  console.log("\n");
+  adapter.info(brief);
 
-  const briefApproved = await ui.confirm("Approve this product brief?");
+  const briefApproved = await adapter.confirm("Approve this product brief?");
   if (!briefApproved) {
-    ui.info("You can edit .bender/brief.md manually and re-run `bender init`.");
+    adapter.info("You can edit .bender/brief.md manually and re-run `bender init`.");
     await state.writeBrief(brief);
-    ui.cleanup();
+    adapter.cleanup();
     return;
   }
 
   await state.writeBrief(brief);
-  ui.success("Product brief saved.");
+  adapter.success("Product brief saved.");
 
   // Step 4: Generate architecture
-  ui.subheader("Step 4: Architecture");
-  ui.info("Generating architecture document...\n");
+  adapter.subheader("Step 4: Architecture");
+  adapter.info("Generating architecture document...\n");
 
   const architectModel = getModelForRole(models, "architect");
   const architecture = await generateArchitecture(
@@ -109,16 +106,14 @@ export async function initCommand(projectRoot: string): Promise<void> {
     brief,
     config,
     null,
-    ui.streamWriter(),
+    adapter.streamWriter(),
   );
 
-  console.log("\n");
-
-  const archApproved = await ui.confirm("Approve this architecture?");
+  const archApproved = await adapter.confirm("Approve this architecture?");
   if (!archApproved) {
-    ui.info("You can edit .bender/architecture.md manually and re-run `bender plan`.");
+    adapter.info("You can edit .bender/architecture.md manually and re-run `bender plan`.");
     await state.writeArchitecture(architecture);
-    ui.cleanup();
+    adapter.cleanup();
     return;
   }
 
@@ -135,42 +130,42 @@ export async function initCommand(projectRoot: string): Promise<void> {
     await state.writeSchema(schemaMatch[1].trim());
   }
 
-  ui.success("Architecture saved.");
+  adapter.success("Architecture saved.");
 
   // Step 5: Generate task plan
-  ui.subheader("Step 5: Task Plan");
-  ui.info("Generating implementation plan...\n");
+  adapter.subheader("Step 5: Task Plan");
+  adapter.info("Generating implementation plan...\n");
 
   const plannerModel = getModelForRole(models, "planner");
-  const plan = await generateInitialPlan(plannerModel, brief, architecture, ui.streamWriter());
+  const plan = await generateInitialPlan(plannerModel, brief, architecture, adapter.streamWriter());
 
-  console.log("\n");
-
-  const planApproved = await ui.confirm("Approve this task plan?");
+  const planApproved = await adapter.confirm("Approve this task plan?");
   if (!planApproved) {
-    ui.info("You can edit .bender/tasks/current.md and run `bender implement`.");
+    adapter.info("You can edit .bender/tasks/current.md and run `bender implement`.");
     await state.writeCurrentTasks(plan);
-    ui.cleanup();
+    adapter.cleanup();
     return;
   }
 
   await state.writeCurrentTasks(plan);
-  ui.success("Task plan saved.");
+  adapter.success("Task plan saved.");
 
   // Step 6: Git initialization
   const git = new GitOperations(projectRoot);
   await git.init();
   await git.commitAll("chore: initialize bender project state");
 
+  // Write session log
+  await state.writeSession("init", `# Init Session\n\nDate: ${new Date().toISOString()}\n\nProject: ${description.slice(0, 100)}\n\nStatus: completed`);
+
   // Summary
-  ui.header("Project Initialized");
-  ui.success("Product brief:     .bender/brief.md");
-  ui.success("Architecture:      .bender/architecture.md");
-  ui.success("Conventions:       .bender/conventions.md");
-  ui.success("Schema:            .bender/schema.sql");
-  ui.success("Task plan:         .bender/tasks/current.md");
-  ui.success("Config:            .bender/config.yaml");
-  console.log();
-  ui.info("Next step: run `bender implement` to start executing the task plan.");
-  ui.cleanup();
+  adapter.header("Project Initialized");
+  adapter.success("Product brief:     .bender/brief.md");
+  adapter.success("Architecture:      .bender/architecture.md");
+  adapter.success("Conventions:       .bender/conventions.md");
+  adapter.success("Schema:            .bender/schema.sql");
+  adapter.success("Task plan:         .bender/tasks/current.md");
+  adapter.success("Config:            .bender/config.yaml");
+  adapter.info("Next step: run `bender implement` to start executing the task plan.");
+  adapter.cleanup();
 }

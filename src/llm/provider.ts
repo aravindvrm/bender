@@ -50,6 +50,7 @@ function resolveModelConfig(
   if (!factory) {
     throw new Error(`Unknown LLM provider: ${tierConfig.provider}. Supported: ${Object.keys(providerFactories).join(", ")}`);
   }
+  // Tier-level apiKey wins over anything else
   return factory(tierConfig.apiKey)(tierConfig.model);
 }
 
@@ -64,7 +65,8 @@ export interface ModelSet {
  */
 export function createModelSet(config: BenderConfig): ModelSet {
   const provider = config.llm.provider;
-  const apiKey = config.llm.apiKey;
+  // Per-provider key (from config.providers) takes precedence over the global llm.apiKey
+  const apiKey = config.providers?.[provider]?.apiKey ?? config.llm.apiKey;
   const models = config.llm.models;
 
   return {

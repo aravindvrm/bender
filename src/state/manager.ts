@@ -137,6 +137,31 @@ export class StateManager {
     return tasks;
   }
 
+  // --- Sessions ---
+
+  async writeSession(operation: string, content: string): Promise<void> {
+    const dir = join(this.benderDir, "sessions");
+    if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    await writeFile(join(dir, `${timestamp}-${operation}.md`), content, "utf-8");
+  }
+
+  async readSessions(): Promise<{ name: string; operation: string; date: string; content: string }[]> {
+    const dir = join(this.benderDir, "sessions");
+    if (!existsSync(dir)) return [];
+    const files = await readdir(dir);
+    const sessions: { name: string; operation: string; date: string; content: string }[] = [];
+    for (const file of files.filter((f: string) => f.endsWith(".md")).sort().reverse()) {
+      const content = await readFile(join(dir, file), "utf-8");
+      // filename format: 2026-04-12T10-30-00-init.md
+      const parts = file.replace(".md", "").split("-");
+      const operation = parts[parts.length - 1];
+      const date = parts.slice(0, 3).join("-");
+      sessions.push({ name: file, operation, date, content });
+    }
+    return sessions;
+  }
+
   // --- API Contracts ---
 
   async readApiContracts(): Promise<string | null> {

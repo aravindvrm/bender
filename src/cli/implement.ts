@@ -8,7 +8,7 @@ import { implementTask, type TaskDescription, type FileOperation } from "../role
 import { reviewCode } from "../roles/reviewer.js";
 import { GitOperations } from "../git/operations.js";
 import { runTests, runTypeCheck } from "../test/runner.js";
-import * as ui from "./ui.js";
+import { terminalAdapter, type UIAdapter } from "./adapter.js";
 
 /**
  * Parse a task plan markdown into structured task descriptions.
@@ -23,11 +23,9 @@ export function parseTaskPlan(planMarkdown: string): TaskDescription[] {
     const title = match[2].trim();
     const body = match[3];
 
-    // Extract description
     const descMatch = body.match(/\*\*Description\*\*:\s*([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
     const description = descMatch ? descMatch[1].trim() : body.split("\n")[0];
 
-    // Extract files
     const files: string[] = [];
     const filesSection = body.match(/\*\*Files to create\/modify\*\*:\s*\n([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
     if (filesSection) {
@@ -37,7 +35,6 @@ export function parseTaskPlan(planMarkdown: string): TaskDescription[] {
       }
     }
 
-    // Extract acceptance criteria
     const criteriaMatch = body.match(/\*\*Acceptance criteria\*\*:\s*([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
     const acceptanceCriteria = criteriaMatch ? criteriaMatch[1].trim() : "Task implemented and tests pass";
 
@@ -61,13 +58,13 @@ async function applyFileOperations(projectRoot: string, operations: FileOperatio
   }
 }
 
-export async function implementCommand(projectRoot: string): Promise<void> {
-  ui.header("Bender Implement — Executing Task Plan");
+export async function implementCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
+  adapter.header("Bender Implement — Executing Task Plan");
 
   const state = new StateManager(projectRoot);
   if (!state.isInitialized()) {
-    ui.error("No .bender/ directory found. Run `bender init` first.");
-    ui.cleanup();
+    adapter.error("No .bender/ directory found. Run `bender init` first.");
+    adapter.cleanup();
     return;
   }
 
@@ -75,53 +72,50 @@ export async function implementCommand(projectRoot: string): Promise<void> {
   const currentTasks = await state.readCurrentTasks();
 
   if (!currentTasks) {
-    ui.error("No task plan found. Run `bender plan` or `bender init` first.");
-    ui.cleanup();
+    adapter.error("No task plan found. Run `bender plan` or `bender init` first.");
+    adapter.cleanup();
     return;
   }
 
   const tasks = parseTaskPlan(currentTasks);
   if (tasks.length === 0) {
-    ui.error("Could not parse any tasks from the plan. Check .bender/tasks/current.md format.");
-    ui.cleanup();
+    adapter.error("Could not parse any tasks from the plan. Check .bender/tasks/current.md format.");
+    adapter.cleanup();
     return;
   }
 
-  ui.info(`Found ${tasks.length} tasks to implement.\n`);
+  adapter.info(`Found ${tasks.length} tasks to implement.\n`);
 
   let models;
   try {
     models = createModelSet(config);
   } catch (err: unknown) {
-    ui.error(`Failed to initialize LLM provider: ${(err as Error).message}`);
-    ui.cleanup();
+    adapter.error(`Failed to initialize LLM provider: ${(err as Error).message}`);
+    adapter.cleanup();
     return;
   }
 
   const implementerModel = getModelForRole(models, "implementer");
-  const reviewerModel = getModelForRole(models, "reviewer");
   const git = new GitOperations(projectRoot);
+  const completedTaskSummaries: string[] = [];
 
   for (const task of tasks) {
-    ui.subheader(`Task ${task.id}: ${task.title}`);
-    ui.info(task.description);
-    console.log();
+    adapter.subheader(`Task ${task.id}: ${task.title}`);
+    adapter.info(task.description);
 
-    // Gather fresh context for each task (includes completed work)
     const context = await state.gatherContext();
 
-    // Implement
-    const spin = ui.spinner(`Implementing task ${task.id}...`);
+    const spin = adapter.spinner(`Implementing task ${task.id}...`);
     spin.start();
 
     let fileOps: FileOperation[];
     try {
-      fileOps = await implementTask(implementerModel, task, projectRoot, context, (chunk) => {
+      fileOps = await implementTask(implementerModel, task, projectRoot, context, (_chunk) => {
         spin.text = `Implementing task ${task.id}... (generating)`;
       });
     } catch (err: unknown) {
       spin.fail(`Task ${task.id} failed: ${(err as Error).message}`);
-      const shouldContinue = await ui.confirm("Continue with next task?", false);
+      const shouldContinue = await adapter.confirm("Continue with next task?", false);
       if (!shouldContinue) break;
       continue;
     }
@@ -129,49 +123,44 @@ export async function implementCommand(projectRoot: string): Promise<void> {
     spin.succeed(`Generated ${fileOps.length} files`);
 
     if (fileOps.length === 0) {
-      ui.warn("No file operations produced. The implementer may have failed to follow the output format.");
-      const shouldContinue = await ui.confirm("Continue with next task?");
+      adapter.warn("No file operations produced. The implementer may have failed to follow the output format.");
+      const shouldContinue = await adapter.confirm("Continue with next task?");
       if (!shouldContinue) break;
       continue;
     }
 
-    // Show file operations summary
-    ui.showFileOperations(fileOps.map((op) => ({ path: op.path, action: op.action })));
-    console.log();
+    adapter.showFileOperations(fileOps.map((op) => ({ path: op.path, action: op.action })));
 
-    // Ask for approval before writing
-    const approved = await ui.confirm("Apply these changes?");
+    const approved = await adapter.confirm("Apply these changes?");
     if (!approved) {
-      ui.info("Skipping task.");
-      const shouldContinue = await ui.confirm("Continue with next task?");
+      adapter.info("Skipping task.");
+      const shouldContinue = await adapter.confirm("Continue with next task?");
       if (!shouldContinue) break;
       continue;
     }
 
     // Write files to disk
     await applyFileOperations(projectRoot, fileOps);
-    ui.success("Files written.");
+    adapter.success("Files written.");
 
     // Run type check
     const typeResult = await runTypeCheck(projectRoot);
     if (!typeResult.passed) {
-      ui.warn("Type check failed:");
-      console.log(typeResult.error);
+      adapter.warn(`Type check failed: ${typeResult.error}`);
     }
 
     // Run tests
     const testResult = await runTests(projectRoot, config);
     if (testResult.passed) {
-      ui.success(`Tests passed (${testResult.command})`);
+      adapter.success(`Tests passed (${testResult.command})`);
     } else {
-      ui.warn(`Tests failed (${testResult.command}):`);
-      console.log(testResult.error?.slice(0, 500));
+      adapter.warn(`Tests failed (${testResult.command}): ${testResult.error?.slice(0, 200)}`);
     }
 
     // Git commit
     if (await git.hasChanges()) {
       await git.commitAll(`feat: task ${task.id} — ${task.title}`);
-      ui.success(`Committed: task ${task.id} — ${task.title}`);
+      adapter.success(`Committed: task ${task.id} — ${task.title}`);
     }
 
     // Mark task as completed
@@ -180,15 +169,16 @@ export async function implementCommand(projectRoot: string): Promise<void> {
       `# Task ${task.id}: ${task.title}\n\nCompleted: ${new Date().toISOString()}\n\nFiles: ${fileOps.map((op) => op.path).join(", ")}`,
     );
 
-    console.log();
+    completedTaskSummaries.push(`Task ${task.id}: ${task.title}`);
   }
 
-  ui.header("Implementation Complete");
-  const log = await git.log(tasks.length);
-  for (const entry of log) {
-    ui.info(`${entry.hash} ${entry.message}`);
-  }
-  console.log();
-  ui.info("Review your changes and run `bender status` to see project state.");
-  ui.cleanup();
+  // Write session log
+  await state.writeSession(
+    "implement",
+    `# Implement Session\n\nDate: ${new Date().toISOString()}\n\nCompleted tasks:\n${completedTaskSummaries.map((t) => `- ${t}`).join("\n")}\n\nStatus: completed`,
+  );
+
+  adapter.header("Implementation Complete");
+  adapter.info("Review your changes and run `bender status` to see project state.");
+  adapter.cleanup();
 }

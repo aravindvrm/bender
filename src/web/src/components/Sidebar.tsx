@@ -1,6 +1,6 @@
 import type { ProjectState } from "../hooks/useApi";
 
-export type View = "plan" | "architecture" | "brief" | "changes" | "settings";
+export type View = "console" | "plan" | "architecture" | "brief" | "changes" | "settings";
 
 interface SidebarProps {
   activeView: View;
@@ -9,6 +9,7 @@ interface SidebarProps {
 }
 
 const navItems: { id: View; label: string; icon: string }[] = [
+  { id: "console", label: "Console", icon: "▶" },
   { id: "plan", label: "Tasks", icon: "◎" },
   { id: "architecture", label: "Architecture", icon: "△" },
   { id: "brief", label: "Brief", icon: "◻" },
@@ -25,9 +26,7 @@ export function Sidebar({ activeView, onViewChange, state }: SidebarProps) {
     <aside className="w-56 shrink-0 border-r border-zinc-800 bg-zinc-925 flex flex-col">
       {/* Logo */}
       <div className="px-5 py-5 border-b border-zinc-800">
-        <h1 className="text-lg font-semibold tracking-tight text-zinc-100">
-          bender
-        </h1>
+        <h1 className="text-lg font-semibold tracking-tight text-zinc-100">bender</h1>
         <p className="text-xs text-zinc-500 mt-0.5">software factory</p>
       </div>
 

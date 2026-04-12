@@ -4,15 +4,15 @@ import { createModelSet, getModelForRole } from "../llm/provider.js";
 import { generateClarifyingQuestions, generateBrief } from "../roles/clarifier.js";
 import { updateArchitecture } from "../roles/architect.js";
 import { generateFeaturePlan } from "../roles/planner.js";
-import * as ui from "./ui.js";
+import { terminalAdapter, type UIAdapter } from "./adapter.js";
 
-export async function planCommand(projectRoot: string, featureDescription: string): Promise<void> {
-  ui.header("Bender Plan — New Feature / Change");
+export async function planCommand(projectRoot: string, featureDescription: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
+  adapter.header("Bender Plan — New Feature / Change");
 
   const state = new StateManager(projectRoot);
   if (!state.isInitialized()) {
-    ui.error("No .bender/ directory found. Run `bender init` first.");
-    ui.cleanup();
+    adapter.error("No .bender/ directory found. Run `bender init` first.");
+    adapter.cleanup();
     return;
   }
 
@@ -20,8 +20,8 @@ export async function planCommand(projectRoot: string, featureDescription: strin
   const existingContext = await state.gatherContext();
 
   if (!existingContext.brief || !existingContext.architecture) {
-    ui.error("Project is missing brief or architecture. Run `bender init` first.");
-    ui.cleanup();
+    adapter.error("Project is missing brief or architecture. Run `bender init` first.");
+    adapter.cleanup();
     return;
   }
 
@@ -29,42 +29,39 @@ export async function planCommand(projectRoot: string, featureDescription: strin
   try {
     models = createModelSet(config);
   } catch (err: unknown) {
-    ui.error(`Failed to initialize LLM provider: ${(err as Error).message}`);
-    ui.cleanup();
+    adapter.error(`Failed to initialize LLM provider: ${(err as Error).message}`);
+    adapter.cleanup();
     return;
   }
 
-  // Step 1: Clarification (if the request is vague)
-  ui.subheader("Step 1: Understanding the Change");
-  ui.info(`Feature request: "${featureDescription}"\n`);
+  // Step 1: Clarification
+  adapter.subheader("Step 1: Understanding the Change");
+  adapter.info(`Feature request: "${featureDescription}"\n`);
 
   const clarifierModel = getModelForRole(models, "clarifier");
   const questions = await generateClarifyingQuestions(
     clarifierModel,
     featureDescription,
     existingContext,
-    ui.streamWriter(),
+    adapter.streamWriter(),
   );
 
-  console.log("\n");
-  ui.info("Answer any questions above, or press Enter to continue with defaults:\n");
-  const answers = await ui.promptMultiline(">");
+  const answers = await adapter.promptMultiline("Answer any questions above, or press Enter to continue with defaults:");
 
   let fullDescription = featureDescription;
   if (answers) {
-    // Generate a refined brief for this feature
     const clarificationQA: { role: "user" | "assistant"; content: string }[] = [
       { role: "assistant", content: questions },
       { role: "user", content: answers },
     ];
     const featureBrief = await generateBrief(clarifierModel, featureDescription, clarificationQA, existingContext);
     fullDescription = featureBrief;
-    console.log("\n" + featureBrief);
+    adapter.info(featureBrief);
   }
 
   // Step 2: Architecture update
-  ui.subheader("Step 2: Architecture Impact");
-  ui.info("Analyzing architecture impact...\n");
+  adapter.subheader("Step 2: Architecture Impact");
+  adapter.info("Analyzing architecture impact...\n");
 
   const architectModel = getModelForRole(models, "architect");
   const { architectureUpdate, schemaMigration } = await updateArchitecture(
@@ -72,20 +69,18 @@ export async function planCommand(projectRoot: string, featureDescription: strin
     fullDescription,
     config,
     existingContext,
-    ui.streamWriter(),
+    adapter.streamWriter(),
   );
 
-  console.log("\n");
-
   if (schemaMigration) {
-    ui.warn("Schema migration required:");
-    console.log(schemaMigration);
+    adapter.warn("Schema migration required:");
+    adapter.info(schemaMigration);
   }
 
-  const archApproved = await ui.confirm("Approve architecture updates?");
+  const archApproved = await adapter.confirm("Approve architecture updates?");
   if (!archApproved) {
-    ui.info("Architecture update cancelled. No changes made.");
-    ui.cleanup();
+    adapter.info("Architecture update cancelled. No changes made.");
+    adapter.cleanup();
     return;
   }
 
@@ -93,7 +88,7 @@ export async function planCommand(projectRoot: string, featureDescription: strin
   const currentArch = existingContext.architecture ?? "";
   await state.writeArchitecture(currentArch + "\n\n---\n\n## Update: " + featureDescription + "\n\n" + architectureUpdate);
 
-  // Write ADR if significant decisions were made
+  // Write ADR
   const decisionNum = await state.nextDecisionNumber();
   const paddedNum = String(decisionNum).padStart(3, "0");
   const slug = featureDescription.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
@@ -103,8 +98,8 @@ export async function planCommand(projectRoot: string, featureDescription: strin
   );
 
   // Step 3: Task plan
-  ui.subheader("Step 3: Task Plan");
-  ui.info("Generating implementation plan...\n");
+  adapter.subheader("Step 3: Task Plan");
+  adapter.info("Generating implementation plan...\n");
 
   const plannerModel = getModelForRole(models, "planner");
   const plan = await generateFeaturePlan(
@@ -112,22 +107,23 @@ export async function planCommand(projectRoot: string, featureDescription: strin
     fullDescription,
     architectureUpdate,
     existingContext,
-    ui.streamWriter(),
+    adapter.streamWriter(),
   );
 
-  console.log("\n");
-
-  const planApproved = await ui.confirm("Approve this task plan?");
+  const planApproved = await adapter.confirm("Approve this task plan?");
   if (!planApproved) {
-    ui.info("You can edit .bender/tasks/current.md and run `bender implement`.");
+    adapter.info("You can edit .bender/tasks/current.md and run `bender implement`.");
     await state.writeCurrentTasks(plan);
-    ui.cleanup();
+    adapter.cleanup();
     return;
   }
 
   await state.writeCurrentTasks(plan);
-  ui.success("Task plan saved to .bender/tasks/current.md");
-  console.log();
-  ui.info("Next step: run `bender implement` to execute the plan.");
-  ui.cleanup();
+
+  // Write session log
+  await state.writeSession("plan", `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nStatus: completed`);
+
+  adapter.success("Task plan saved to .bender/tasks/current.md");
+  adapter.info("Next step: run `bender implement` to execute the plan.");
+  adapter.cleanup();
 }
