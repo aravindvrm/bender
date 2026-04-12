@@ -6,6 +6,7 @@ import { initCommand } from "./init.js";
 import { planCommand } from "./plan.js";
 import { implementCommand } from "./implement.js";
 import { statusCommand } from "./status.js";
+import { reviewCommand } from "./review.js";
 
 const program = new Command();
 
@@ -49,6 +50,15 @@ program
   .action(async (opts) => {
     const projectRoot = resolve(opts.dir);
     await statusCommand(projectRoot);
+  });
+
+program
+  .command("review")
+  .description("Open the local web dashboard for reviewing plans and architecture")
+  .option("-d, --dir <path>", "Project directory", ".")
+  .action(async (opts) => {
+    const projectRoot = resolve(opts.dir);
+    await reviewCommand(projectRoot);
   });
 
 program.parse();

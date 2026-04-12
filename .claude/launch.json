@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bender-review",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["dist/cli/index.js", "review", "--dir", "/tmp/bender-e2e-test"],
+      "port": 3142
+    }
+  ]
+}
