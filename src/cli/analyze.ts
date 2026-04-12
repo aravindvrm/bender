@@ -125,6 +125,6 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
   adapter.success("Architecture:  .bender/architecture.md");
   if (parsed.conventions) adapter.success("Conventions:   .bender/conventions.md");
   if (parsed.schema) adapter.success("Schema:        .bender/schema.sql");
-  adapter.info("Run `bender plan` to plan your next change, or open the dashboard to review.");
+  adapter.info("Run `bender plan` to plan your next change, or `bender open` (`npm run open` in local dev) to launch the dashboard.");
   adapter.cleanup();
 }

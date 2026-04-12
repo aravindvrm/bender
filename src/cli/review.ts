@@ -2,10 +2,10 @@ import { resolve } from "node:path";
 import { startServer } from "./server.js";
 import * as ui from "./ui.js";
 
-export async function reviewCommand(projectDir?: string): Promise<void> {
+export async function openCommand(projectDir?: string): Promise<void> {
   const initialProject = projectDir ? resolve(projectDir) : undefined;
 
-  ui.header("Bender Review — Dashboard");
+  ui.header("Bender Open — Dashboard");
   ui.info("Starting local server...\n");
 
   await startServer(initialProject);
@@ -21,4 +21,9 @@ export async function reviewCommand(projectDir?: string): Promise<void> {
   ui.info("Press Ctrl+C to stop.\n");
 
   await new Promise(() => {});
+}
+
+// Backward-compatible alias for older scripts/workflows.
+export async function reviewCommand(projectDir?: string): Promise<void> {
+  await openCommand(projectDir);
 }

@@ -26,7 +26,11 @@ export function Sidebar({ activeView, onViewChange, state }: SidebarProps) {
     <aside className="w-56 shrink-0 border-r border-zinc-800 bg-zinc-925 flex flex-col">
       {/* Logo */}
       <div className="px-5 py-5 border-b border-zinc-800">
-        <h1 className="text-lg font-semibold tracking-tight text-zinc-100">bender</h1>
+        <img
+          src="/bender_logo_alpha.png"
+          alt="Bender"
+          className="h-7 w-auto"
+        />
         <p className="text-xs text-zinc-500 mt-0.5">software factory</p>
       </div>
 
