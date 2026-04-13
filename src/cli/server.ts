@@ -11,7 +11,7 @@ import { simpleGit } from "simple-git";
 import { readEffectiveConfig, readGlobalConfig, writeConfig, writeGlobalConfig, type BenderConfig } from "../state/config.js";
 import { createModelSet, getModelForTier } from "../llm/provider.js";
 import { createRoleRuntime } from "../llm/runtime.js";
-import { StateManager } from "../state/manager.js";
+import { StateManager, type AuditResult, type AuditIssue } from "../state/manager.js";
 import { GitOperations } from "../git/operations.js";
 import { readRegistry, addToRegistry, removeFromRegistry } from "../state/registry.js";
 import { fetchRegistry, readRegistry as readSkillsRegistry } from "../state/skills.js";
@@ -33,7 +33,7 @@ import { planCommand } from "./plan.js";
 import { implementCommand, implementSingleTask } from "./implement.js";
 import { analyzeCommand } from "./analyze.js";
 import { generateFlows } from "../roles/flowcharter.js";
-import { loadPrompt } from "../roles/base.js";
+import { loadPrompt, runRole } from "../roles/base.js";
 import type { UIAdapter, SpinnerAdapter } from "./adapter.js";
 
 const API_PORT = 3142;
@@ -1940,6 +1940,74 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
     }
   });
 
+  // ── Structured log ────────────────────────────────────────────────────────
+
+  app.get("/api/logs", async (req, res) => {
+    try {
+      const projectRoot = getProject();
+      const logPath = join(projectRoot, ".bender", "bender.log");
+      if (!existsSync(logPath)) return res.json({ entries: [] });
+
+      const raw = await readFile(logPath, "utf-8");
+      const limit = Math.min(500, parseInt((req.query.limit as string) ?? "200", 10) || 200);
+      const entries = raw
+        .split("\n")
+        .filter(Boolean)
+        .slice(-limit)
+        .map((line) => {
+          try { return JSON.parse(line); } catch { return null; }
+        })
+        .filter(Boolean);
+
+      res.json({ entries });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Terminal ──────────────────────────────────────────────────────────────
+
+  app.post("/api/terminal/exec", async (req, res) => {
+    const { command } = req.body as { command?: string };
+    if (!command || !command.trim()) {
+      return res.status(400).json({ error: "command is required" });
+    }
+
+    // Security: limit command length and reject dangerous patterns
+    const trimmed = command.trim();
+    if (trimmed.length > 512) {
+      return res.status(400).json({ error: "command too long" });
+    }
+
+    let projectRoot: string;
+    try {
+      projectRoot = getProject();
+    } catch {
+      return res.status(400).json({ error: "No project selected" });
+    }
+
+    const { exec } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execAsync = promisify(exec);
+
+    try {
+      const { stdout, stderr } = await execAsync(trimmed, {
+        cwd: projectRoot,
+        timeout: 30000, // 30s timeout
+        maxBuffer: 512 * 1024, // 512KB output limit
+        env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      });
+      res.json({ stdout: stdout.trimEnd(), stderr: stderr.trimEnd(), exitCode: 0 });
+    } catch (err: unknown) {
+      const execErr = err as { stdout?: string; stderr?: string; code?: number };
+      res.json({
+        stdout: (execErr.stdout ?? "").trimEnd(),
+        stderr: (execErr.stderr ?? (err as Error).message).trimEnd(),
+        exitCode: execErr.code ?? 1,
+      });
+    }
+  });
+
   // ── Sessions ──────────────────────────────────────────────────────────────
 
   app.get("/api/sessions", async (_req, res) => {
@@ -2099,9 +2167,29 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
   });
 
   app.post("/api/run/plan", async (req, res) => {
-    const { feature } = req.body as { feature?: string };
+    const {
+      feature,
+      role,
+      agentId,
+      askClarifyingQuestions,
+      requireArchitectureApproval,
+      requirePlanApproval,
+    } = req.body as {
+      feature?: string;
+      role?: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
+      agentId?: string;
+      askClarifyingQuestions?: boolean;
+      requireArchitectureApproval?: boolean;
+      requirePlanApproval?: boolean;
+    };
     if (!feature) { res.status(400).json({ error: "feature is required" }); return; }
-    await runOperation(res, (adapter) => planCommand(getProject(), feature, adapter));
+    await runOperation(res, (adapter) => planCommand(getProject(), feature, adapter, {
+      role,
+      agentId,
+      askClarifyingQuestions,
+      requireArchitectureApproval,
+      requirePlanApproval,
+    }));
   });
 
   app.post("/api/run/implement", async (req, res) => {
@@ -2171,6 +2259,341 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
         await runtime?.close();
       }
     });
+  });
+
+  // ── Audits ────────────────────────────────────────────────────────────────
+
+  app.get("/api/audits", async (_req, res) => {
+    try {
+      const state = new StateManager(getProject());
+      const [security, tests] = await Promise.all([
+        state.readAudit("security"),
+        state.readAudit("tests"),
+      ]);
+      res.json({ security, tests });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  async function runAudit(
+    res: Response,
+    auditType: "security" | "tests",
+  ): Promise<void> {
+    await runOperation(res, async (adapter) => {
+      const projectRoot = getProject();
+      const state = new StateManager(projectRoot);
+      const context = await state.gatherContext();
+      const label = auditType === "security" ? "Security audit" : "Test harness audit";
+
+      adapter.header(`Bender ${label}`);
+
+      if (!context.architecture) {
+        throw new Error("Project needs architecture to be analyzed before auditing. Run analyze first.");
+      }
+
+      let runtime;
+      try {
+        const config = await readEffectiveConfig(projectRoot);
+        const analyzerAgent = await getEffectiveAgentForRole("analyzer");
+        runtime = await createRoleRuntime(
+          projectRoot,
+          config,
+          {
+            role: "analyzer",
+            taskDescription: auditType === "security" ? "security audit vulnerability analysis" : "test harness coverage audit",
+            pinnedSkills: analyzerAgent.pinnedSkills,
+            mcpServerIds: analyzerAgent.mcpServerIds,
+            modelTier: analyzerAgent.modelTier,
+          },
+          context.architecture ?? undefined,
+          { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+        );
+      } catch (err: unknown) {
+        throw new Error(`Failed to initialize LLM provider: ${(err as Error).message}`);
+      }
+
+      const roleName = auditType === "security" ? "security-auditor" : "test-auditor";
+
+      try {
+        adapter.subheader(`Running ${label}...`);
+        const config = await readEffectiveConfig(projectRoot);
+        const models = createModelSet(config);
+        const analyzerAgent = await getEffectiveAgentForRole("analyzer");
+
+        const systemContext = [
+          context.architecture ? `## Architecture\n\n${context.architecture}` : "",
+          context.schema ? `## Database Schema\n\n${context.schema}` : "",
+          context.conventions ? `## Conventions\n\n${context.conventions}` : "",
+        ].filter(Boolean).join("\n\n---\n\n");
+
+        const userMessage = [
+          `Audit this project's ${auditType === "security" ? "security vulnerabilities" : "test coverage and quality"}.`,
+          "",
+          "## Project Context",
+          systemContext,
+        ].join("\n");
+
+        adapter.info(`Analyzing with ${analyzerAgent.name} (${analyzerAgent.modelTier})...`);
+        const spin = adapter.spinner("Running LLM audit...");
+
+        const model = getModelForTier(models, analyzerAgent.modelTier);
+        let rawOutput = "";
+        try {
+          rawOutput = await runRole(
+            model,
+            roleName,
+            systemContext,
+            userMessage,
+            runtime ?? undefined,
+          );
+        } catch (err) {
+          spin.fail("LLM audit failed");
+          throw err;
+        }
+
+        // Parse JSON from output (strip markdown fences if present)
+        let jsonStr = rawOutput.trim();
+        if (jsonStr.startsWith("```")) {
+          jsonStr = jsonStr.replace(/^```[a-z]*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+        }
+
+        let parsed: { summary?: string; coverageEstimate?: string; issues?: AuditIssue[] };
+        try {
+          parsed = JSON.parse(jsonStr) as typeof parsed;
+        } catch {
+          spin.fail("Audit response parse failed");
+          throw new Error("Audit returned invalid JSON. Try again.");
+        }
+        spin.succeed("LLM audit complete");
+
+        const result: AuditResult = {
+          type: auditType,
+          runAt: Date.now(),
+          summary: parsed.summary ?? "",
+          coverageEstimate: parsed.coverageEstimate,
+          issues: (parsed.issues ?? []).map((issue, i) => ({
+            id: issue.id ?? `${auditType.toUpperCase().slice(0, 3)}-${String(i + 1).padStart(3, "0")}`,
+            title: issue.title ?? "Untitled issue",
+            severity: issue.severity ?? "medium",
+            category: issue.category ?? "other",
+            description: issue.description ?? "",
+            recommendation: issue.recommendation ?? "",
+            files: issue.files ?? [],
+          })),
+        };
+
+        await state.writeAudit(auditType, result);
+        if (result.summary) {
+          adapter.info(`Summary: ${result.summary}`);
+        }
+        if (result.coverageEstimate) {
+          adapter.info(`Coverage estimate: ${result.coverageEstimate}`);
+        }
+        const severityCounts = result.issues.reduce(
+          (acc, issue) => {
+            acc[issue.severity] += 1;
+            return acc;
+          },
+          { low: 0, medium: 0, high: 0, critical: 0 } as Record<AuditIssue["severity"], number>,
+        );
+        adapter.info(
+          `Severity counts: critical ${severityCounts.critical}, high ${severityCounts.high}, medium ${severityCounts.medium}, low ${severityCounts.low}`,
+        );
+        if (result.issues.length > 0) {
+          adapter.subheader("Top findings");
+          for (const issue of result.issues.slice(0, 8)) {
+            const issueFiles = issue.files ?? [];
+            const files = issueFiles.length > 0 ? ` [${issueFiles.join(", ")}]` : "";
+            adapter.warn(`${issue.severity.toUpperCase()}: ${issue.title}${files}`);
+          }
+        } else {
+          adapter.success("No issues reported by this audit.");
+        }
+        adapter.success(`${label} complete — ${result.issues.length} issue(s) found.`);
+      } finally {
+        await runtime?.close();
+      }
+    });
+  }
+
+  app.post("/api/run/audit/security", async (_req, res) => {
+    await runAudit(res, "security");
+  });
+
+  app.post("/api/run/audit/tests", async (_req, res) => {
+    await runAudit(res, "tests");
+  });
+
+  // ── Append task from audit issue ──────────────────────────────────────────
+
+  app.post("/api/tasks/append", async (req, res) => {
+    try {
+      const { title, description } = req.body as { title?: string; description?: string };
+      if (!title) {
+        return res.status(400).json({ error: "title is required" });
+      }
+      const state = new StateManager(getProject());
+      const existing = await state.readCurrentTasks();
+      const taskId = `task-${randomUUID().slice(0, 8)}`;
+      const newEntry = `\n## ${title}\n\nID: ${taskId}\nStatus: pending\n\n${description ?? ""}\n`;
+      const updated = (existing ?? "") + newEntry;
+      await state.writeCurrentTasks(updated.trim());
+      res.json({ ok: true, taskId });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  function parseDependencyIds(depStr: string): number[] {
+    if (!depStr || depStr.trim().toLowerCase() === "none") return [];
+    const matches = depStr.match(/\d+/g);
+    return matches ? matches.map(Number) : [];
+  }
+
+  interface ParsedTaskBlock {
+    id: number;
+    title: string;
+    body: string;
+    start: number;
+    end: number;
+    dependencies: string;
+  }
+
+  function parseTaskBlocks(markdown: string): ParsedTaskBlock[] {
+    const tasks: ParsedTaskBlock[] = [];
+    const pattern = /###\s*Task\s*(\d+):\s*(.+?)\n([\s\S]*?)(?=\n###\s*Task|\n##\s|$)/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(markdown)) !== null) {
+      const body = match[3];
+      const depsMatch = body.match(/\*\*Dependencies\*\*:\s*(.+)/);
+      tasks.push({
+        id: Number(match[1]),
+        title: match[2].trim(),
+        body,
+        start: match.index,
+        end: match.index + match[0].length,
+        dependencies: depsMatch ? depsMatch[1].trim() : "None",
+      });
+    }
+    return tasks;
+  }
+
+  function replaceTaskBodyField(body: string, label: string, value: string): string {
+    const fieldPattern = new RegExp(`(\\*\\*${label}\\*\\*:\\s*)([\\s\\S]*?)(?=\\n-\\s*\\*\\*|\\n###|$)`);
+    if (fieldPattern.test(body)) {
+      return body.replace(fieldPattern, `$1${value}`);
+    }
+    const trimmed = body.trimEnd();
+    const prefix = trimmed.length > 0 ? `${trimmed}\n` : "";
+    return `${prefix}- **${label}**: ${value}\n`;
+  }
+
+  app.patch("/api/tasks/:taskId", async (req, res) => {
+    try {
+      const { taskId } = req.params;
+      const id = Number(taskId);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "taskId must be numeric" });
+      }
+      const { title, description, dependencies, criteria } = (req.body ?? {}) as {
+        title?: string;
+        description?: string;
+        dependencies?: string;
+        criteria?: string;
+      };
+
+      if (title === undefined && description === undefined && dependencies === undefined && criteria === undefined) {
+        return res.status(400).json({ error: "No task fields provided" });
+      }
+
+      const state = new StateManager(getProject());
+      const markdown = await state.readCurrentTasks();
+      if (!markdown) {
+        return res.status(400).json({ error: "No current task plan found" });
+      }
+
+      const tasks = parseTaskBlocks(markdown);
+      const target = tasks.find((t) => t.id === id);
+      if (!target) {
+        return res.status(404).json({ error: `Task ${id} not found` });
+      }
+
+      const nextTitle = title !== undefined ? title.trim() : target.title;
+      let nextBody = target.body;
+      if (description !== undefined) nextBody = replaceTaskBodyField(nextBody, "Description", description.trim());
+      if (dependencies !== undefined) nextBody = replaceTaskBodyField(nextBody, "Dependencies", dependencies.trim() || "None");
+      if (criteria !== undefined) nextBody = replaceTaskBodyField(nextBody, "Acceptance criteria", criteria.trim());
+
+      const updatedBlock = `### Task ${id}: ${nextTitle}\n${nextBody}`;
+      const updated = `${markdown.slice(0, target.start)}${updatedBlock}${markdown.slice(target.end)}`;
+      await state.writeCurrentTasks(updated.trim());
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/tasks/:taskId", async (req, res) => {
+    try {
+      const { taskId } = req.params;
+      const id = Number(taskId);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "taskId must be numeric" });
+      }
+      const { cascadeDependents } = (req.body ?? {}) as { cascadeDependents?: boolean };
+
+      const state = new StateManager(getProject());
+      const markdown = await state.readCurrentTasks();
+      if (!markdown) {
+        return res.status(400).json({ error: "No current task plan found" });
+      }
+
+      const tasks = parseTaskBlocks(markdown);
+      const target = tasks.find((t) => t.id === id);
+      if (!target) {
+        return res.status(404).json({ error: `Task ${id} not found` });
+      }
+
+      const idsToDelete = new Set<number>([id]);
+      if (cascadeDependents) {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const task of tasks) {
+            if (idsToDelete.has(task.id)) continue;
+            const deps = parseDependencyIds(task.dependencies);
+            if (deps.some((depId) => idsToDelete.has(depId))) {
+              idsToDelete.add(task.id);
+              changed = true;
+            }
+          }
+        }
+      }
+
+      let updated = markdown;
+      for (const task of tasks.filter((t) => idsToDelete.has(t.id)).sort((a, b) => b.start - a.start)) {
+        updated = `${updated.slice(0, task.start)}${updated.slice(task.end)}`;
+      }
+      await state.writeCurrentTasks(updated.trim());
+
+      const taskAgents = await state.readTaskAgents();
+      let changedAssignments = false;
+      for (const deletedId of idsToDelete) {
+        const key = String(deletedId);
+        if (taskAgents[key]) {
+          delete taskAgents[key];
+          changedAssignments = true;
+        }
+      }
+      if (changedAssignments) {
+        await state.writeTaskAgents(taskAgents);
+      }
+
+      res.json({ ok: true, deletedTaskIds: Array.from(idsToDelete).sort((a, b) => a - b) });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // ── Skills registry ───────────────────────────────────────────────────────

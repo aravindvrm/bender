@@ -3,6 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { generateText, streamText, type LanguageModel, type ToolSet } from "ai";
+import { createNullLogger, type Logger } from "../logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -37,6 +38,7 @@ export interface RoleExecutionOptions {
   tools?: ToolSet;
   providerOptions?: RunProviderOptions;
   additionalSystemContext?: string;
+  logger?: Logger;
 }
 
 function buildSystemPrompt(
@@ -76,9 +78,13 @@ export async function runRoleStreaming(
   onChunk?: (chunk: string) => void,
   options?: RoleExecutionOptions,
 ): Promise<string> {
+  const logger = options?.logger ?? createNullLogger(roleName);
+  const start = Date.now();
   const systemPrompt = await loadPrompt(roleName);
 
-  const { textStream, text } = streamText({
+  logger.debug(`Starting role: ${roleName}`, { streaming: true });
+
+  const stream = streamText({
     model,
     system: buildSystemPrompt(systemPrompt, systemContext, options),
     prompt: userMessage,
@@ -88,12 +94,21 @@ export async function runRoleStreaming(
   });
 
   if (onChunk) {
-    for await (const chunk of textStream) {
+    for await (const chunk of stream.textStream) {
       onChunk(chunk);
     }
   }
 
-  return await text;
+  const result = await stream.text;
+  const usage = await stream.usage;
+  logger.info(`Role complete: ${roleName}`, {
+    elapsedMs: Date.now() - start,
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+    outputChars: result.length,
+  });
+
+  return result;
 }
 
 /**
@@ -106,7 +121,11 @@ export async function runRole(
   userMessage: string,
   options?: RoleExecutionOptions,
 ): Promise<string> {
+  const logger = options?.logger ?? createNullLogger(roleName);
+  const start = Date.now();
   const systemPrompt = await loadPrompt(roleName);
+
+  logger.debug(`Starting role: ${roleName}`);
 
   const result = await generateText({
     model,
@@ -115,6 +134,13 @@ export async function runRole(
     tools: options?.tools,
     providerOptions: options?.providerOptions,
     maxOutputTokens: 16384,
+  });
+
+  logger.info(`Role complete: ${roleName}`, {
+    elapsedMs: Date.now() - start,
+    inputTokens: result.usage?.inputTokens,
+    outputTokens: result.usage?.outputTokens,
+    outputChars: result.text.length,
   });
 
   return result.text;

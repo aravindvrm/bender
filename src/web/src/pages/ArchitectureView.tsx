@@ -1,15 +1,15 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { ProjectState } from "../hooks/useApi";
 import { MarkdownView } from "../components/MarkdownView";
 import { MermaidView } from "../components/MermaidView";
 import { sqlToErDiagram } from "../utils/sqlToErDiagram";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, ShieldAlert, TestTube2, AlertTriangle, Info, AlertCircle, CheckCircle2, Plus } from "lucide-react";
 
 interface ArchitectureViewProps {
   state: ProjectState;
 }
 
-type Tab = "overview" | "schema" | "api" | "flows" | "decisions" | "conventions";
+type Tab = "overview" | "schema" | "api" | "flows" | "decisions" | "conventions" | "security" | "tests";
 
 type StackFieldKey = "framework" | "database" | "orm" | "auth" | "styling" | "language" | "deployment";
 interface MarkdownSection {
@@ -310,10 +310,291 @@ function FlowsContent({ content, onRegenerate, generating }: {
   );
 }
 
+// ── Audit types ───────────────────────────────────────────────────────────────
+
+interface AuditIssue {
+  id: string;
+  title: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  category: string;
+  description: string;
+  recommendation: string;
+  files?: string[];
+}
+
+interface AuditResult {
+  type: "security" | "tests";
+  runAt: number;
+  summary: string;
+  coverageEstimate?: string;
+  issues: AuditIssue[];
+}
+
+const SEVERITY_CONFIG: Record<string, { label: string; classes: string; icon: React.ReactNode }> = {
+  critical: { label: "Critical", classes: "bg-red-500/15 text-red-400 border-red-500/30", icon: <AlertCircle className="h-3 w-3" /> },
+  high:     { label: "High",     classes: "bg-orange-500/15 text-orange-400 border-orange-500/30", icon: <AlertTriangle className="h-3 w-3" /> },
+  medium:   { label: "Medium",   classes: "bg-amber-500/15 text-amber-400 border-amber-500/30", icon: <AlertTriangle className="h-3 w-3" /> },
+  low:      { label: "Low",      classes: "bg-blue-500/15 text-blue-400 border-blue-500/30", icon: <Info className="h-3 w-3" /> },
+  info:     { label: "Info",     classes: "bg-zinc-500/15 text-zinc-400 border-zinc-500/30", icon: <Info className="h-3 w-3" /> },
+};
+
+function SeverityBadge({ severity }: { severity: string }) {
+  const cfg = SEVERITY_CONFIG[severity] ?? SEVERITY_CONFIG.info;
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] font-medium ${cfg.classes}`}>
+      {cfg.icon}
+      {cfg.label}
+    </span>
+  );
+}
+
+function AuditIssueCard({ issue, onAddAsTask }: { issue: AuditIssue; onAddAsTask: (issue: AuditIssue) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(false);
+
+  async function handleAdd() {
+    setAdding(true);
+    try {
+      const res = await fetch("/api/tasks/append", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `Fix: ${issue.title}`,
+          description: `**Issue:** ${issue.description}\n\n**Recommendation:** ${issue.recommendation}${issue.files?.length ? `\n\n**Files:** ${issue.files.join(", ")}` : ""}`,
+        }),
+      });
+      if (res.ok) {
+        setAdded(true);
+        onAddAsTask(issue);
+      }
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  return (
+    <div className="border border-zinc-800 rounded-lg bg-zinc-900/50 overflow-hidden">
+      <div
+        className="flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-zinc-800/30 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="pt-0.5 shrink-0">
+          <SeverityBadge severity={issue.severity} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm text-zinc-200 font-medium leading-tight">{issue.title}</p>
+          {issue.files && issue.files.length > 0 && (
+            <p className="text-[11px] text-zinc-500 mt-0.5 truncate">{issue.files.join(", ")}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {added ? (
+            <span className="flex items-center gap-1 text-[11px] text-emerald-400">
+              <CheckCircle2 className="h-3 w-3" /> Added
+            </span>
+          ) : (
+            <button
+              onClick={(e) => { e.stopPropagation(); void handleAdd(); }}
+              disabled={adding}
+              className="flex items-center gap-1 px-2 py-1 text-[11px] text-zinc-400 border border-zinc-700 rounded hover:text-zinc-200 hover:border-zinc-500 transition-colors disabled:opacity-50"
+            >
+              <Plus className="h-3 w-3" />
+              {adding ? "Adding..." : "Add as task"}
+            </button>
+          )}
+          <span className="text-zinc-600 text-xs">{expanded ? "▲" : "▼"}</span>
+        </div>
+      </div>
+      {expanded && (
+        <div className="border-t border-zinc-800 px-4 py-3 space-y-3">
+          <div>
+            <p className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide mb-1">Description</p>
+            <p className="text-sm text-zinc-300 leading-relaxed">{issue.description}</p>
+          </div>
+          <div>
+            <p className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide mb-1">Recommendation</p>
+            <p className="text-sm text-zinc-300 leading-relaxed">{issue.recommendation}</p>
+          </div>
+          {issue.category && (
+            <div>
+              <span className="text-[11px] font-medium text-zinc-600">Category: </span>
+              <span className="text-[11px] text-zinc-500">{issue.category}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AuditTabContent({
+  auditType,
+  audit,
+  running,
+  error,
+  onRun,
+}: {
+  auditType: "security" | "tests";
+  audit: AuditResult | null;
+  running: boolean;
+  error: string | null;
+  onRun: () => void;
+}) {
+  const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
+  const label = auditType === "security" ? "Security Audit" : "Test Harness Audit";
+  const Icon = auditType === "security" ? ShieldAlert : TestTube2;
+
+  const criticalCount = audit?.issues.filter((i) => i.severity === "critical").length ?? 0;
+  const highCount = audit?.issues.filter((i) => i.severity === "high").length ?? 0;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Icon className="h-4 w-4 text-zinc-400" />
+          <h2 className="text-sm font-medium text-zinc-300">{label}</h2>
+          {audit && (
+            <span className="text-xs text-zinc-600">
+              · {new Date(audit.runAt).toLocaleDateString()}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onRun}
+          disabled={running}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 border border-zinc-700 rounded-lg hover:text-zinc-200 hover:border-zinc-500 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${running ? "animate-spin" : ""}`} />
+          {running ? "Analyzing..." : audit ? "Re-run" : "Run audit"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-800/40 bg-red-900/10 p-3 text-sm text-red-400">{error}</div>
+      )}
+
+      {running && (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-6 text-center text-sm text-zinc-500">
+          <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-zinc-600" />
+          Running {label.toLowerCase()}...
+        </div>
+      )}
+
+      {!running && audit && (
+        <>
+          {audit.summary && (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-3">
+              <p className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5">Summary</p>
+              <p className="text-sm text-zinc-300 leading-relaxed">{audit.summary}</p>
+              {audit.coverageEstimate && (
+                <p className="text-xs text-zinc-500 mt-2">Coverage estimate: <span className="text-zinc-300">{audit.coverageEstimate}</span></p>
+              )}
+            </div>
+          )}
+
+          {audit.issues.length > 0 ? (
+            <>
+              <div className="flex items-center gap-3 text-xs text-zinc-500">
+                <span>{audit.issues.length} issue{audit.issues.length !== 1 ? "s" : ""} found</span>
+                {criticalCount > 0 && <span className="text-red-400">{criticalCount} critical</span>}
+                {highCount > 0 && <span className="text-orange-400">{highCount} high</span>}
+              </div>
+              <div className="space-y-2">
+                {audit.issues.map((issue) => (
+                  <AuditIssueCard
+                    key={issue.id}
+                    issue={issue}
+                    onAddAsTask={(i) => setAddedIds((prev) => new Set([...prev, i.id]))}
+                  />
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-6 text-center">
+              <CheckCircle2 className="h-6 w-6 text-emerald-400 mx-auto mb-2" />
+              <p className="text-sm text-zinc-400">No issues found.</p>
+            </div>
+          )}
+        </>
+      )}
+
+      {!running && !audit && !error && (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-8 text-center space-y-3">
+          <Icon className="h-8 w-8 text-zinc-700 mx-auto" />
+          <p className="text-sm text-zinc-500">No {label.toLowerCase()} results yet.</p>
+          <p className="text-xs text-zinc-600">Click "Run audit" to analyze the project.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ArchitectureView({ state }: ArchitectureViewProps) {
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+
+  // Audit state
+  const [securityAudit, setSecurityAudit] = useState<AuditResult | null>(null);
+  const [testsAudit, setTestsAudit] = useState<AuditResult | null>(null);
+  const [securityRunning, setSecurityRunning] = useState(false);
+  const [testsRunning, setTestsRunning] = useState(false);
+  const [securityError, setSecurityError] = useState<string | null>(null);
+  const [testsError, setTestsError] = useState<string | null>(null);
+
+  // Load existing audit results on mount
+  useEffect(() => {
+    fetch("/api/audits")
+      .then((r) => r.json())
+      .then((data: { security?: AuditResult | null; tests?: AuditResult | null }) => {
+        if (data.security) setSecurityAudit(data.security);
+        if (data.tests) setTestsAudit(data.tests);
+      })
+      .catch(() => { /* ignore */ });
+  }, []);
+
+  const runAudit = useCallback(async (auditType: "security" | "tests") => {
+    const setRunning = auditType === "security" ? setSecurityRunning : setTestsRunning;
+    const setError = auditType === "security" ? setSecurityError : setTestsError;
+    const setAudit = auditType === "security" ? setSecurityAudit : setTestsAudit;
+
+    setRunning(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/run/audit/${auditType}`, { method: "POST" });
+      if (!res.ok || !res.body) throw new Error("Request failed");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const evt = JSON.parse(line.slice(6)) as { type: string; message?: string };
+            if (evt.type === "error") throw new Error(evt.message ?? "Audit failed");
+          } catch (parseErr) {
+            if ((parseErr as Error).message !== "Unexpected token") throw parseErr;
+          }
+        }
+      }
+
+      // Reload audit results
+      const audits = await fetch("/api/audits").then((r) => r.json()) as { security?: AuditResult; tests?: AuditResult };
+      if (audits[auditType]) setAudit(audits[auditType] ?? null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  }, []);
 
   const erDiagram = state.schema ? sqlToErDiagram(state.schema) : null;
   const parsedStack = extractStackFromArchitecture(state.architecture ?? "");
@@ -402,6 +683,9 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
     );
   }
 
+  const securityIssueCount = securityAudit?.issues.length ?? 0;
+  const testsIssueCount = testsAudit?.issues.length ?? 0;
+
   const tabs: { id: Tab; label: string; available: boolean }[] = [
     { id: "overview", label: "Architecture", available: !!state.architecture },
     { id: "schema", label: "Schema", available: !!state.schema },
@@ -409,6 +693,8 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
     { id: "flows", label: "Flows", available: true },
     { id: "decisions", label: `Decisions (${state.decisions.length})`, available: state.decisions.length > 0 },
     { id: "conventions", label: "Conventions", available: !!state.conventions },
+    { id: "security", label: securityIssueCount > 0 ? `Security (${securityIssueCount})` : "Security", available: true },
+    { id: "tests", label: testsIssueCount > 0 ? `Tests (${testsIssueCount})` : "Tests", available: true },
   ];
 
   return (
@@ -525,6 +811,26 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
             <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-5">Coding Conventions</h2>
             <MarkdownView content={stripCodeFence(state.conventions)} />
           </div>
+        )}
+
+        {activeTab === "security" && (
+          <AuditTabContent
+            auditType="security"
+            audit={securityAudit}
+            running={securityRunning}
+            error={securityError}
+            onRun={() => { void runAudit("security"); }}
+          />
+        )}
+
+        {activeTab === "tests" && (
+          <AuditTabContent
+            auditType="tests"
+            audit={testsAudit}
+            running={testsRunning}
+            error={testsError}
+            onRun={() => { void runAudit("tests"); }}
+          />
         )}
       </div>
     </div>

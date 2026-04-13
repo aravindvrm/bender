@@ -1,7 +1,6 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { readEffectiveConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { createModelSet, getModelForTier } from "../llm/provider.js";
 import { implementTask, type TaskDescription, type FileOperation } from "../roles/implementer.js";
@@ -9,11 +8,60 @@ import { reviewCode, type ReviewResult } from "../roles/reviewer.js";
 import { GitOperations } from "../git/operations.js";
 import { runTests, runTypeCheck } from "../test/runner.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
+import { analyzeCommand } from "./analyze.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getAllAgents, getEffectiveAgentForRole, type AgentConfig } from "../state/agents.js";
-import type { BenderConfig } from "../state/config.js";
+import { readEffectiveConfig, type BenderConfig } from "../state/config.js";
+import { createLogger, makeAdapterSink } from "../logger.js";
 import type { ModelSet } from "../llm/provider.js";
 import type { ProjectContext } from "../state/manager.js";
+
+/** Keywords that indicate a task is "major" (architectural, schema-level changes). */
+const MAJOR_TASK_KEYWORDS = [
+  "schema", "migration", "database", "table", "model",
+  "auth", "authentication", "authorization", "permission", "role",
+  "api", "route", "endpoint", "controller",
+  "refactor", "restructure", "architecture",
+  "deploy", "infrastructure", "config", "environment",
+];
+
+/**
+ * Returns true if a task likely causes architectural or structural changes
+ * that would benefit from re-analysis.
+ */
+export function isMajorTask(task: TaskDescription): boolean {
+  const text = `${task.title} ${task.description}`.toLowerCase();
+  return MAJOR_TASK_KEYWORDS.some((kw) => text.includes(kw));
+}
+
+/**
+ * Check if auto-reanalyze should run and trigger it if so.
+ * Increments the counter; resets and runs analysis when threshold is reached.
+ */
+export async function maybeAutoReanalyze(
+  projectRoot: string,
+  config: BenderConfig,
+  task: TaskDescription,
+  adapter: UIAdapter,
+): Promise<void> {
+  const reanalyzeCfg = config.reanalyze ?? {};
+  if (reanalyzeCfg.enabled === false) return;
+  if (!isMajorTask(task)) return;
+
+  const state = new StateManager(projectRoot);
+  const threshold = reanalyzeCfg.threshold ?? 3;
+  const count = await state.incrementReanalyzeCounter();
+
+  if (count >= threshold) {
+    await state.resetReanalyzeCounter();
+    adapter.info(`[Auto] Re-analyzing architecture after ${count} major task(s)...`);
+    try {
+      await analyzeCommand(projectRoot, adapter);
+    } catch (err) {
+      adapter.warn(`Auto re-analysis failed: ${(err as Error).message}`);
+    }
+  }
+}
 
 /**
  * Parse a task plan markdown into structured task descriptions.
@@ -175,6 +223,8 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
   }
 
   const config = await readEffectiveConfig(projectRoot);
+  const logger = createLogger("implement", projectRoot, makeAdapterSink(adapter));
+  logger.info("Starting task implementation", { taskId });
   const currentTasks = await state.readCurrentTasks();
 
   if (!currentTasks) {
@@ -318,7 +368,16 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
       `# Task ${task.id}: ${task.title}\n\nCompleted: ${new Date().toISOString()}\n\nFiles: ${fileOps.map((op) => op.path).join(", ")}`,
     );
 
+    logger.info("Task completed", {
+      taskId: task.id,
+      title: task.title,
+      filesWritten: fileOps.length,
+      files: fileOps.map((op) => op.path),
+    });
     adapter.success(`Task ${task.id} complete.`);
+
+    // Auto re-analyze if threshold reached
+    await maybeAutoReanalyze(projectRoot, config, task, adapter);
   } finally {
     await runtime.close();
   }
@@ -337,6 +396,7 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
   }
 
   const config = await readEffectiveConfig(projectRoot);
+  const logger = createLogger("implement", projectRoot, makeAdapterSink(adapter));
   const currentTasks = await state.readCurrentTasks();
 
   if (!currentTasks) {
@@ -504,10 +564,20 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
       );
 
       completedTaskSummaries.push(`Task ${task.id}: ${task.title}`);
+      logger.info("Task completed", {
+        taskId: task.id,
+        title: task.title,
+        filesWritten: fileOps.length,
+        testsPassed: testResult.passed,
+      });
+      // Auto re-analyze if threshold reached
+      await maybeAutoReanalyze(projectRoot, config, task, adapter);
     } finally {
       await runtime.close();
     }
   }
+
+  logger.info("Implement session complete", { tasksCompleted: completedTaskSummaries.length });
 
   // Write session log
   await state.writeSession(

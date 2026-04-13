@@ -7,6 +7,7 @@ import { GitOperations } from "../git/operations.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getEffectiveAgentForRole } from "../state/agents.js";
+import { createLogger, makeAdapterSink } from "../logger.js";
 
 export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header("Bender Analyze — Existing Project");
@@ -26,6 +27,9 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
   }
 
   const config = await readEffectiveConfig(projectRoot);
+  const logger = createLogger("analyze", projectRoot, makeAdapterSink(adapter));
+  const startTime = Date.now();
+  logger.info("Starting analysis");
 
   let models;
   try {
@@ -147,6 +151,13 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
       adapter.success("Git repository initialized.");
     }
   }
+
+  logger.info("Analysis complete", {
+    elapsedMs: Date.now() - startTime,
+    hasBrief: true,
+    hasConventions: !!parsed.conventions,
+    hasSchema: !!parsed.schema,
+  });
 
   adapter.header("Analysis Complete");
   adapter.success("Brief:         .bender/brief.md");

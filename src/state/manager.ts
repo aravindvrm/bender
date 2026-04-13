@@ -170,6 +170,30 @@ export class StateManager {
     await this.writeTaskAgents(current);
   }
 
+  // --- Reanalyze counter ---
+
+  async readReanalyzeCounter(): Promise<number> {
+    const raw = await this.readFileOrNull("tasks/reanalyze-counter.json");
+    if (!raw) return 0;
+    try {
+      const parsed = JSON.parse(raw) as { count?: unknown };
+      return typeof parsed.count === "number" ? parsed.count : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async incrementReanalyzeCounter(): Promise<number> {
+    const current = await this.readReanalyzeCounter();
+    const next = current + 1;
+    await this.writeStateFile("tasks/reanalyze-counter.json", JSON.stringify({ count: next }));
+    return next;
+  }
+
+  async resetReanalyzeCounter(): Promise<void> {
+    await this.writeStateFile("tasks/reanalyze-counter.json", JSON.stringify({ count: 0 }));
+  }
+
   // --- Sessions ---
 
   async writeSession(operation: string, content: string): Promise<void> {
@@ -203,6 +227,22 @@ export class StateManager {
 
   async writeFlows(content: string): Promise<void> {
     await this.writeStateFile("flows.md", content);
+  }
+
+  // --- Audits ---
+
+  async readAudit(type: "security" | "tests"): Promise<AuditResult | null> {
+    const raw = await this.readFileOrNull(`audits/${type}.json`);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as AuditResult;
+    } catch {
+      return null;
+    }
+  }
+
+  async writeAudit(type: "security" | "tests", result: AuditResult): Promise<void> {
+    await this.writeStateFile(`audits/${type}.json`, JSON.stringify(result, null, 2));
   }
 
   // --- API Contracts ---
@@ -253,6 +293,24 @@ export class StateManager {
     if (!existsSync(dir)) await mkdir(dir, { recursive: true });
     await writeFile(fullPath, content, "utf-8");
   }
+}
+
+export interface AuditIssue {
+  id: string;
+  title: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  category: string;
+  description: string;
+  recommendation: string;
+  files?: string[];
+}
+
+export interface AuditResult {
+  type: "security" | "tests";
+  runAt: number;
+  summary: string;
+  coverageEstimate?: string; // tests audit only
+  issues: AuditIssue[];
 }
 
 export interface ProjectContext {

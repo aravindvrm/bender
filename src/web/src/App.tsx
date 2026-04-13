@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Terminal } from "lucide-react";
 import { useProjectState } from "./hooks/useApi";
 import { useOperation } from "./hooks/useOperation";
 import { Sidebar, type View } from "./components/Sidebar";
@@ -9,6 +10,15 @@ import { BriefView } from "./pages/BriefView";
 import { GitView } from "./pages/ChangesView";
 import { SettingsView } from "./pages/SettingsView";
 import { AgentsView } from "./pages/AgentsView";
+
+interface PlanRunSubmission {
+  feature: string;
+  role: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
+  agentId?: string;
+  askClarifyingQuestions: boolean;
+  requireArchitectureApproval: boolean;
+  requirePlanApproval: boolean;
+}
 
 const VIEW_LABELS: Record<View, string> = {
   plan: "Tasks",
@@ -23,6 +33,7 @@ export function App() {
   const [activeView, setActiveView] = useState<View>("brief");
   const { state, loading, error, refresh } = useProjectState();
   const op = useOperation(refresh);
+  const operationLabel = op.lines.find((line) => line.kind === "header")?.text ?? null;
 
   if (loading && !state) {
     return (
@@ -68,8 +79,8 @@ export function App() {
     op.startOperation("/api/run/init", submission);
   }
 
-  function handleSubmitPlan(text: string) {
-    op.startOperation("/api/run/plan", { feature: text });
+  function handleSubmitPlan(submission: PlanRunSubmission) {
+    op.startOperation("/api/run/plan", submission);
   }
 
   return (
@@ -80,6 +91,8 @@ export function App() {
         state={state}
         onProjectChange={refresh}
         onGlobalAction={handleGlobalAction}
+        operationStatus={op.status}
+        operationLabel={operationLabel}
       />
 
       <main className="flex-1 flex flex-col overflow-hidden">
@@ -92,6 +105,15 @@ export function App() {
               <span className="text-xs text-zinc-600 font-mono hidden lg:block">
                 {state.git.recentCommits[0].hash} {state.git.recentCommits[0].message.slice(0, 40)}
               </span>
+            )}
+            {hasProject && (
+              <button
+                onClick={() => { op.setDrawerOpen(true); }}
+                title="Open terminal"
+                className="text-zinc-600 hover:text-zinc-400 transition-colors"
+              >
+                <Terminal className="h-4 w-4" />
+              </button>
             )}
           </div>
         </header>
@@ -141,6 +163,7 @@ export function App() {
                   onImplement={() => op.startOperation("/api/run/implement", {})}
                   onNewTask={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
                   onRunTask={(taskId) => op.startOperation("/api/run/implement", { taskId })}
+                  onTasksChanged={refresh}
                 />
               )}
               {activeView === "architecture" && state && <ArchitectureView state={state} />}

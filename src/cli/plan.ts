@@ -7,8 +7,27 @@ import { generateFeaturePlan } from "../roles/planner.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getEffectiveAgentForRole } from "../state/agents.js";
+import { createLogger, makeAdapterSink } from "../logger.js";
 
-export async function planCommand(projectRoot: string, featureDescription: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
+export interface PlanCommandOptions {
+  role?: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
+  agentId?: string;
+  askClarifyingQuestions?: boolean;
+  requireArchitectureApproval?: boolean;
+  requirePlanApproval?: boolean;
+}
+
+function parseGeneratedTaskIds(planMarkdown: string): number[] {
+  const matches = [...planMarkdown.matchAll(/###\s*Task\s*(\d+):/g)];
+  return matches.map((m) => parseInt(m[1], 10)).filter((n) => Number.isFinite(n));
+}
+
+export async function planCommand(
+  projectRoot: string,
+  featureDescription: string,
+  adapter: UIAdapter = terminalAdapter,
+  options: PlanCommandOptions = {},
+): Promise<void> {
   adapter.header("Bender Plan — New Feature / Change");
 
   const state = new StateManager(projectRoot);
@@ -19,6 +38,19 @@ export async function planCommand(projectRoot: string, featureDescription: strin
   }
 
   const config = await readEffectiveConfig(projectRoot);
+  const logger = createLogger("plan", projectRoot, makeAdapterSink(adapter));
+  const requestedRole = options.role ?? "planner";
+  const askClarifyingQuestions = options.askClarifyingQuestions ?? false;
+  const requireArchitectureApproval = options.requireArchitectureApproval ?? false;
+  const requirePlanApproval = options.requirePlanApproval ?? false;
+  logger.info("Starting plan", {
+    feature: featureDescription.slice(0, 120),
+    requestedRole,
+    agentId: options.agentId ?? null,
+    askClarifyingQuestions,
+    requireArchitectureApproval,
+    requirePlanApproval,
+  });
   const existingContext = await state.gatherContext();
 
   if (!existingContext.brief || !existingContext.architecture) {
@@ -36,8 +68,18 @@ export async function planCommand(projectRoot: string, featureDescription: strin
     return;
   }
 
-  const plannerAgent = await getEffectiveAgentForRole("planner");
-  const architectAgent = await getEffectiveAgentForRole("architect");
+  const plannerAgent = await getEffectiveAgentForRole(
+    "planner",
+    requestedRole === "planner" ? options.agentId : undefined,
+  );
+  const architectAgent = await getEffectiveAgentForRole(
+    "architect",
+    requestedRole === "architect" ? options.agentId : undefined,
+  );
+  const roleGuidance = requestedRole !== "planner"
+    ? `\n\nRole perspective: prioritize outcomes and risks from the ${requestedRole} role.`
+    : "";
+  const roleGuidedFeatureDescription = `${featureDescription}${roleGuidance}`.trim();
 
   // Step 1 + 3 use planner runtime
   let plannerRuntime: RoleRuntime;
@@ -47,7 +89,7 @@ export async function planCommand(projectRoot: string, featureDescription: strin
       config,
       {
         role: "planner",
-        taskDescription: featureDescription,
+        taskDescription: roleGuidedFeatureDescription,
         pinnedSkills: plannerAgent.pinnedSkills,
         mcpServerIds: plannerAgent.mcpServerIds,
         modelTier: plannerAgent.modelTier,
@@ -64,35 +106,39 @@ export async function planCommand(projectRoot: string, featureDescription: strin
   try {
     adapter.subheader("Step 1: Understanding the Change");
     adapter.info(`Feature request: "${featureDescription}"\n`);
+    adapter.info(`Requested role perspective: ${requestedRole}`);
     adapter.info(`Using planner agent: ${plannerAgent.name} (${plannerAgent.modelTier})`);
 
     const clarifierModel = getModelForTier(models, plannerAgent.modelTier);
-    const questions = await generateClarifyingQuestions(
-      clarifierModel,
-      featureDescription,
-      existingContext,
-      adapter.streamWriter(),
-      plannerRuntime,
-    );
-
-    const answers = await adapter.promptMultiline("Answer any questions above, or press Enter to continue with defaults:");
-
-    let fullDescription = featureDescription;
-    if (answers) {
-      const clarificationQA: { role: "user" | "assistant"; content: string }[] = [
-        { role: "assistant", content: questions },
-        { role: "user", content: answers },
-      ];
-      const featureBrief = await generateBrief(
+    let fullDescription = roleGuidedFeatureDescription;
+    if (askClarifyingQuestions) {
+      const questions = await generateClarifyingQuestions(
         clarifierModel,
-        featureDescription,
-        clarificationQA,
+        roleGuidedFeatureDescription,
         existingContext,
-        undefined,
+        adapter.streamWriter(),
         plannerRuntime,
       );
-      fullDescription = featureBrief;
-      adapter.info(featureBrief);
+
+      const answers = await adapter.promptMultiline("Answer any questions above, or press Enter to continue with defaults:");
+      if (answers) {
+        const clarificationQA: { role: "user" | "assistant"; content: string }[] = [
+          { role: "assistant", content: questions },
+          { role: "user", content: answers },
+        ];
+        const featureBrief = await generateBrief(
+          clarifierModel,
+          roleGuidedFeatureDescription,
+          clarificationQA,
+          existingContext,
+          undefined,
+          plannerRuntime,
+        );
+        fullDescription = featureBrief;
+        adapter.info(featureBrief);
+      }
+    } else {
+      adapter.info("Clarification step: skipped (explicit toggle off).");
     }
 
     // Step 2: Architecture update
@@ -143,7 +189,9 @@ export async function planCommand(projectRoot: string, featureDescription: strin
       adapter.info(schemaMigration);
     }
 
-    const archApproved = await adapter.confirm("Approve architecture updates?");
+    const archApproved = requireArchitectureApproval
+      ? await adapter.confirm("Approve architecture updates?")
+      : true;
     if (!archApproved) {
       adapter.info("Architecture update cancelled. No changes made.");
       adapter.cleanup();
@@ -177,7 +225,9 @@ export async function planCommand(projectRoot: string, featureDescription: strin
       plannerRuntime,
     );
 
-    const planApproved = await adapter.confirm("Approve this task plan?");
+    const planApproved = requirePlanApproval
+      ? await adapter.confirm("Approve this task plan?")
+      : true;
     if (!planApproved) {
       adapter.info("You can edit .bender/tasks/current.md and run `bender implement`.");
       await state.writeCurrentTasks(plan);
@@ -186,10 +236,23 @@ export async function planCommand(projectRoot: string, featureDescription: strin
     }
 
     await state.writeCurrentTasks(plan);
+    if (requestedRole === "implementer" && options.agentId) {
+      const taskIds = parseGeneratedTaskIds(plan);
+      for (const taskId of taskIds) {
+        await state.setTaskAgent(String(taskId), options.agentId);
+      }
+      if (taskIds.length > 0) {
+        adapter.info(`Assigned ${taskIds.length} generated task(s) to agent '${options.agentId}'.`);
+      }
+    }
 
     // Write session log
-    await state.writeSession("plan", `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nStatus: completed`);
+    await state.writeSession(
+      "plan",
+      `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nRole: ${requestedRole}\n\nStatus: completed`,
+    );
 
+    logger.info("Plan complete");
     adapter.success("Task plan saved to .bender/tasks/current.md");
     adapter.info("Next step: run `bender implement` to execute the plan.");
     adapter.cleanup();

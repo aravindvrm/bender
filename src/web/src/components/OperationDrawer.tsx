@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -7,11 +7,13 @@ import {
   FolderOpen,
   Loader2,
   X,
+  Terminal as TerminalIcon,
 } from "lucide-react";
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
 type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
+type BaseRole = "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
 
 interface DirEntry {
   name: string;
@@ -52,6 +54,22 @@ export interface InitModalSubmission {
   llmApiKey?: string;
 }
 
+interface TerminalEntry {
+  command: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+interface PlanModalSubmission {
+  feature: string;
+  role: BaseRole;
+  agentId?: string;
+  askClarifyingQuestions: boolean;
+  requireArchitectureApproval: boolean;
+  requirePlanApproval: boolean;
+}
+
 interface OperationDrawerProps {
   lines: OutputLine[];
   status: OperationStatus;
@@ -67,7 +85,136 @@ interface OperationDrawerProps {
   onClear: () => void;
   onAbort: () => void;
   onSubmitInit: (submission: InitModalSubmission) => void;
-  onSubmitPlan: (text: string) => void;
+  onSubmitPlan: (submission: PlanModalSubmission) => void;
+}
+
+// ── Terminal component ────────────────────────────────────────────────────────
+
+function TerminalPanel({ projectPath }: { projectPath: string | null }) {
+  const [input, setInput] = useState("");
+  const [history, setHistory] = useState<TerminalEntry[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [running, setRunning] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [history]);
+
+  useEffect(() => {
+    if (!running) {
+      inputRef.current?.focus();
+    }
+  }, [running]);
+
+  const runCommand = useCallback(async (cmd: string) => {
+    const trimmed = cmd.trim();
+    if (!trimmed) return;
+
+    setRunning(true);
+    setCommandHistory((prev) => [trimmed, ...prev.slice(0, 49)]);
+    setHistoryIndex(-1);
+
+    try {
+      const res = await fetch("/api/terminal/exec", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: trimmed }),
+      });
+      const data = await res.json() as { stdout?: string; stderr?: string; exitCode?: number; error?: string };
+      if (data.error) {
+        setHistory((prev) => [...prev, { command: trimmed, stdout: "", stderr: data.error ?? "", exitCode: 1 }]);
+      } else {
+        setHistory((prev) => [...prev, {
+          command: trimmed,
+          stdout: data.stdout ?? "",
+          stderr: data.stderr ?? "",
+          exitCode: data.exitCode ?? 0,
+        }]);
+      }
+    } catch (err) {
+      setHistory((prev) => [...prev, { command: trimmed, stdout: "", stderr: (err as Error).message, exitCode: 1 }]);
+    } finally {
+      setRunning(false);
+    }
+  }, []);
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const cmd = input;
+      setInput("");
+      void runCommand(cmd);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const next = Math.min(historyIndex + 1, commandHistory.length - 1);
+      setHistoryIndex(next);
+      if (commandHistory[next]) setInput(commandHistory[next]);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const next = Math.max(historyIndex - 1, -1);
+      setHistoryIndex(next);
+      setInput(next === -1 ? "" : (commandHistory[next] ?? ""));
+    }
+  }
+
+  const cwd = projectPath ? projectPath.split("/").pop() ?? projectPath : "~";
+
+  return (
+    <div
+      className="h-full overflow-y-auto bg-[#0b0b0d] text-[#d7d7da] font-mono text-[12px] leading-6 p-3"
+      onClick={() => inputRef.current?.focus()}
+    >
+      <div className="space-y-0">
+        {history.length === 0 && (
+          <p className="text-zinc-600 italic mb-2">Terminal ready. Commands run in project root.</p>
+        )}
+        {history.map((entry, i) => (
+          <div key={i} className="mb-1">
+            <div className="flex items-center gap-2 text-zinc-300">
+              <span className="text-zinc-500">{cwd}</span>
+              <span className="text-zinc-600">$</span>
+              <span>{entry.command}</span>
+            </div>
+            {entry.stdout && (
+              <pre className="text-zinc-300 whitespace-pre-wrap leading-relaxed">{entry.stdout}</pre>
+            )}
+            {entry.stderr && (
+              <pre className={`whitespace-pre-wrap leading-relaxed ${entry.exitCode !== 0 ? "text-red-400/90" : "text-zinc-500"}`}>{entry.stderr}</pre>
+            )}
+          </div>
+        ))}
+        {!running && (
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500">{cwd}</span>
+            <span className="text-zinc-600">$</span>
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={!projectPath}
+              placeholder={projectPath ? "" : "No project selected"}
+              className="flex-1 bg-transparent outline-none text-zinc-200 placeholder:text-zinc-600"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+        )}
+        {running && (
+          <div className="flex items-center gap-2 text-zinc-500">
+            <span className="text-zinc-500">{cwd}</span>
+            <span className="text-zinc-600">$</span>
+            <span>running…</span>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+    </div>
+  );
 }
 
 async function browseDir(path?: string): Promise<BrowseResult> {
@@ -107,7 +254,7 @@ export function OperationDrawer({
   onSubmitInit,
   onSubmitPlan,
 }: OperationDrawerProps) {
-  const [activeTab, setActiveTab] = useState<"console" | "review">("console");
+  const [activeTab, setActiveTab] = useState<"console" | "review" | "terminal">("console");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(288);
   const [isResizing, setIsResizing] = useState(false);
@@ -173,6 +320,12 @@ export function OperationDrawer({
   const visibleLines = activeTab === "review"
     ? lines.filter((_, i) => reviewIndexes.has(i))
     : lines;
+
+  useEffect(() => {
+    if (activeTab === "review" && reviewCount === 0) {
+      setActiveTab("console");
+    }
+  }, [activeTab, reviewCount]);
 
   function clampDrawerHeight(height: number): number {
     const minHeight = 160;
@@ -253,19 +406,17 @@ export function OperationDrawer({
       )}
 
       {modal?.kind === "plan" && (
-        <InputModal
-          title="New Task"
-          placeholder="Describe the feature, fix, or change…"
-          value={inputText}
-          onChange={onSetInputText}
-          onSubmit={() => {
-            const text = inputText.trim();
-            if (!text) return;
-            onSetInputText("");
-            onSetModal(null);
-            onSubmitPlan(text);
-          }}
+        <PlanTaskModal
+          initialDescription={inputText}
+          lines={lines}
+          status={status}
+          onConfirm={onConfirm}
+          onPromptSubmit={onPromptSubmit}
           onCancel={() => { onSetModal(null); onSetInputText(""); }}
+          onSubmit={(submission) => {
+            onSetInputText("");
+            onSubmitPlan(submission);
+          }}
         />
       )}
 
@@ -299,15 +450,28 @@ export function OperationDrawer({
             >
               Console
             </button>
+            {reviewCount > 0 && (
+              <button
+                onClick={() => setActiveTab("review")}
+                className={`px-3 h-full rounded-none text-[11px] transition-colors ${
+                  activeTab === "review"
+                    ? "text-zinc-100 bg-zinc-900"
+                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
+                }`}
+              >
+                Review ({reviewCount})
+              </button>
+            )}
             <button
-              onClick={() => setActiveTab("review")}
-              className={`px-3 h-full rounded-none text-[11px] transition-colors ${
-                activeTab === "review"
+              onClick={() => setActiveTab("terminal")}
+              className={`px-3 h-full rounded-none text-[11px] transition-colors flex items-center gap-1 ${
+                activeTab === "terminal"
                   ? "text-zinc-100 bg-zinc-900"
                   : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
               }`}
             >
-              Review{reviewCount > 0 ? ` (${reviewCount})` : ""}
+              <TerminalIcon className="h-3 w-3" />
+              Terminal
             </button>
           </div>
 
@@ -349,7 +513,11 @@ export function OperationDrawer({
           </button>
         </div>
 
-        {!collapsed && (
+        {!collapsed && activeTab === "terminal" && (
+          <TerminalPanel projectPath={currentProjectPath} />
+        )}
+
+        {!collapsed && activeTab !== "terminal" && (
           <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-0.5">
             {visibleLines.length === 0 && (
               <p className="text-zinc-600 italic">Starting…</p>
@@ -361,6 +529,7 @@ export function OperationDrawer({
                 lineIdx={i}
                 onConfirm={onConfirm}
                 onPromptSubmit={onPromptSubmit}
+                interactivePrompts={modal?.kind !== "plan"}
               />
             ))}
             {isRunning && (
@@ -814,9 +983,10 @@ interface LineProps {
   lineIdx: number;
   onConfirm: (id: string, idx: number, answer: boolean) => void;
   onPromptSubmit: (id: string, idx: number, text: string) => void;
+  interactivePrompts?: boolean;
 }
 
-function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps) {
+function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactivePrompts = true }: LineProps) {
   const [promptInput, setPromptInput] = useState("");
 
   switch (line.kind) {
@@ -871,6 +1041,8 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
             <p className={`text-xs font-sans ${line.answer ? "text-emerald-400" : "text-red-400"}`}>
               → {line.answer ? "Approved" : "Declined"}
             </p>
+          ) : !interactivePrompts ? (
+            <p className="text-xs text-zinc-500 font-sans">Answer this prompt in the active modal.</p>
           ) : (
             <div className="flex gap-2">
               <button
@@ -896,6 +1068,8 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
           <p className="text-zinc-200 font-sans">{line.question}</p>
           {line.answered ? (
             <p className="text-xs text-zinc-400 italic font-sans">→ {line.answer?.slice(0, 80)}{(line.answer?.length ?? 0) > 80 ? "…" : ""}</p>
+          ) : !interactivePrompts ? (
+            <p className="text-xs text-zinc-500 font-sans">Answer this prompt in the active modal.</p>
           ) : (
             <div className="space-y-2">
               <textarea
@@ -931,35 +1105,209 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
   }
 }
 
-interface InputModalProps {
-  title: string;
-  placeholder: string;
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: () => void;
+interface PlanTaskModalProps {
+  initialDescription: string;
+  lines: OutputLine[];
+  status: OperationStatus;
+  onConfirm: (id: string, idx: number, answer: boolean) => void;
+  onPromptSubmit: (id: string, idx: number, text: string) => void;
+  onSubmit: (submission: PlanModalSubmission) => void;
   onCancel: () => void;
 }
 
-function InputModal({ title, placeholder, value, onChange, onSubmit, onCancel }: InputModalProps) {
+interface AgentOption {
+  id: string;
+  name: string;
+  baseRole: BaseRole;
+  modelTier: "fast" | "default" | "strong";
+  isBuiltin?: boolean;
+}
+
+const ROLE_OPTIONS: BaseRole[] = ["planner", "implementer", "architect", "analyzer", "reviewer"];
+
+function detectRoleFromDescription(text: string): BaseRole {
+  const normalized = text.toLowerCase();
+  const containsAny = (terms: string[]) => terms.some((t) => normalized.includes(t));
+
+  if (containsAny(["security", "threat model", "vulnerability", "audit"])) return "analyzer";
+  if (containsAny(["review", "qa", "test coverage", "regression"])) return "reviewer";
+  if (containsAny(["architecture", "design", "schema", "data model"])) return "architect";
+  if (containsAny(["implement", "build", "create", "fix", "refactor"])) return "implementer";
+  return "planner";
+}
+
+function PlanTaskModal({
+  initialDescription,
+  lines,
+  status,
+  onConfirm,
+  onPromptSubmit,
+  onSubmit,
+  onCancel,
+}: PlanTaskModalProps) {
+  const [description, setDescription] = useState(initialDescription);
+  const [role, setRole] = useState<BaseRole>(detectRoleFromDescription(initialDescription));
+  const [roleManuallySet, setRoleManuallySet] = useState(false);
+  const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [agentId, setAgentId] = useState("");
+  const [askClarifyingQuestions, setAskClarifyingQuestions] = useState(false);
+  const [requireArchitectureApproval, setRequireArchitectureApproval] = useState(false);
+  const [requirePlanApproval, setRequirePlanApproval] = useState(false);
+
+  const detectedRole = detectRoleFromDescription(description);
+
+  useEffect(() => {
+    fetch("/api/agents")
+      .then((r) => r.json())
+      .then((data) => setAgents((data.agents ?? []) as AgentOption[]))
+      .catch(() => setAgents([]));
+  }, []);
+
+  useEffect(() => {
+    if (!roleManuallySet) {
+      setRole(detectedRole);
+    }
+  }, [detectedRole, roleManuallySet]);
+
+  const roleAgents = agents.filter((a) => a.baseRole === role);
+  const canSubmit = description.trim().length > 0;
+  const started = status === "running" || status === "done" || status === "error";
+  const showOperationLog = started || lines.length > 0;
+
+  useEffect(() => {
+    if (agentId && !roleAgents.some((a) => a.id === agentId)) {
+      setAgentId("");
+    }
+  }, [agentId, roleAgents]);
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-lg shadow-2xl">
+      <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-3xl shadow-2xl max-h-[92vh] flex flex-col">
         <div className="px-5 py-4 border-b border-zinc-800">
-          <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
+          <h3 className="text-sm font-semibold text-zinc-100">New Task</h3>
         </div>
-        <div className="p-5 space-y-4">
-          <textarea
-            autoFocus
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
-            rows={5}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSubmit();
-              if (e.key === "Escape") onCancel();
-            }}
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 resize-none"
-          />
+        <div className="p-5 space-y-5 overflow-y-auto">
+          <div className="space-y-1.5">
+            <label className="text-xs text-zinc-500 uppercase tracking-wide">Description</label>
+            <textarea
+              autoFocus
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Describe the feature, fix, or change…"
+              rows={5}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSubmit && status !== "running") {
+                  onSubmit({
+                    feature: description.trim(),
+                    role,
+                    agentId: agentId || undefined,
+                    askClarifyingQuestions,
+                    requireArchitectureApproval,
+                    requirePlanApproval,
+                  });
+                }
+                if (e.key === "Escape") onCancel();
+              }}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 resize-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-xs text-zinc-500 uppercase tracking-wide">Role</label>
+              <div className="relative">
+                <select
+                  value={role}
+                  onChange={(e) => {
+                    setRoleManuallySet(true);
+                    setRole(e.target.value as BaseRole);
+                  }}
+                  className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+                >
+                  {ROLE_OPTIONS.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+              </div>
+              <p className="text-[11px] text-zinc-600">Auto-detected from description: {detectedRole}</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs text-zinc-500 uppercase tracking-wide">Agent (Optional)</label>
+              <div className="relative">
+                <select
+                  value={agentId}
+                  onChange={(e) => setAgentId(e.target.value)}
+                  className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+                >
+                  <option value="">Use role default</option>
+                  {roleAgents.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} ({a.modelTier}){a.isBuiltin ? " [builtin]" : ""}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+              </div>
+              <p className="text-[11px] text-zinc-600">Matched to selected role.</p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-xs text-zinc-500 uppercase tracking-wide">Planning Flow</p>
+            <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={askClarifyingQuestions}
+                onChange={(e) => setAskClarifyingQuestions(e.target.checked)}
+              />
+              Ask clarifying questions before planning
+            </label>
+            <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={requireArchitectureApproval}
+                onChange={(e) => setRequireArchitectureApproval(e.target.checked)}
+              />
+              Require architecture approval step
+            </label>
+            <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={requirePlanApproval}
+                onChange={(e) => setRequirePlanApproval(e.target.checked)}
+              />
+              Require plan approval step
+            </label>
+          </div>
+
+          {showOperationLog && (
+            <section className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-zinc-500 uppercase tracking-wide">Run Output</p>
+                <p className="text-[11px] text-zinc-600">
+                  {status === "running" ? "Running..." : status === "done" ? "Done" : status === "error" ? "Error" : "Idle"}
+                </p>
+              </div>
+              <div className="max-h-56 overflow-y-auto border border-zinc-800 rounded-lg bg-zinc-950 p-3 font-mono text-xs space-y-0.5">
+                {lines.length === 0 && <p className="text-zinc-600 italic">Waiting for output...</p>}
+                {lines.map((line, i) => (
+                  <OutputLineView
+                    key={i}
+                    line={line}
+                    lineIdx={i}
+                    onConfirm={onConfirm}
+                    onPromptSubmit={onPromptSubmit}
+                    interactivePrompts
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           <p className="text-xs text-zinc-600">⌘ Enter to start</p>
         </div>
         <div className="px-5 py-3 border-t border-zinc-800 flex justify-end gap-2">
@@ -967,11 +1315,18 @@ function InputModal({ title, placeholder, value, onChange, onSubmit, onCancel }:
             Cancel
           </button>
           <button
-            onClick={onSubmit}
-            disabled={!value.trim()}
+            onClick={() => onSubmit({
+              feature: description.trim(),
+              role,
+              agentId: agentId || undefined,
+              askClarifyingQuestions,
+              requireArchitectureApproval,
+              requirePlanApproval,
+            })}
+            disabled={!canSubmit || status === "running"}
             className="px-4 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-900 rounded-md hover:bg-white disabled:opacity-40 transition-colors"
           >
-            Start
+            {status === "running" ? "Running..." : "Start"}
           </button>
         </div>
       </div>
