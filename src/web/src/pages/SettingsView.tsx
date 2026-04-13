@@ -30,6 +30,7 @@ interface FullConfig {
   stack: { template: string; framework: string; database: string; orm: string; auth: string; styling: string; language: string };
   deploy: { target?: string };
   test: { command?: string };
+  reanalyze?: { enabled?: boolean; threshold?: number };
 }
 
 interface ConfigResponse extends FullConfig {
@@ -899,6 +900,41 @@ export function SettingsView() {
             mono
           />
         </Field>
+      </section>
+
+      <div className="h-px bg-zinc-800" />
+
+      {/* Auto re-analyze */}
+      <section>
+        <h3 className="text-sm font-semibold text-zinc-300 mb-1">Auto Re-analyze</h3>
+        <p className="text-xs text-zinc-500 mb-4">Automatically re-run the architecture analyzer after a series of major task completions (schema, auth, API changes).</p>
+        <div className="space-y-3">
+          <Field label="Enabled">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="reanalyze-enabled"
+                checked={config.reanalyze?.enabled ?? true}
+                onChange={(e) => setConfig((c) => c ? { ...c, reanalyze: { ...c.reanalyze, enabled: e.target.checked } } : c)}
+                className="h-4 w-4 rounded border-zinc-600 bg-zinc-800 text-zinc-100 focus:ring-zinc-500"
+              />
+              <label htmlFor="reanalyze-enabled" className="text-sm text-zinc-400 cursor-pointer">
+                Re-analyze after major tasks
+              </label>
+            </div>
+          </Field>
+          <Field label="Threshold">
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={config.reanalyze?.threshold ?? 3}
+              onChange={(e) => setConfig((c) => c ? { ...c, reanalyze: { ...c.reanalyze, threshold: parseInt(e.target.value, 10) || 3 } } : c)}
+              className="w-24 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-zinc-500"
+            />
+            <span className="text-xs text-zinc-500 ml-2">major tasks between analyses</span>
+          </Field>
+        </div>
       </section>
 
       {/* Error */}

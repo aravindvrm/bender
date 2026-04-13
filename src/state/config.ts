@@ -65,6 +65,12 @@ export interface BenderConfig {
   test: {
     command?: string;
   };
+  reanalyze?: {
+    /** Automatically re-run the analyzer after major task completions. Default: true */
+    enabled?: boolean;
+    /** Number of major tasks to complete before triggering re-analysis. Default: 3 */
+    threshold?: number;
+  };
 }
 
 export const DEFAULT_CONFIG: BenderConfig = {
@@ -97,6 +103,10 @@ export const DEFAULT_CONFIG: BenderConfig = {
   },
   deploy: {},
   test: {},
+  reanalyze: {
+    enabled: true,
+    threshold: 3,
+  },
 };
 
 export function getBenderDir(projectRoot: string): string {
@@ -200,5 +210,6 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
     stack: { ...defaults.stack, ...overrides.stack },
     deploy: { ...defaults.deploy, ...overrides.deploy },
     test: { ...defaults.test, ...overrides.test },
+    reanalyze: { ...defaults.reanalyze, ...overrides.reanalyze },
   };
 }

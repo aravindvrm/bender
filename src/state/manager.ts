@@ -170,6 +170,30 @@ export class StateManager {
     await this.writeTaskAgents(current);
   }
 
+  // --- Reanalyze counter ---
+
+  async readReanalyzeCounter(): Promise<number> {
+    const raw = await this.readFileOrNull("tasks/reanalyze-counter.json");
+    if (!raw) return 0;
+    try {
+      const parsed = JSON.parse(raw) as { count?: unknown };
+      return typeof parsed.count === "number" ? parsed.count : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async incrementReanalyzeCounter(): Promise<number> {
+    const current = await this.readReanalyzeCounter();
+    const next = current + 1;
+    await this.writeStateFile("tasks/reanalyze-counter.json", JSON.stringify({ count: next }));
+    return next;
+  }
+
+  async resetReanalyzeCounter(): Promise<void> {
+    await this.writeStateFile("tasks/reanalyze-counter.json", JSON.stringify({ count: 0 }));
+  }
+
   // --- Sessions ---
 
   async writeSession(operation: string, content: string): Promise<void> {
