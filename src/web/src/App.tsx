@@ -12,7 +12,7 @@ import { SettingsView } from "./pages/SettingsView";
 const VIEW_LABELS: Record<View, string> = {
   plan: "Tasks",
   architecture: "Architecture",
-  brief: "Plan",
+  brief: "Overview",
   changes: "Changes",
   settings: "Settings",
 };

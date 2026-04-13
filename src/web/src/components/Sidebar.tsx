@@ -22,7 +22,7 @@ interface SidebarProps {
 }
 
 const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
-  { id: "brief", label: "Plan", icon: FileText },
+  { id: "brief", label: "Overview", icon: FileText },
   { id: "plan", label: "Tasks", icon: MonitorCog },
   { id: "architecture", label: "Architecture", icon: FolderTree },
   { id: "changes", label: "Changes", icon: GitCompareArrows },
