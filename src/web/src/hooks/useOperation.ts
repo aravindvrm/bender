@@ -163,15 +163,25 @@ export function useOperation(onStateChange?: () => void) {
     [addLine, appendStream, updateLastSpinner, onStateChange],
   );
 
-  const startOperation = useCallback(async (url: string, body: Record<string, unknown>) => {
+  const startOperation = useCallback(async (
+    url: string,
+    body: Record<string, unknown>,
+    options?: { onSuccess?: () => void },
+  ) => {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setLines([]);
     setStatus("running");
     setDrawerOpen(true);
+    let succeeded = false;
+    const wrappedHandleEvent = (event: SSEEvent) => {
+      if (event.type === "done" && event.success) succeeded = true;
+      handleEvent(event);
+    };
     try {
-      await streamOperation(url, body, handleEvent, ctrl.signal);
+      await streamOperation(url, body, wrappedHandleEvent, ctrl.signal);
+      if (succeeded) options?.onSuccess?.();
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         addLine({ kind: "error", message: (err as Error).message });

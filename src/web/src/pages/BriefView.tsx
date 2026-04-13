@@ -1,91 +1,123 @@
 import type { ProjectState } from "../hooks/useApi";
 import { MarkdownView } from "../components/MarkdownView";
-import { Sparkles } from "lucide-react";
 
 interface BriefViewProps {
   state: ProjectState;
-  onPlanFeature: () => void;
 }
 
-export function BriefView({ state, onPlanFeature }: BriefViewProps) {
+/** Strip leading/trailing markdown code fences (LLMs sometimes wrap output in ```markdown). */
+function stripCodeFence(content: string): string {
+  return content.replace(/^```[a-z]*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+}
+
+/** Try several section heading patterns to find a features list. */
+function extractFeatureLines(brief: string, patterns: RegExp[]): string[] {
+  for (const pattern of patterns) {
+    const match = brief.match(pattern);
+    if (match?.[1]) {
+      const lines = match[1].match(/^[-*]?\s*\d*\.?\s*.+$/gm) ?? [];
+      if (lines.length > 0) return lines;
+    }
+  }
+  return [];
+}
+
+/** Parse a feature list item into name + optional description, stripping markdown formatting. */
+function parseFeatureLine(line: string): { name: string; desc: string } {
+  // Strip leading list markers and numbering
+  let cleaned = line.replace(/^[-*]\s+/, "").replace(/^\d+\.\s*/, "").trim();
+  // Strip bold markers
+  cleaned = cleaned.replace(/\*\*/g, "");
+  // Split on " — ", " – ", ": " (colon-space after a word boundary)
+  const separatorMatch = cleaned.match(/^(.+?)(?:\s[—–]\s|:\s)(.+)$/);
+  if (separatorMatch) {
+    return { name: separatorMatch[1].trim(), desc: separatorMatch[2].trim() };
+  }
+  return { name: cleaned, desc: "" };
+}
+
+const CORE_PATTERNS = [
+  /##\s*Core Features.*?\n([\s\S]*?)(?=\n##)/,
+  /##\s*Current Features.*?\n([\s\S]*?)(?=\n##)/,
+  /##\s*Features\b.*?\n([\s\S]*?)(?=\n##)/,
+];
+
+const DEFERRED_PATTERNS = [
+  /##\s*Deferred Features.*?\n([\s\S]*?)(?=\n##)/,
+  /##\s*Deferred\b.*?\n([\s\S]*?)(?=\n##)/,
+  /##\s*Future Features.*?\n([\s\S]*?)(?=\n##)/,
+  /##\s*Planned Features.*?\n([\s\S]*?)(?=\n##)/,
+];
+
+export function BriefView({ state }: BriefViewProps) {
   if (!state.brief) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500">
         <div className="text-center">
-          <p className="text-lg">No product brief</p>
-          <p className="text-sm mt-1">Run <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">bender init</code></p>
+          <p className="text-base font-medium text-zinc-400">No project brief</p>
+          <p className="text-sm mt-1 text-zinc-500">Run <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">bender analyze</code> to generate one</p>
         </div>
       </div>
     );
   }
 
-  // Extract features from brief
-  const coreFeatures = state.brief.match(/## Core Features.*?\n([\s\S]*?)(?=\n##)/);
-  const deferredFeatures = state.brief.match(/## Deferred Features.*?\n([\s\S]*?)(?=\n##)/);
-  const featureLines = coreFeatures?.[1]?.match(/^\d+\..+$/gm) ?? [];
-  const deferredLines = deferredFeatures?.[1]?.match(/^\d+\..+$/gm) ?? [];
+  const brief = stripCodeFence(state.brief);
+  const featureLines = extractFeatureLines(brief, CORE_PATTERNS);
+  const deferredLines = extractFeatureLines(brief, DEFERRED_PATTERNS);
 
   return (
-    <div className="max-w-4xl mx-auto">
-      {/* Action bar */}
-      <div className="flex items-center justify-end mb-6">
-        <button
-          onClick={onPlanFeature}
-          className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
-        >
-          <Sparkles className="h-4 w-4 text-zinc-400" />
-          New Task
-        </button>
-      </div>
+    <div className="max-w-4xl mx-auto space-y-8 w-full overflow-x-hidden">
 
       {/* Feature summary cards */}
       {featureLines.length > 0 && (
-        <div className="mb-8">
-          <h2 className="text-sm font-medium text-zinc-400 mb-3 uppercase tracking-wider">Core Features</h2>
+        <section>
+          <h2 className="text-xs font-medium text-zinc-500 mb-3 uppercase tracking-widest">Core Features</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {featureLines.map((line, i) => {
-              const cleaned = line.replace(/^\d+\.\s*/, "");
-              const [name, desc] = cleaned.split(" — ");
+              const { name, desc } = parseFeatureLine(line);
               return (
-                <div key={i} className="border border-zinc-800 rounded-lg p-3 bg-zinc-900/50">
-                  <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                    <span className="text-sm text-zinc-200 font-medium">{name}</span>
+                <div key={i} className="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
+                  <div className="flex items-start gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 mt-1.5" />
+                    <div className="min-w-0">
+                      <span className="text-sm text-zinc-200 font-medium">{name}</span>
+                      {desc && <p className="text-xs text-zinc-500 mt-0.5">{desc}</p>}
+                    </div>
                   </div>
-                  {desc && <p className="text-xs text-zinc-500 mt-1 ml-4">{desc}</p>}
                 </div>
               );
             })}
           </div>
-        </div>
+        </section>
       )}
 
       {deferredLines.length > 0 && (
-        <div className="mb-8">
-          <h2 className="text-sm font-medium text-zinc-400 mb-3 uppercase tracking-wider">Deferred</h2>
+        <section>
+          <h2 className="text-xs font-medium text-zinc-500 mb-3 uppercase tracking-widest">Deferred</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {deferredLines.map((line, i) => {
-              const cleaned = line.replace(/^\d+\.\s*/, "");
-              const [name, desc] = cleaned.split(" — ");
+              const { name, desc } = parseFeatureLine(line);
               return (
-                <div key={i} className="border border-zinc-800/50 rounded-lg p-3 bg-zinc-900/20">
-                  <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0" />
-                    <span className="text-sm text-zinc-500">{name}</span>
+                <div key={i} className="border border-zinc-800/40 rounded-lg p-3 bg-zinc-900/20">
+                  <div className="flex items-start gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-700 shrink-0 mt-1.5" />
+                    <div className="min-w-0">
+                      <span className="text-sm text-zinc-500">{name}</span>
+                      {desc && <p className="text-xs text-zinc-600 mt-0.5">{desc}</p>}
+                    </div>
                   </div>
-                  {desc && <p className="text-xs text-zinc-600 mt-1 ml-4">{desc}</p>}
                 </div>
               );
             })}
           </div>
-        </div>
+        </section>
       )}
 
       {/* Full brief */}
-      <div className="border-t border-zinc-800 pt-6">
-        <h2 className="text-sm font-medium text-zinc-400 mb-4 uppercase tracking-wider">Full Brief</h2>
-        <MarkdownView content={state.brief} />
-      </div>
+      <section className="border-t border-zinc-800/60 pt-6">
+        <h2 className="text-xs font-medium text-zinc-500 mb-4 uppercase tracking-widest">Full Brief</h2>
+        <MarkdownView content={brief} className="overflow-x-auto" />
+      </section>
     </div>
   );
 }

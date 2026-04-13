@@ -70,16 +70,6 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
         {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Git status */}
-        {state?.git && (
-          <div
-            title={state.git.clean ? "Working tree clean" : `Branch: ${state.git.branch}`}
-            className="w-9 h-9 flex items-center justify-center"
-          >
-            <span className={`w-2 h-2 rounded-full ${state.git.clean ? "bg-emerald-500" : "bg-amber-400"}`} />
-          </div>
-        )}
-
         {/* Settings */}
         <button
           onClick={() => onViewChange("settings")}

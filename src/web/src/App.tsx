@@ -57,7 +57,7 @@ export function App() {
       op.setModal({ kind: "init" });
       op.setDrawerOpen(true);
     } else {
-      op.startOperation("/api/run/analyze", {});
+      op.startOperation("/api/run/analyze", {}, { onSuccess: () => setActiveView("architecture") });
     }
   }
 
@@ -130,15 +130,14 @@ export function App() {
           ) : (
             <div className="p-6">
               {activeView === "brief" && state && (
-                <BriefView
-                  state={state}
-                  onPlanFeature={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
-                />
+                <BriefView state={state} />
               )}
               {activeView === "plan" && state && (
                 <PlanView
                   state={state}
                   onImplement={() => op.startOperation("/api/run/implement", {})}
+                  onNewTask={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
+                  onRunTask={(taskId) => op.startOperation("/api/run/implement", { taskId })}
                 />
               )}
               {activeView === "architecture" && state && <ArchitectureView state={state} />}

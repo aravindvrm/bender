@@ -187,6 +187,10 @@ function buildOverviewContent(content: string): string {
   return blocks.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function stripCodeFence(content: string): string {
+  return content.replace(/^```[a-z]*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+}
+
 function extractApiContent(content: string): string | null {
   const { sections } = parseMarkdownSections(content);
   const apiSection = sections.find((section) => isApiHeading(section.heading) && section.body.trim().length > 0);
@@ -194,11 +198,70 @@ function extractApiContent(content: string): string | null {
   return apiSection.body.trim();
 }
 
-function formatApiContent(content: string): string {
-  const trimmed = content.trim();
-  if (!trimmed) return "";
-  if (trimmed.startsWith("#") || trimmed.includes("```")) return trimmed;
-  return `\`\`\`yaml\n${trimmed}\n\`\`\``;
+interface ApiRoute {
+  method: string;
+  path: string;
+  description: string;
+}
+
+const METHOD_COLORS: Record<string, string> = {
+  GET:    "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  POST:   "bg-blue-500/15 text-blue-400 border-blue-500/30",
+  PUT:    "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  PATCH:  "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  DELETE: "bg-red-500/15 text-red-400 border-red-500/30",
+};
+
+function parseApiRoutes(raw: string): ApiRoute[] {
+  const routes: ApiRoute[] = [];
+  // Strip outer code fence if present
+  const content = raw.startsWith("```") ? stripCodeFence(raw) : raw;
+
+  for (const line of content.split("\n")) {
+    // Strip leading list markers and all bold/italic markdown markers
+    const cleaned = line.replace(/^[-–*\s]+/, "").replace(/\*\*/g, "").replace(/`/g, "").trim();
+    // Match "METHOD /path: description" or "METHOD /path — description" (en/em dash)
+    const m = cleaned.match(/^(GET|POST|PUT|PATCH|DELETE)\s+(\/\S*)\s*[:–—-]\s*(.+)$/i);
+    if (m) {
+      routes.push({ method: m[1].toUpperCase(), path: m[2], description: m[3].trim() });
+    }
+  }
+  return routes;
+}
+
+function ApiRoutesView({ content }: { content: string }) {
+  const routes = parseApiRoutes(content);
+
+  if (routes.length === 0) {
+    // Fall back to MarkdownView for structured content (YAML, OpenAPI, etc.)
+    return <MarkdownView content={content} className="overflow-x-auto" />;
+  }
+
+  return (
+    <div className="border border-zinc-800 rounded-xl overflow-hidden">
+      <div className="grid grid-cols-[80px_1fr_2fr] gap-0 px-4 py-2 bg-zinc-900/60 border-b border-zinc-800">
+        <span className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Method</span>
+        <span className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Path</span>
+        <span className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Description</span>
+      </div>
+      {routes.map((route, i) => (
+        <div
+          key={i}
+          className={`grid grid-cols-[80px_1fr_2fr] gap-0 px-4 py-3 items-start ${
+            i < routes.length - 1 ? "border-b border-zinc-800/60" : ""
+          } hover:bg-zinc-900/30 transition-colors`}
+        >
+          <div>
+            <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[11px] font-mono font-semibold ${METHOD_COLORS[route.method] ?? "bg-zinc-800 text-zinc-400 border-zinc-700"}`}>
+              {route.method}
+            </span>
+          </div>
+          <code className="text-xs text-zinc-300 font-mono">{route.path}</code>
+          <span className="text-xs text-zinc-400 leading-relaxed">{route.description}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // Extract mermaid code blocks from markdown and render each one
@@ -290,9 +353,8 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
   const overviewContent = buildOverviewContent(architectureContent);
   const apiContent = (() => {
     const direct = state.apiContracts?.trim() ?? "";
-    if (direct) return formatApiContent(direct);
-    const extracted = extractApiContent(architectureContent);
-    return extracted ? formatApiContent(extracted) : "";
+    if (direct) return direct;
+    return extractApiContent(architectureContent) ?? "";
   })();
 
   const generateFlows = useCallback(async () => {
@@ -391,14 +453,14 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
           <div className="space-y-6">
             {erDiagram ? (
               <div>
-                <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wide mb-4">Entity Relationship Diagram</h2>
+                <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-4">Entity Relationship Diagram</h2>
                 <MermaidView chart={erDiagram} />
               </div>
             ) : null}
             <div>
-              <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wide mb-3">SQL Source</h2>
-              <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 overflow-x-auto">
-                <code className="text-sm text-zinc-300 leading-relaxed">{state.schema}</code>
+              <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-3">SQL Source</h2>
+              <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 overflow-x-auto text-sm leading-relaxed">
+                <code className="text-zinc-300">{stripCodeFence(state.schema)}</code>
               </pre>
             </div>
           </div>
@@ -406,9 +468,9 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
 
         {activeTab === "api" && (
           <div className="space-y-4">
-            <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wide">API Contracts</h2>
+            <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-4">API Contracts</h2>
             {apiContent ? (
-              <MarkdownView content={apiContent} />
+              <ApiRoutesView content={apiContent} />
             ) : (
               <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-sm text-zinc-500">
                 No API contracts found yet.
@@ -460,8 +522,8 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
 
         {activeTab === "conventions" && state.conventions && (
           <div>
-            <h2 className="text-lg font-semibold text-zinc-100 mb-4">Coding Conventions</h2>
-            <MarkdownView content={state.conventions} />
+            <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-5">Coding Conventions</h2>
+            <MarkdownView content={stripCodeFence(state.conventions)} />
           </div>
         )}
       </div>

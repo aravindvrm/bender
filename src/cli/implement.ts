@@ -58,6 +58,131 @@ async function applyFileOperations(projectRoot: string, operations: FileOperatio
   }
 }
 
+export async function implementSingleTask(projectRoot: string, taskId: number, adapter: UIAdapter = terminalAdapter): Promise<void> {
+  adapter.header(`Bender Implement — Task ${taskId}`);
+
+  const state = new StateManager(projectRoot);
+  if (!state.isInitialized()) {
+    adapter.error("No .bender/ directory found. Run `bender init` first.");
+    adapter.cleanup();
+    return;
+  }
+
+  const config = await readEffectiveConfig(projectRoot);
+  const currentTasks = await state.readCurrentTasks();
+
+  if (!currentTasks) {
+    adapter.error("No task plan found. Run `bender plan` first.");
+    adapter.cleanup();
+    return;
+  }
+
+  const tasks = parseTaskPlan(currentTasks);
+  const task = tasks.find((t) => t.id === taskId);
+  if (!task) {
+    adapter.error(`Task ${taskId} not found in the current plan.`);
+    adapter.cleanup();
+    return;
+  }
+
+  adapter.subheader(`Task ${task.id}: ${task.title}`);
+  adapter.info(task.description);
+
+  let models;
+  try {
+    models = createModelSet(config);
+  } catch (err: unknown) {
+    adapter.error(`Failed to initialize LLM provider: ${(err as Error).message}`);
+    adapter.cleanup();
+    return;
+  }
+
+  const implementerModel = getModelForRole(models, "implementer");
+  const git = new GitOperations(projectRoot);
+  const gitEnabled = await git.isRepo();
+
+  let runtime: RoleRuntime;
+  try {
+    runtime = await createRoleRuntime(projectRoot, config, {
+      info: (msg) => adapter.info(msg),
+      warn: (msg) => adapter.warn(msg),
+    });
+  } catch (err: unknown) {
+    adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
+    adapter.cleanup();
+    return;
+  }
+
+  try {
+    const context = await state.gatherContext();
+    const spin = adapter.spinner(`Implementing task ${task.id}...`);
+    spin.start();
+
+    let fileOps: FileOperation[];
+    try {
+      fileOps = await implementTask(implementerModel, task, projectRoot, context, (_chunk) => {
+        spin.text = `Implementing task ${task.id}... (generating)`;
+      }, runtime);
+    } catch (err: unknown) {
+      spin.fail(`Task ${task.id} failed: ${(err as Error).message}`);
+      adapter.cleanup();
+      return;
+    }
+
+    spin.succeed(`Generated ${fileOps.length} files`);
+
+    if (fileOps.length === 0) {
+      adapter.warn("No file operations produced.");
+      adapter.cleanup();
+      return;
+    }
+
+    adapter.showFileOperations(fileOps.map((op) => ({ path: op.path, action: op.action })));
+
+    const approved = await adapter.confirm("Apply these changes?");
+    if (!approved) {
+      adapter.info("Skipped.");
+      adapter.cleanup();
+      return;
+    }
+
+    await applyFileOperations(projectRoot, fileOps);
+    adapter.success("Files written.");
+
+    const typeResult = await runTypeCheck(projectRoot);
+    if (!typeResult.passed) {
+      adapter.warn(`Type check failed: ${typeResult.error}`);
+    }
+
+    const testResult = await runTests(projectRoot, config);
+    if (testResult.passed) {
+      adapter.success(`Tests passed (${testResult.command})`);
+    } else {
+      adapter.warn(`Tests failed (${testResult.command}): ${testResult.error?.slice(0, 200)}`);
+    }
+
+    if (gitEnabled && await git.hasChanges()) {
+      try {
+        await git.commitAll(`feat: task ${task.id} — ${task.title}`);
+        adapter.success(`Committed: task ${task.id} — ${task.title}`);
+      } catch (err) {
+        adapter.warn(`Git commit skipped: ${(err as Error).message}`);
+      }
+    }
+
+    await state.completeTask(
+      String(task.id),
+      `# Task ${task.id}: ${task.title}\n\nCompleted: ${new Date().toISOString()}\n\nFiles: ${fileOps.map((op) => op.path).join(", ")}`,
+    );
+
+    adapter.success(`Task ${task.id} complete.`);
+  } finally {
+    await runtime.close();
+  }
+
+  adapter.cleanup();
+}
+
 export async function implementCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header("Bender Implement — Executing Task Plan");
 

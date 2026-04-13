@@ -16,7 +16,7 @@ import { GitOperations } from "../git/operations.js";
 import { readRegistry, addToRegistry, removeFromRegistry } from "../state/registry.js";
 import { initCommand } from "./init.js";
 import { planCommand } from "./plan.js";
-import { implementCommand } from "./implement.js";
+import { implementCommand, implementSingleTask } from "./implement.js";
 import { analyzeCommand } from "./analyze.js";
 import { generateFlows } from "../roles/flowcharter.js";
 import type { UIAdapter, SpinnerAdapter } from "./adapter.js";
@@ -1726,8 +1726,13 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
     await runOperation(res, (adapter) => planCommand(getProject(), feature, adapter));
   });
 
-  app.post("/api/run/implement", async (_req, res) => {
-    await runOperation(res, (adapter) => implementCommand(getProject(), adapter));
+  app.post("/api/run/implement", async (req, res) => {
+    const { taskId } = (req.body ?? {}) as { taskId?: number };
+    if (taskId !== undefined) {
+      await runOperation(res, (adapter) => implementSingleTask(getProject(), Number(taskId), adapter));
+    } else {
+      await runOperation(res, (adapter) => implementCommand(getProject(), adapter));
+    }
   });
 
   app.post("/api/run/analyze", async (_req, res) => {
