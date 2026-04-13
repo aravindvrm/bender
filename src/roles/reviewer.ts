@@ -3,6 +3,7 @@ import { runRole } from "./base.js";
 import type { FileOperation } from "./implementer.js";
 import type { ProjectContext } from "../state/manager.js";
 import { formatContextForPrompt } from "../state/manager.js";
+import type { RoleExecutionOptions } from "./base.js";
 
 export type ReviewStatus = "APPROVED" | "NEEDS_CHANGES" | "BLOCKED";
 
@@ -28,6 +29,7 @@ export async function reviewCode(
   taskTitle: string,
   fileOperations: FileOperation[],
   existingContext: ProjectContext,
+  options?: RoleExecutionOptions,
 ): Promise<ReviewResult> {
   const contextStr = formatContextForPrompt(existingContext);
 
@@ -43,6 +45,7 @@ export async function reviewCode(
     "reviewer",
     contextStr,
     `Review the following code changes for task: "${taskTitle}"\n\n${changesStr}\n\nFollow the exact output format specified in your instructions.`,
+    options,
   );
 
   return parseReviewResult(result);

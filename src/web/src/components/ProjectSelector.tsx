@@ -47,6 +47,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
       fetchProjects().then(setProjects).catch(() => {});
       setInputPath("");
       setError(null);
+      setShowBrowser(false);
     }
   }, [open]);
 

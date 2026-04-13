@@ -1,11 +1,13 @@
 import type { ProjectState } from "../hooks/useApi";
 import { MarkdownView } from "../components/MarkdownView";
+import { Sparkles } from "lucide-react";
 
 interface BriefViewProps {
   state: ProjectState;
+  onPlanFeature: () => void;
 }
 
-export function BriefView({ state }: BriefViewProps) {
+export function BriefView({ state, onPlanFeature }: BriefViewProps) {
   if (!state.brief) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500">
@@ -25,6 +27,17 @@ export function BriefView({ state }: BriefViewProps) {
 
   return (
     <div className="max-w-4xl mx-auto">
+      {/* Action bar */}
+      <div className="flex items-center justify-end mb-6">
+        <button
+          onClick={onPlanFeature}
+          className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
+        >
+          <Sparkles className="h-4 w-4 text-zinc-400" />
+          New Task
+        </button>
+      </div>
+
       {/* Feature summary cards */}
       {featureLines.length > 0 && (
         <div className="mb-8">

@@ -7,8 +7,8 @@
     "bender": "./dist/cli/index.js"
   },
   "scripts": {
-    "build": "tsc && cp -r src/llm/prompts dist/llm/prompts && npm run build:web",
-    "build:cli": "tsc && cp -r src/llm/prompts dist/llm/prompts",
+    "build": "tsc && rm -rf dist/llm/prompts && mkdir -p dist/llm/prompts && cp -R src/llm/prompts/. dist/llm/prompts && npm run build:web",
+    "build:cli": "tsc && rm -rf dist/llm/prompts && mkdir -p dist/llm/prompts && cp -R src/llm/prompts/. dist/llm/prompts",
     "build:web": "vite build --config src/web/vite.config.ts",
     "dev": "tsc --watch",
     "dev:web": "vite --config src/web/vite.config.ts",

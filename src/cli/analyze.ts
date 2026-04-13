@@ -4,6 +4,7 @@ import { createModelSet } from "../llm/provider.js";
 import { scanCodebase, analyzeCodebase, parseAnalysisOutput } from "../roles/analyzer.js";
 import { GitOperations } from "../git/operations.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
+import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 
 export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header("Bender Analyze — Existing Project");
@@ -55,6 +56,18 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
   adapter.subheader("Step 2: Analyzing");
   adapter.info("Generating project brief and architecture from existing code...\n");
 
+  let runtime: RoleRuntime;
+  try {
+    runtime = await createRoleRuntime(projectRoot, config, {
+      info: (msg) => adapter.info(msg),
+      warn: (msg) => adapter.warn(msg),
+    });
+  } catch (err: unknown) {
+    adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
+    adapter.cleanup();
+    return;
+  }
+
   // Use the strong model — analysis is a one-shot expensive operation
   let rawOutput: string;
   try {
@@ -63,11 +76,14 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
       projectRoot,
       summary,
       adapter.streamWriter(),
+      runtime,
     );
   } catch (err: unknown) {
     adapter.error(`Analysis failed: ${(err as Error).message}`);
     adapter.cleanup();
     return;
+  } finally {
+    await runtime.close();
   }
 
   const parsed = parseAnalysisOutput(rawOutput);

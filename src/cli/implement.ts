@@ -5,10 +5,10 @@ import { readConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { createModelSet, getModelForRole } from "../llm/provider.js";
 import { implementTask, type TaskDescription, type FileOperation } from "../roles/implementer.js";
-import { reviewCode } from "../roles/reviewer.js";
 import { GitOperations } from "../git/operations.js";
 import { runTests, runTypeCheck } from "../test/runner.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
+import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 
 /**
  * Parse a task plan markdown into structured task descriptions.
@@ -98,78 +98,93 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
   const implementerModel = getModelForRole(models, "implementer");
   const git = new GitOperations(projectRoot);
   const completedTaskSummaries: string[] = [];
+  let runtime: RoleRuntime;
+  try {
+    runtime = await createRoleRuntime(projectRoot, config, {
+      info: (msg) => adapter.info(msg),
+      warn: (msg) => adapter.warn(msg),
+    });
+  } catch (err: unknown) {
+    adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
+    adapter.cleanup();
+    return;
+  }
 
-  for (const task of tasks) {
-    adapter.subheader(`Task ${task.id}: ${task.title}`);
-    adapter.info(task.description);
+  try {
+    for (const task of tasks) {
+      adapter.subheader(`Task ${task.id}: ${task.title}`);
+      adapter.info(task.description);
 
-    const context = await state.gatherContext();
+      const context = await state.gatherContext();
 
-    const spin = adapter.spinner(`Implementing task ${task.id}...`);
-    spin.start();
+      const spin = adapter.spinner(`Implementing task ${task.id}...`);
+      spin.start();
 
-    let fileOps: FileOperation[];
-    try {
-      fileOps = await implementTask(implementerModel, task, projectRoot, context, (_chunk) => {
-        spin.text = `Implementing task ${task.id}... (generating)`;
-      });
-    } catch (err: unknown) {
-      spin.fail(`Task ${task.id} failed: ${(err as Error).message}`);
-      const shouldContinue = await adapter.confirm("Continue with next task?", false);
-      if (!shouldContinue) break;
-      continue;
+      let fileOps: FileOperation[];
+      try {
+        fileOps = await implementTask(implementerModel, task, projectRoot, context, (_chunk) => {
+          spin.text = `Implementing task ${task.id}... (generating)`;
+        }, runtime);
+      } catch (err: unknown) {
+        spin.fail(`Task ${task.id} failed: ${(err as Error).message}`);
+        const shouldContinue = await adapter.confirm("Continue with next task?", false);
+        if (!shouldContinue) break;
+        continue;
+      }
+
+      spin.succeed(`Generated ${fileOps.length} files`);
+
+      if (fileOps.length === 0) {
+        adapter.warn("No file operations produced. The implementer may have failed to follow the output format.");
+        const shouldContinue = await adapter.confirm("Continue with next task?");
+        if (!shouldContinue) break;
+        continue;
+      }
+
+      adapter.showFileOperations(fileOps.map((op) => ({ path: op.path, action: op.action })));
+
+      const approved = await adapter.confirm("Apply these changes?");
+      if (!approved) {
+        adapter.info("Skipping task.");
+        const shouldContinue = await adapter.confirm("Continue with next task?");
+        if (!shouldContinue) break;
+        continue;
+      }
+
+      // Write files to disk
+      await applyFileOperations(projectRoot, fileOps);
+      adapter.success("Files written.");
+
+      // Run type check
+      const typeResult = await runTypeCheck(projectRoot);
+      if (!typeResult.passed) {
+        adapter.warn(`Type check failed: ${typeResult.error}`);
+      }
+
+      // Run tests
+      const testResult = await runTests(projectRoot, config);
+      if (testResult.passed) {
+        adapter.success(`Tests passed (${testResult.command})`);
+      } else {
+        adapter.warn(`Tests failed (${testResult.command}): ${testResult.error?.slice(0, 200)}`);
+      }
+
+      // Git commit
+      if (await git.hasChanges()) {
+        await git.commitAll(`feat: task ${task.id} — ${task.title}`);
+        adapter.success(`Committed: task ${task.id} — ${task.title}`);
+      }
+
+      // Mark task as completed
+      await state.completeTask(
+        String(task.id),
+        `# Task ${task.id}: ${task.title}\n\nCompleted: ${new Date().toISOString()}\n\nFiles: ${fileOps.map((op) => op.path).join(", ")}`,
+      );
+
+      completedTaskSummaries.push(`Task ${task.id}: ${task.title}`);
     }
-
-    spin.succeed(`Generated ${fileOps.length} files`);
-
-    if (fileOps.length === 0) {
-      adapter.warn("No file operations produced. The implementer may have failed to follow the output format.");
-      const shouldContinue = await adapter.confirm("Continue with next task?");
-      if (!shouldContinue) break;
-      continue;
-    }
-
-    adapter.showFileOperations(fileOps.map((op) => ({ path: op.path, action: op.action })));
-
-    const approved = await adapter.confirm("Apply these changes?");
-    if (!approved) {
-      adapter.info("Skipping task.");
-      const shouldContinue = await adapter.confirm("Continue with next task?");
-      if (!shouldContinue) break;
-      continue;
-    }
-
-    // Write files to disk
-    await applyFileOperations(projectRoot, fileOps);
-    adapter.success("Files written.");
-
-    // Run type check
-    const typeResult = await runTypeCheck(projectRoot);
-    if (!typeResult.passed) {
-      adapter.warn(`Type check failed: ${typeResult.error}`);
-    }
-
-    // Run tests
-    const testResult = await runTests(projectRoot, config);
-    if (testResult.passed) {
-      adapter.success(`Tests passed (${testResult.command})`);
-    } else {
-      adapter.warn(`Tests failed (${testResult.command}): ${testResult.error?.slice(0, 200)}`);
-    }
-
-    // Git commit
-    if (await git.hasChanges()) {
-      await git.commitAll(`feat: task ${task.id} — ${task.title}`);
-      adapter.success(`Committed: task ${task.id} — ${task.title}`);
-    }
-
-    // Mark task as completed
-    await state.completeTask(
-      String(task.id),
-      `# Task ${task.id}: ${task.title}\n\nCompleted: ${new Date().toISOString()}\n\nFiles: ${fileOps.map((op) => op.path).join(", ")}`,
-    );
-
-    completedTaskSummaries.push(`Task ${task.id}: ${task.title}`);
+  } finally {
+    await runtime.close();
   }
 
   // Write session log

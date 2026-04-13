@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { readConfig, writeConfig } from "../state/config.js";
 import { createModelSet } from "../llm/provider.js";
+import { createRoleRuntime } from "../llm/runtime.js";
 import { StateManager } from "../state/manager.js";
 import { GitOperations } from "../git/operations.js";
 import { readRegistry, addToRegistry, removeFromRegistry } from "../state/registry.js";
@@ -318,14 +319,27 @@ export async function startServer(initialProject?: string): Promise<void> {
       const projectRoot = getProject();
       const config = await readConfig(projectRoot);
       const MASK = "••••••••";
+      const maskSensitive = (value?: string) => (value ? MASK : "");
       res.json({
         ...config,
         llm: { ...config.llm, apiKey: config.llm.apiKey ? MASK : undefined },
         providers: config.providers
           ? Object.fromEntries(
-              Object.entries(config.providers).map(([name, p]) => [name, { apiKey: p.apiKey ? MASK : "" }]),
+              Object.entries(config.providers).map(([name, p]) => [name, { apiKey: maskSensitive(p.apiKey) }]),
             )
           : {},
+        mcp: {
+          enabled: config.mcp?.enabled ?? false,
+          servers: (config.mcp?.servers ?? []).map((server) => ({
+            ...server,
+            authorizationToken: maskSensitive(server.authorizationToken),
+            headers: server.headers
+              ? Object.fromEntries(
+                  Object.entries(server.headers).map(([k, v]) => [k, maskSensitive(v)]),
+                )
+              : undefined,
+          })),
+        },
       });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -347,6 +361,39 @@ export async function startServer(initialProject?: string): Promise<void> {
         }
       }
 
+      const mergedMcpServers = (() => {
+        const incoming = updates.mcp?.servers;
+        if (!incoming) return current.mcp?.servers ?? [];
+
+        return incoming.map((server, i) => {
+          const existing = current.mcp?.servers?.[i];
+
+          const mergedHeaders = (() => {
+            if (!server.headers) return existing?.headers;
+            const mapped = Object.fromEntries(
+              Object.entries(server.headers).map(([key, value]) => {
+                if (value === MASK) return [key, existing?.headers?.[key] ?? ""];
+                return [key, value];
+              }),
+            );
+            const cleaned = Object.fromEntries(
+              Object.entries(mapped).filter(([, value]) => String(value).trim() !== ""),
+            );
+            return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+          })();
+
+          return {
+            ...existing,
+            ...server,
+            authorizationToken:
+              server.authorizationToken === MASK
+                ? existing?.authorizationToken
+                : (server.authorizationToken || undefined),
+            headers: mergedHeaders,
+          };
+        });
+      })();
+
       await writeConfig(projectRoot, {
         ...current,
         ...updates,
@@ -356,6 +403,17 @@ export async function startServer(initialProject?: string): Promise<void> {
           models: { ...current.llm.models, ...updates.llm?.models },
         },
         providers: mergedProviders,
+        mcp: {
+          ...current.mcp,
+          ...updates.mcp,
+          servers: mergedMcpServers,
+        },
+        skills: {
+          ...current.skills,
+          ...updates.skills,
+          paths: updates.skills?.paths ?? current.skills?.paths,
+          maxChars: updates.skills?.maxChars ?? current.skills?.maxChars,
+        },
         stack: { ...current.stack, ...updates.stack },
         deploy: { ...current.deploy, ...updates.deploy },
         test: { ...current.test, ...updates.test },
@@ -442,24 +500,34 @@ export async function startServer(initialProject?: string): Promise<void> {
       }
 
       let models;
+      let runtime;
       try {
         const config = await readConfig(projectRoot);
         models = createModelSet(config);
+        runtime = await createRoleRuntime(projectRoot, config, {
+          info: (msg) => adapter.info(msg),
+          warn: (msg) => adapter.warn(msg),
+        });
       } catch (err: unknown) {
         throw new Error(`Failed to initialize LLM provider: ${(err as Error).message}`);
       }
 
-      adapter.subheader("Generating user flow diagrams...");
-      const flows = await generateFlows(
-        models.default,
-        context.brief,
-        context.architecture,
-        context.schema,
-        adapter.streamWriter(),
-      );
+      try {
+        adapter.subheader("Generating user flow diagrams...");
+        const flows = await generateFlows(
+          models.default,
+          context.brief,
+          context.architecture,
+          context.schema,
+          adapter.streamWriter(),
+          runtime,
+        );
 
-      await state.writeFlows(flows);
-      adapter.success("Flow diagrams saved to .bender/flows.md");
+        await state.writeFlows(flows);
+        adapter.success("Flow diagrams saved to .bender/flows.md");
+      } finally {
+        await runtime?.close();
+      }
     });
   });
 

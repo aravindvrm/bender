@@ -3,6 +3,7 @@ import { runRoleStreaming } from "./base.js";
 import type { ProjectContext } from "../state/manager.js";
 import { formatContextForPrompt } from "../state/manager.js";
 import type { BenderConfig } from "../state/config.js";
+import type { RoleExecutionOptions } from "./base.js";
 
 /**
  * Generate an architecture document based on the product brief.
@@ -13,6 +14,7 @@ export async function generateArchitecture(
   config: BenderConfig,
   existingContext: ProjectContext | null,
   onChunk?: (chunk: string) => void,
+  options?: RoleExecutionOptions,
 ): Promise<string> {
   const contextStr = existingContext
     ? formatContextForPrompt(existingContext)
@@ -35,6 +37,7 @@ Work within these constraints. If the brief requires something the stack doesn't
     `${contextStr}\n\n${stackConstraints}`,
     `Here is the product brief:\n\n${brief}\n\nProduce a complete architecture document following the exact format specified in your instructions. Include complete SQL schema, all API routes, full file structure, key design decisions, auth flow, and coding conventions.`,
     onChunk,
+    options,
   );
 }
 
@@ -47,6 +50,7 @@ export async function updateArchitecture(
   config: BenderConfig,
   existingContext: ProjectContext,
   onChunk?: (chunk: string) => void,
+  options?: RoleExecutionOptions,
 ): Promise<{ architectureUpdate: string; schemaMigration: string | null }> {
   const contextStr = formatContextForPrompt(existingContext);
 
@@ -56,6 +60,7 @@ export async function updateArchitecture(
     contextStr,
     `A new feature/change has been requested:\n\n"${featureDescription}"\n\nThe project already has an established architecture (shown in context above). Produce:\n\n1. **Architecture updates**: What changes to the architecture document are needed? Show only the sections that change.\n2. **Schema migration**: If the database schema needs changes, provide the migration SQL (ALTER TABLE, CREATE TABLE, etc.), not a full schema rewrite. If no schema changes are needed, say "No schema changes required."\n3. **New API routes**: Any new routes needed.\n4. **New conventions**: Any new conventions needed.\n5. **Decision record**: Create an ADR for any significant architectural decisions.\n\nBe precise about what changes vs. what stays the same.`,
     onChunk,
+    options,
   );
 
   // Parse out migration if present

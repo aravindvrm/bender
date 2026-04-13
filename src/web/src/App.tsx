@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useProjectState } from "./hooks/useApi";
+import { useOperation } from "./hooks/useOperation";
 import { Sidebar, type View } from "./components/Sidebar";
-import { ConsoleView } from "./pages/ConsoleView";
+import { OperationDrawer } from "./components/OperationDrawer";
 import { PlanView } from "./pages/PlanView";
 import { ArchitectureView } from "./pages/ArchitectureView";
 import { BriefView } from "./pages/BriefView";
@@ -9,7 +10,6 @@ import { ChangesView } from "./pages/ChangesView";
 import { SettingsView } from "./pages/SettingsView";
 
 const VIEW_LABELS: Record<View, string> = {
-  console: "Console",
   plan: "Tasks",
   architecture: "Architecture",
   brief: "Plan",
@@ -18,16 +18,16 @@ const VIEW_LABELS: Record<View, string> = {
 };
 
 export function App() {
-  const [activeView, setActiveView] = useState<View>("console");
-  const [pendingConsoleAction, setPendingConsoleAction] = useState<"new-project" | "analyze" | null>(null);
+  const [activeView, setActiveView] = useState<View>("brief");
   const { state, loading, error, refresh } = useProjectState();
+  const op = useOperation(refresh);
 
   if (loading && !state) {
     return (
       <div className="h-screen flex items-center justify-center bg-zinc-950">
         <div className="text-center">
           <div className="w-6 h-6 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin mx-auto" />
-          <p className="text-sm text-zinc-500 mt-3">Connecting...</p>
+          <p className="text-sm text-zinc-500 mt-3">Connecting…</p>
         </div>
       </div>
     );
@@ -39,7 +39,7 @@ export function App() {
         <div className="text-center max-w-md">
           <p className="text-zinc-400">Could not connect to bender</p>
           <p className="text-sm text-zinc-500 mt-2">
-            Make sure <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">bender bend</code> (or <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">npm run bend</code>) is running.
+            Make sure <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">bender bend</code> is running.
           </p>
           <p className="text-xs text-red-400/60 mt-4 font-mono">{error}</p>
         </div>
@@ -49,14 +49,24 @@ export function App() {
 
   const hasProject = !!state?.projectRoot;
   const isInitialized = state?.initialized ?? false;
-
-  // Views that need a project to be useful
   const needsProject = !hasProject && activeView !== "settings";
-  const needsInit = hasProject && !isInitialized && activeView !== "console" && activeView !== "settings";
+  const needsInit = hasProject && !isInitialized && activeView !== "settings";
 
   function handleGlobalAction(action: "new-project" | "analyze") {
-    setActiveView("console");
-    setPendingConsoleAction(action);
+    if (action === "new-project") {
+      op.setModal({ kind: "init" });
+      op.setDrawerOpen(true);
+    } else {
+      op.startOperation("/api/run/analyze", {});
+    }
+  }
+
+  function handleSubmitModal(kind: "init" | "plan", text: string) {
+    if (kind === "init") {
+      op.startOperation("/api/run/init", { description: text });
+    } else {
+      op.startOperation("/api/run/plan", { feature: text });
+    }
   }
 
   return (
@@ -69,11 +79,11 @@ export function App() {
         onGlobalAction={handleGlobalAction}
       />
 
-      <main className="flex-1 overflow-y-auto flex flex-col">
+      <main className="flex-1 flex flex-col overflow-hidden">
         {/* Top bar */}
         <header className="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-800 px-6 py-3 shrink-0">
           <div className="flex items-center gap-4">
-            <h2 className="text-sm font-medium text-zinc-300 w-28 shrink-0">{VIEW_LABELS[activeView]}</h2>
+            <h2 className="text-sm font-medium text-zinc-300">{VIEW_LABELS[activeView]}</h2>
             <div className="flex-1" />
             {state?.git?.recentCommits[0] && (
               <span className="text-xs text-zinc-600 font-mono hidden lg:block">
@@ -83,48 +93,69 @@ export function App() {
           </div>
         </header>
 
-        {/* Content */}
-        {needsProject ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center max-w-sm space-y-4">
-              <p className="text-zinc-400 font-medium">No project selected</p>
-              <p className="text-sm text-zinc-500">
-                Use the project switcher in the left rail to open an existing project or create a new one.
-              </p>
-              <p className="text-sm text-zinc-600">
-                Or run <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">bender bend --dir /your/project</code> (or <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">npm run start -- bend --dir /your/project</code>)
-              </p>
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto">
+          {needsProject ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center max-w-sm space-y-3">
+                <p className="text-zinc-400 font-medium">No project selected</p>
+                <p className="text-sm text-zinc-500">
+                  Use the folder icon in the left rail to open a project.
+                </p>
+              </div>
             </div>
-          </div>
-        ) : needsInit ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center max-w-sm space-y-4">
-              <p className="text-zinc-400 font-medium">Project not initialized</p>
-              <p className="text-sm text-zinc-500">
-                <button onClick={() => setActiveView("console")} className="text-zinc-300 underline underline-offset-2">
-                  Go to Console
-                </button>{" "}
-                and run <strong>New Project</strong> to set up this directory.
-              </p>
+          ) : needsInit ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center max-w-sm space-y-4">
+                <p className="text-zinc-400 font-medium">Project not initialized</p>
+                <p className="text-sm text-zinc-500">
+                  Click <strong className="text-zinc-300">New Project</strong> in the left rail to initialize this directory with Bender.
+                </p>
+                <button
+                  onClick={() => handleGlobalAction("new-project")}
+                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
+                >
+                  New Project
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className={`${activeView === "console" ? "flex-1 flex flex-col p-6" : "p-6"}`}>
-            {activeView === "console" && (
-              <ConsoleView
-                state={state}
-                onStateChange={refresh}
-                pendingAction={pendingConsoleAction}
-                onActionConsumed={() => setPendingConsoleAction(null)}
-              />
-            )}
-            {activeView === "plan" && state && <PlanView state={state} />}
-            {activeView === "architecture" && state && <ArchitectureView state={state} />}
-            {activeView === "brief" && state && <BriefView state={state} />}
-            {activeView === "changes" && state && <ChangesView state={state} />}
-            {activeView === "settings" && <SettingsView />}
-          </div>
-        )}
+          ) : (
+            <div className="p-6">
+              {activeView === "brief" && state && (
+                <BriefView
+                  state={state}
+                  onPlanFeature={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
+                />
+              )}
+              {activeView === "plan" && state && (
+                <PlanView
+                  state={state}
+                  onImplement={() => op.startOperation("/api/run/implement", {})}
+                />
+              )}
+              {activeView === "architecture" && state && <ArchitectureView state={state} />}
+              {activeView === "changes" && state && <ChangesView state={state} />}
+              {activeView === "settings" && <SettingsView />}
+            </div>
+          )}
+        </div>
+
+        {/* Operation drawer — sits at the bottom of the main column */}
+        <OperationDrawer
+          lines={op.lines}
+          status={op.status}
+          drawerOpen={op.drawerOpen}
+          modal={op.modal}
+          inputText={op.inputText}
+          onSetDrawerOpen={op.setDrawerOpen}
+          onSetModal={op.setModal}
+          onSetInputText={op.setInputText}
+          onConfirm={op.handleConfirm}
+          onPromptSubmit={op.handlePromptSubmit}
+          onClear={op.clearOutput}
+          onAbort={op.abort}
+          onSubmitModal={handleSubmitModal}
+        />
       </main>
     </div>
   );

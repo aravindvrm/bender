@@ -2,6 +2,7 @@ import type { LanguageModel } from "ai";
 import { runConversationalRole, runRoleStreaming } from "./base.js";
 import type { ProjectContext } from "../state/manager.js";
 import { formatContextForPrompt } from "../state/manager.js";
+import type { RoleExecutionOptions } from "./base.js";
 
 /**
  * Run the clarification flow: ask questions, then produce a brief.
@@ -14,6 +15,7 @@ export async function generateClarifyingQuestions(
   userDescription: string,
   existingContext: ProjectContext | null,
   onChunk?: (chunk: string) => void,
+  options?: RoleExecutionOptions,
 ): Promise<string> {
   const context = existingContext
     ? formatContextForPrompt(existingContext)
@@ -25,6 +27,7 @@ export async function generateClarifyingQuestions(
     context,
     `The user wants to build the following:\n\n"${userDescription}"\n\nAsk 3-7 targeted clarifying questions. Number each question. Be specific about what information you need and why it matters for implementation decisions.`,
     onChunk,
+    options,
   );
 }
 
@@ -37,6 +40,7 @@ export async function generateBrief(
   clarificationQA: { role: "user" | "assistant"; content: string }[],
   existingContext: ProjectContext | null,
   onChunk?: (chunk: string) => void,
+  options?: RoleExecutionOptions,
 ): Promise<string> {
   const context = existingContext
     ? formatContextForPrompt(existingContext)
@@ -54,5 +58,5 @@ export async function generateBrief(
     },
   ];
 
-  return runConversationalRole(model, "clarifier", context, messages, onChunk);
+  return runConversationalRole(model, "clarifier", context, messages, onChunk, options);
 }

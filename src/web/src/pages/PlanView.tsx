@@ -1,7 +1,9 @@
 import type { ProjectState } from "../hooks/useApi";
+import { Play } from "lucide-react";
 
 interface PlanViewProps {
   state: ProjectState;
+  onImplement: () => void;
 }
 
 interface ParsedTask {
@@ -41,7 +43,7 @@ function isTaskCompleted(taskId: number, completedTasks: { name: string; content
   return completedTasks.some((t) => t.content.includes(`Task ${taskId}:`));
 }
 
-export function PlanView({ state }: PlanViewProps) {
+export function PlanView({ state, onImplement }: PlanViewProps) {
   if (!state.currentTasks) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500">
@@ -59,6 +61,17 @@ export function PlanView({ state }: PlanViewProps) {
 
   return (
     <div className="max-w-4xl mx-auto">
+      {/* Action bar */}
+      <div className="flex items-center justify-end mb-6">
+        <button
+          onClick={onImplement}
+          className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
+        >
+          <Play className="h-4 w-4 text-zinc-400" />
+          Implement Tasks
+        </button>
+      </div>
+
       {/* Header */}
       <div className="mb-8">
         <h2 className="text-xl font-semibold text-zinc-100">Task Plan</h2>

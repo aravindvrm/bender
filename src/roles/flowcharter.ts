@@ -1,5 +1,6 @@
 import type { LanguageModel } from "ai";
 import { runRoleStreaming } from "./base.js";
+import type { RoleExecutionOptions } from "./base.js";
 
 /**
  * Generate Mermaid flow diagrams for the project's key user flows.
@@ -10,6 +11,7 @@ export async function generateFlows(
   architecture: string,
   schema: string | null,
   onChunk?: (chunk: string) => void,
+  options?: RoleExecutionOptions,
 ): Promise<string> {
   const context = [
     `## Product Brief\n\n${brief}`,
@@ -25,5 +27,6 @@ export async function generateFlows(
     context,
     "Generate the key user flow diagrams for this product. Cover the most important journeys a user takes through the system.",
     onChunk,
+    options,
   );
 }

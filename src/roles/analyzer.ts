@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join, extname, relative } from "node:path";
 import type { LanguageModel } from "ai";
 import { runRoleStreaming } from "./base.js";
+import type { RoleExecutionOptions } from "./base.js";
 
 // ── Codebase scanner ──────────────────────────────────────────────────────────
 
@@ -261,6 +262,7 @@ export async function analyzeCodebase(
   projectRoot: string,
   summary: CodebaseSummary,
   onChunk?: (chunk: string) => void,
+  options?: RoleExecutionOptions,
 ): Promise<string> {
   const codebaseContext = formatSummaryForPrompt(summary);
 
@@ -270,6 +272,7 @@ export async function analyzeCodebase(
     `You are analyzing an existing codebase located at: ${projectRoot}\n\nHere is the codebase:\n\n${codebaseContext}`,
     `Analyze this codebase and produce the complete project brief and architecture document in the exact format specified in your instructions. Be specific — use actual file names, table names, and route paths from the code shown above.`,
     onChunk,
+    options,
   );
 }
 

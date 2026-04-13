@@ -9,6 +9,7 @@ import { generateArchitecture } from "../roles/architect.js";
 import { generateInitialPlan } from "../roles/planner.js";
 import { GitOperations } from "../git/operations.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
+import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 
 export async function initCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header("Bender Init — New Project Setup");
@@ -57,115 +58,133 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
   }
 
   // Step 2: Clarification
-  adapter.subheader("Step 2: Clarification");
-  adapter.info("Generating clarifying questions...\n");
+  let runtime: RoleRuntime;
+  try {
+    runtime = await createRoleRuntime(projectRoot, config, {
+      info: (msg) => adapter.info(msg),
+      warn: (msg) => adapter.warn(msg),
+    });
+  } catch (err: unknown) {
+    adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
+    adapter.cleanup();
+    return;
+  }
 
-  const clarifierModel = getModelForRole(models, "clarifier");
-  const questions = await generateClarifyingQuestions(
-    clarifierModel,
-    description,
-    null,
-    adapter.streamWriter(),
-  );
+  try {
+    adapter.subheader("Step 2: Clarification");
+    adapter.info("Generating clarifying questions...\n");
 
-  const answers = await adapter.promptMultiline("Answer the questions above (or leave blank for defaults):");
+    const clarifierModel = getModelForRole(models, "clarifier");
+    const questions = await generateClarifyingQuestions(
+      clarifierModel,
+      description,
+      null,
+      adapter.streamWriter(),
+      runtime,
+    );
 
-  const clarificationQA: { role: "user" | "assistant"; content: string }[] = [
-    { role: "assistant", content: questions },
-    { role: "user", content: answers || "(No additional answers provided — use reasonable defaults)" },
-  ];
+    const answers = await adapter.promptMultiline("Answer the questions above (or leave blank for defaults):");
 
-  // Step 3: Generate product brief
-  adapter.subheader("Step 3: Product Brief");
-  const spin = adapter.spinner("Generating product brief...");
-  spin.start();
+    const clarificationQA: { role: "user" | "assistant"; content: string }[] = [
+      { role: "assistant", content: questions },
+      { role: "user", content: answers || "(No additional answers provided — use reasonable defaults)" },
+    ];
 
-  const brief = await generateBrief(clarifierModel, description, clarificationQA, null);
-  spin.succeed("Brief generated");
+    // Step 3: Generate product brief
+    adapter.subheader("Step 3: Product Brief");
+    const spin = adapter.spinner("Generating product brief...");
+    spin.start();
 
-  adapter.info(brief);
+    const brief = await generateBrief(clarifierModel, description, clarificationQA, null, undefined, runtime);
+    spin.succeed("Brief generated");
 
-  const briefApproved = await adapter.confirm("Approve this product brief?");
-  if (!briefApproved) {
-    adapter.info("You can edit .bender/brief.md manually and re-run `bender init`.");
+    adapter.info(brief);
+
+    const briefApproved = await adapter.confirm("Approve this product brief?");
+    if (!briefApproved) {
+      adapter.info("You can edit .bender/brief.md manually and re-run `bender init`.");
+      await state.writeBrief(brief);
+      adapter.cleanup();
+      return;
+    }
+
     await state.writeBrief(brief);
-    adapter.cleanup();
-    return;
-  }
+    adapter.success("Product brief saved.");
 
-  await state.writeBrief(brief);
-  adapter.success("Product brief saved.");
+    // Step 4: Generate architecture
+    adapter.subheader("Step 4: Architecture");
+    adapter.info("Generating architecture document...\n");
 
-  // Step 4: Generate architecture
-  adapter.subheader("Step 4: Architecture");
-  adapter.info("Generating architecture document...\n");
+    const architectModel = getModelForRole(models, "architect");
+    const architecture = await generateArchitecture(
+      architectModel,
+      brief,
+      config,
+      null,
+      adapter.streamWriter(),
+      runtime,
+    );
 
-  const architectModel = getModelForRole(models, "architect");
-  const architecture = await generateArchitecture(
-    architectModel,
-    brief,
-    config,
-    null,
-    adapter.streamWriter(),
-  );
+    const archApproved = await adapter.confirm("Approve this architecture?");
+    if (!archApproved) {
+      adapter.info("You can edit .bender/architecture.md manually and re-run `bender plan`.");
+      await state.writeArchitecture(architecture);
+      adapter.cleanup();
+      return;
+    }
 
-  const archApproved = await adapter.confirm("Approve this architecture?");
-  if (!archApproved) {
-    adapter.info("You can edit .bender/architecture.md manually and re-run `bender plan`.");
     await state.writeArchitecture(architecture);
-    adapter.cleanup();
-    return;
-  }
 
-  await state.writeArchitecture(architecture);
+    // Extract and save conventions and schema from architecture
+    const conventionsMatch = architecture.match(/##\s*Conventions\s*\n([\s\S]*?)(?=\n##|$)/);
+    if (conventionsMatch) {
+      await state.writeConventions(conventionsMatch[1].trim());
+    }
 
-  // Extract and save conventions and schema from architecture
-  const conventionsMatch = architecture.match(/##\s*Conventions\s*\n([\s\S]*?)(?=\n##|$)/);
-  if (conventionsMatch) {
-    await state.writeConventions(conventionsMatch[1].trim());
-  }
+    const schemaMatch = architecture.match(/```sql\n([\s\S]*?)```/);
+    if (schemaMatch) {
+      await state.writeSchema(schemaMatch[1].trim());
+    }
 
-  const schemaMatch = architecture.match(/```sql\n([\s\S]*?)```/);
-  if (schemaMatch) {
-    await state.writeSchema(schemaMatch[1].trim());
-  }
+    adapter.success("Architecture saved.");
 
-  adapter.success("Architecture saved.");
+    // Step 5: Generate task plan
+    adapter.subheader("Step 5: Task Plan");
+    adapter.info("Generating implementation plan...\n");
 
-  // Step 5: Generate task plan
-  adapter.subheader("Step 5: Task Plan");
-  adapter.info("Generating implementation plan...\n");
+    const plannerModel = getModelForRole(models, "planner");
+    const plan = await generateInitialPlan(plannerModel, brief, architecture, adapter.streamWriter(), runtime);
 
-  const plannerModel = getModelForRole(models, "planner");
-  const plan = await generateInitialPlan(plannerModel, brief, architecture, adapter.streamWriter());
+    const planApproved = await adapter.confirm("Approve this task plan?");
+    if (!planApproved) {
+      adapter.info("You can edit .bender/tasks/current.md and run `bender implement`.");
+      await state.writeCurrentTasks(plan);
+      adapter.cleanup();
+      return;
+    }
 
-  const planApproved = await adapter.confirm("Approve this task plan?");
-  if (!planApproved) {
-    adapter.info("You can edit .bender/tasks/current.md and run `bender implement`.");
     await state.writeCurrentTasks(plan);
+    adapter.success("Task plan saved.");
+
+    // Step 6: Git initialization
+    const git = new GitOperations(projectRoot);
+    await git.init();
+    await git.commitAll("chore: initialize bender project state");
+
+    // Write session log
+    await state.writeSession("init", `# Init Session\n\nDate: ${new Date().toISOString()}\n\nProject: ${description.slice(0, 100)}\n\nStatus: completed`);
+
+    // Summary
+    adapter.header("Project Initialized");
+    adapter.success("Product brief:     .bender/brief.md");
+    adapter.success("Architecture:      .bender/architecture.md");
+    adapter.success("Conventions:       .bender/conventions.md");
+    adapter.success("Schema:            .bender/schema.sql");
+    adapter.success("Task plan:         .bender/tasks/current.md");
+    adapter.success("Config:            .bender/config.yaml");
+    adapter.info("Next step: run `bender implement` to start executing the task plan.");
     adapter.cleanup();
-    return;
+  } finally {
+    await runtime.close();
   }
-
-  await state.writeCurrentTasks(plan);
-  adapter.success("Task plan saved.");
-
-  // Step 6: Git initialization
-  const git = new GitOperations(projectRoot);
-  await git.init();
-  await git.commitAll("chore: initialize bender project state");
-
-  // Write session log
-  await state.writeSession("init", `# Init Session\n\nDate: ${new Date().toISOString()}\n\nProject: ${description.slice(0, 100)}\n\nStatus: completed`);
-
-  // Summary
-  adapter.header("Project Initialized");
-  adapter.success("Product brief:     .bender/brief.md");
-  adapter.success("Architecture:      .bender/architecture.md");
-  adapter.success("Conventions:       .bender/conventions.md");
-  adapter.success("Schema:            .bender/schema.sql");
-  adapter.success("Task plan:         .bender/tasks/current.md");
-  adapter.success("Config:            .bender/config.yaml");
-  adapter.info("Next step: run `bender implement` to start executing the task plan.");
-  adapter.cleanup();
 }

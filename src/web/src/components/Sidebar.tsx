@@ -8,11 +8,10 @@ import {
   MonitorCog,
   ScanSearch,
   Settings,
-  TerminalSquare,
   type LucideIcon,
 } from "lucide-react";
 
-export type View = "console" | "plan" | "architecture" | "brief" | "changes" | "settings";
+export type View = "plan" | "architecture" | "brief" | "changes" | "settings";
 
 interface SidebarProps {
   activeView: View;
@@ -22,7 +21,6 @@ interface SidebarProps {
   onGlobalAction: (action: "new-project" | "analyze") => void;
 }
 
-// Right panel — project-scoped nav
 const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "brief", label: "Plan", icon: FileText },
   { id: "plan", label: "Tasks", icon: MonitorCog },
@@ -42,19 +40,6 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
 
       {/* Narrow icon rail — global controls */}
       <div className="w-[52px] shrink-0 border-r border-zinc-800/60 flex flex-col items-center py-3 gap-1">
-
-        {/* Console */}
-        <button
-          onClick={() => onViewChange("console")}
-          title="Console"
-          className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
-            activeView === "console"
-              ? "bg-zinc-800 text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
-          }`}
-        >
-          <TerminalSquare className="h-4 w-4" />
-        </button>
 
         {/* Project switcher */}
         <ProjectSelector
@@ -146,9 +131,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
                 <span className="flex-1 text-left text-[13px]">{item.label}</span>
                 {badge !== null && badge > 0 && (
                   <span className={`text-[11px] font-medium px-1.5 py-0.5 rounded-full ${
-                    isActive
-                      ? "bg-zinc-700 text-zinc-200"
-                      : "bg-zinc-800 text-zinc-500"
+                    isActive ? "bg-zinc-700 text-zinc-200" : "bg-zinc-800 text-zinc-500"
                   }`}>
                     {badge}
                   </span>

@@ -2,21 +2,18 @@ import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
-import { generateText, streamText, type LanguageModel } from "ai";
+import { generateText, streamText, type LanguageModel, type ToolSet } from "ai";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Look for prompts in both dist/ (production) and src/ (development)
-function getPromptsDir(): string {
-  const distPrompts = join(__dirname, "..", "llm", "prompts");
-  if (existsSync(distPrompts)) return distPrompts;
-  // Fall back to source directory (for development)
-  const srcPrompts = join(__dirname, "..", "..", "src", "llm", "prompts");
-  if (existsSync(srcPrompts)) return srcPrompts;
-  return distPrompts; // will error on read, which is a clear signal
+function getPromptCandidates(roleName: string): string[] {
+  const file = `${roleName}.md`;
+  return [
+    join(__dirname, "..", "llm", "prompts", file),
+    join(__dirname, "..", "llm", "prompts", "prompts", file),
+    join(__dirname, "..", "..", "src", "llm", "prompts", file),
+  ];
 }
-
-const PROMPTS_DIR = getPromptsDir();
 
 /**
  * Completion status protocol (inspired by gstack).
@@ -34,12 +31,38 @@ export interface RoleResult {
   concerns?: string[];
 }
 
+type RunProviderOptions = Parameters<typeof generateText>[0]["providerOptions"];
+
+export interface RoleExecutionOptions {
+  tools?: ToolSet;
+  providerOptions?: RunProviderOptions;
+  additionalSystemContext?: string;
+}
+
+function buildSystemPrompt(
+  systemPrompt: string,
+  systemContext: string,
+  options?: RoleExecutionOptions,
+): string {
+  const sections = [systemPrompt];
+  if (options?.additionalSystemContext) {
+    sections.push(options.additionalSystemContext);
+  }
+  sections.push(systemContext);
+  return sections.join("\n\n---\n\n");
+}
+
 /**
  * Load a role's system prompt from its markdown file.
  */
 export async function loadPrompt(roleName: string): Promise<string> {
-  const promptPath = join(PROMPTS_DIR, `${roleName}.md`);
-  return readFile(promptPath, "utf-8");
+  const candidates = getPromptCandidates(roleName);
+  for (const path of candidates) {
+    if (existsSync(path)) {
+      return readFile(path, "utf-8");
+    }
+  }
+  throw new Error(`Prompt file not found for role '${roleName}'. Looked in: ${candidates.join(", ")}`);
 }
 
 /**
@@ -51,13 +74,16 @@ export async function runRoleStreaming(
   systemContext: string,
   userMessage: string,
   onChunk?: (chunk: string) => void,
+  options?: RoleExecutionOptions,
 ): Promise<string> {
   const systemPrompt = await loadPrompt(roleName);
 
   const { textStream, text } = streamText({
     model,
-    system: `${systemPrompt}\n\n---\n\n${systemContext}`,
+    system: buildSystemPrompt(systemPrompt, systemContext, options),
     prompt: userMessage,
+    tools: options?.tools,
+    providerOptions: options?.providerOptions,
     maxOutputTokens: 16384,
   });
 
@@ -78,13 +104,16 @@ export async function runRole(
   roleName: string,
   systemContext: string,
   userMessage: string,
+  options?: RoleExecutionOptions,
 ): Promise<string> {
   const systemPrompt = await loadPrompt(roleName);
 
   const result = await generateText({
     model,
-    system: `${systemPrompt}\n\n---\n\n${systemContext}`,
+    system: buildSystemPrompt(systemPrompt, systemContext, options),
     prompt: userMessage,
+    tools: options?.tools,
+    providerOptions: options?.providerOptions,
     maxOutputTokens: 16384,
   });
 
@@ -100,13 +129,16 @@ export async function runConversationalRole(
   systemContext: string,
   messages: { role: "user" | "assistant"; content: string }[],
   onChunk?: (chunk: string) => void,
+  options?: RoleExecutionOptions,
 ): Promise<string> {
   const systemPrompt = await loadPrompt(roleName);
 
   const { textStream, text } = streamText({
     model,
-    system: `${systemPrompt}\n\n---\n\n${systemContext}`,
+    system: buildSystemPrompt(systemPrompt, systemContext, options),
     messages,
+    tools: options?.tools,
+    providerOptions: options?.providerOptions,
     maxOutputTokens: 8192,
   });
 

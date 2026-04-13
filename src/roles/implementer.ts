@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ProjectContext } from "../state/manager.js";
 import { formatContextForPrompt } from "../state/manager.js";
+import type { RoleExecutionOptions } from "./base.js";
 
 export interface TaskDescription {
   id: number;
@@ -29,6 +30,7 @@ export async function implementTask(
   projectRoot: string,
   existingContext: ProjectContext,
   onChunk?: (chunk: string) => void,
+  options?: RoleExecutionOptions,
 ): Promise<FileOperation[]> {
   const contextStr = formatContextForPrompt(existingContext);
 
@@ -52,6 +54,7 @@ export async function implementTask(
     `${contextStr}${existingFilesSection}`,
     `Implement the following task:\n\n**Task ${task.id}: ${task.title}**\n\n${task.description}\n\n**Files to create/modify:**\n${task.files.map((f) => `- \`${f}\``).join("\n")}\n\n**Acceptance criteria:** ${task.acceptanceCriteria}\n\nProduce complete file contents for every file listed above, following the exact output format specified in your instructions.`,
     onChunk,
+    options,
   );
 
   return parseFileOperations(result);

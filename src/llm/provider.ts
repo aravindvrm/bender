@@ -29,6 +29,33 @@ const providerFactories: Record<string, (apiKey?: string) => (modelId: string) =
   },
 };
 
+const PROVIDER_ENV_KEYS: Record<string, string[]> = {
+  anthropic: ["ANTHROPIC_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  google: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY"],
+  groq: ["GROQ_API_KEY"],
+};
+
+function providerNeedsApiKey(provider: string): boolean {
+  return provider !== "ollama";
+}
+
+function hasProviderEnvKey(provider: string): boolean {
+  const keys = PROVIDER_ENV_KEYS[provider] ?? [];
+  return keys.some((key) => !!process.env[key]);
+}
+
+function assertProviderApiKeyAvailable(provider: string, apiKey?: string): void {
+  if (!providerNeedsApiKey(provider)) return;
+  if (apiKey || hasProviderEnvKey(provider)) return;
+
+  const envHints = PROVIDER_ENV_KEYS[provider];
+  const hint = envHints && envHints.length > 0
+    ? ` or set ${envHints.join(" / ")}`
+    : "";
+  throw new Error(`Missing API key for provider '${provider}'. Add it in Settings${hint}.`);
+}
+
 /**
  * Resolve a model tier config entry into a LanguageModel instance.
  * Supports both simple string format ("sonnet-4.6") and object format ({ provider, model }).
@@ -43,6 +70,7 @@ function resolveModelConfig(
     if (!factory) {
       throw new Error(`Unknown LLM provider: ${defaultProvider}. Supported: ${Object.keys(providerFactories).join(", ")}`);
     }
+    assertProviderApiKeyAvailable(defaultProvider, defaultApiKey);
     return factory(defaultApiKey)(tierConfig);
   }
 
@@ -50,6 +78,7 @@ function resolveModelConfig(
   if (!factory) {
     throw new Error(`Unknown LLM provider: ${tierConfig.provider}. Supported: ${Object.keys(providerFactories).join(", ")}`);
   }
+  assertProviderApiKeyAvailable(tierConfig.provider, tierConfig.apiKey);
   // Tier-level apiKey wins over anything else
   return factory(tierConfig.apiKey)(tierConfig.model);
 }

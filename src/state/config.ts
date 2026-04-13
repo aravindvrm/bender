@@ -11,6 +11,16 @@ export interface ModelConfig {
   apiKey?: string;
 }
 
+export interface McpServerConfig {
+  name: string;
+  url: string;
+  enabled?: boolean;
+  description?: string;
+  authorizationToken?: string;
+  allowedTools?: string[];
+  headers?: Record<string, string>;
+}
+
 export interface BenderConfig {
   llm: {
     provider: string;
@@ -24,6 +34,15 @@ export interface BenderConfig {
   /** Per-provider API keys. Key wins over llm.apiKey for the matching provider. */
   providers?: {
     [name: string]: { apiKey?: string };
+  };
+  mcp?: {
+    enabled?: boolean;
+    servers?: McpServerConfig[];
+  };
+  skills?: {
+    enabled?: boolean;
+    paths?: string[];
+    maxChars?: number;
   };
   stack: {
     template: string;
@@ -50,6 +69,15 @@ export const DEFAULT_CONFIG: BenderConfig = {
       default: "claude-sonnet-4-6-20250514",
       strong: "claude-sonnet-4-6-20250514",
     },
+  },
+  mcp: {
+    enabled: false,
+    servers: [],
+  },
+  skills: {
+    enabled: false,
+    paths: [],
+    maxChars: 12000,
   },
   stack: {
     template: "nextjs-saas",
@@ -101,6 +129,17 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
       },
     },
     providers: overrides.providers ?? defaults.providers,
+    mcp: {
+      ...defaults.mcp,
+      ...overrides.mcp,
+      servers: overrides.mcp?.servers ?? defaults.mcp?.servers ?? [],
+    },
+    skills: {
+      ...defaults.skills,
+      ...overrides.skills,
+      paths: overrides.skills?.paths ?? defaults.skills?.paths ?? [],
+      maxChars: overrides.skills?.maxChars ?? defaults.skills?.maxChars ?? 12000,
+    },
     stack: { ...defaults.stack, ...overrides.stack },
     deploy: { ...defaults.deploy, ...overrides.deploy },
     test: { ...defaults.test, ...overrides.test },
