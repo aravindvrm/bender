@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import type { ProjectState } from "../hooks/useApi";
-import { Play, Sparkles, Search, ChevronDown, Lock } from "lucide-react";
+import { Play, Sparkles, Search, ChevronDown, Lock, Pencil, Trash2, Save, X } from "lucide-react";
 
 interface PlanViewProps {
   state: ProjectState;
   onImplement: () => void;
   onNewTask: () => void;
   onRunTask: (taskId: number) => void;
+  onTasksChanged?: () => Promise<void> | void;
 }
 
 interface ParsedTask {
@@ -74,7 +75,7 @@ function getTaskRunStatus(
 
 type StatusFilter = "all" | "completed" | "pending";
 
-export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewProps) {
+export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChanged }: PlanViewProps) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -82,6 +83,10 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
   const [taskAgents, setTaskAgents] = useState<Record<string, string>>(state.taskAgents ?? {});
   const [assigningTaskId, setAssigningTaskId] = useState<number | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
+  const [deleteDialogTaskId, setDeleteDialogTaskId] = useState<number | null>(null);
 
   useEffect(() => {
     setTaskAgents(state.taskAgents ?? {});
@@ -97,7 +102,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
       .catch(() => {});
   }, []);
 
-  if (!state.currentTasks) {
+  function renderEmptyState() {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500">
         <div className="text-center space-y-4">
@@ -115,7 +120,14 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
     );
   }
 
+  if (!state.currentTasks) {
+    return renderEmptyState();
+  }
+
   const tasks = parseTasks(state.currentTasks);
+  if (tasks.length === 0) {
+    return renderEmptyState();
+  }
   const summaryMatch = state.currentTasks.match(/##\s*Summary\s*\n([\s\S]*?)(?=\n##)/);
   const riskMatch = state.currentTasks.match(/##\s*Risk Notes\s*\n([\s\S]*?)$/);
 
@@ -125,7 +137,6 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
     runStatus: getTaskRunStatus(task, state.completedTasks),
     assignedAgentId: taskAgents[String(task.id)] ?? "",
   }));
-
   const filtered = tasksWithStatus.filter((task) => {
     if (statusFilter === "completed" && !task.completed) return false;
     if (statusFilter === "pending" && task.completed) return false;
@@ -158,6 +169,46 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
       setAssignError((err as Error).message);
     } finally {
       setAssigningTaskId(null);
+    }
+  }
+
+  async function saveTaskEdits(
+    taskId: number,
+    updates: { title: string; description: string; dependencies: string; criteria: string },
+  ) {
+    setEditError(null);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to update task");
+      await onTasksChanged?.();
+    } catch (err) {
+      setEditError((err as Error).message);
+      throw err;
+    }
+  }
+
+  async function deleteTask(taskId: number, cascadeDependents: boolean) {
+    setDeleteError(null);
+    setDeletingTaskId(taskId);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cascadeDependents }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to delete task");
+      setDeleteDialogTaskId(null);
+      await onTasksChanged?.();
+    } catch (err) {
+      setDeleteError((err as Error).message);
+    } finally {
+      setDeletingTaskId(null);
     }
   }
 
@@ -217,6 +268,8 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
         </div>
       </div>
       {assignError && <p className="text-xs text-red-400">{assignError}</p>}
+      {editError && <p className="text-xs text-red-400">{editError}</p>}
+      {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
 
       {/* Table */}
       <div className="border border-zinc-800 rounded-xl overflow-hidden">
@@ -243,6 +296,8 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
               onToggleExpand={() => setExpandedId(expandedId === task.id ? null : task.id)}
               onRun={() => onRunTask(task.id)}
               onAssignAgent={(agentId) => void assignAgent(task.id, agentId)}
+              onSaveEdits={(updates) => saveTaskEdits(task.id, updates)}
+              onDelete={() => setDeleteDialogTaskId(task.id)}
             />
           ))
         )}
@@ -254,6 +309,16 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
           <h3 className="text-xs font-medium text-amber-400 mb-1.5 uppercase tracking-wider">Risk Notes</h3>
           <p className="text-sm text-zinc-400 leading-relaxed">{riskMatch[1].trim()}</p>
         </div>
+      )}
+
+      {deleteDialogTaskId !== null && (
+        <DeleteTaskDialog
+          taskId={deleteDialogTaskId}
+          allTasks={tasksWithStatus}
+          deleting={deletingTaskId === deleteDialogTaskId}
+          onCancel={() => setDeleteDialogTaskId(null)}
+          onConfirm={(cascade) => void deleteTask(deleteDialogTaskId, cascade)}
+        />
       )}
     </div>
   );
@@ -269,11 +334,31 @@ interface TaskRowProps {
   onToggleExpand: () => void;
   onRun: () => void;
   onAssignAgent: (agentId: string) => void;
+  onSaveEdits: (updates: { title: string; description: string; dependencies: string; criteria: string }) => Promise<void>;
+  onDelete: () => void;
 }
 
-function TaskRow({ task, allTasks, agents, assigning, isLast, expanded, onToggleExpand, onRun, onAssignAgent }: TaskRowProps) {
+function TaskRow({
+  task,
+  allTasks,
+  agents,
+  assigning,
+  isLast,
+  expanded,
+  onToggleExpand,
+  onRun,
+  onAssignAgent,
+  onSaveEdits,
+  onDelete,
+}: TaskRowProps) {
   const progress = task.completed ? 100 : 0;
   const barColor = task.completed ? "bg-emerald-500" : "bg-zinc-700";
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(task.title);
+  const [draftDescription, setDraftDescription] = useState(task.description);
+  const [draftDependencies, setDraftDependencies] = useState(task.dependencies);
+  const [draftCriteria, setDraftCriteria] = useState(task.criteria);
 
   const statusLabel = task.completed ? "Completed" : "Pending";
   const statusColors: Record<string, string> = {
@@ -284,6 +369,13 @@ function TaskRow({ task, allTasks, agents, assigning, isLast, expanded, onToggle
   const blockedByIds = parseDependencyIds(task.dependencies).filter(
     (id) => !allTasks.find((t) => t.id === id)?.completed,
   );
+
+  useEffect(() => {
+    setDraftTitle(task.title);
+    setDraftDescription(task.description);
+    setDraftDependencies(task.dependencies);
+    setDraftCriteria(task.criteria);
+  }, [task.id, task.title, task.description, task.dependencies, task.criteria]);
 
   return (
     <>
@@ -357,8 +449,40 @@ function TaskRow({ task, allTasks, agents, assigning, isLast, expanded, onToggle
       {/* Expanded detail panel */}
       {expanded && (
         <div className={`px-4 pb-4 pt-1 bg-zinc-900/40 space-y-3 ${!isLast ? "border-b border-zinc-800/60" : ""}`}>
-          {task.description && (
-            <p className="text-sm text-zinc-400 leading-relaxed ml-6">{task.description}</p>
+          {editing ? (
+            <div className="ml-6 space-y-2">
+              <input
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                className="w-full max-w-xl select-flat px-3 py-1.5 text-sm"
+                placeholder="Task title"
+              />
+              <textarea
+                value={draftDescription}
+                onChange={(e) => setDraftDescription(e.target.value)}
+                rows={3}
+                className="w-full max-w-2xl bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-xs text-zinc-300"
+                placeholder="Task description"
+              />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-w-2xl">
+                <input
+                  value={draftDependencies}
+                  onChange={(e) => setDraftDependencies(e.target.value)}
+                  className="select-flat px-3 py-1.5 text-xs"
+                  placeholder="Dependencies, e.g. 1,2 or None"
+                />
+                <input
+                  value={draftCriteria}
+                  onChange={(e) => setDraftCriteria(e.target.value)}
+                  className="select-flat px-3 py-1.5 text-xs"
+                  placeholder="Acceptance criteria"
+                />
+              </div>
+            </div>
+          ) : (
+            task.description && (
+              <p className="text-sm text-zinc-400 leading-relaxed ml-6">{task.description}</p>
+            )
           )}
 
           {task.files.length > 0 && (
@@ -371,7 +495,7 @@ function TaskRow({ task, allTasks, agents, assigning, isLast, expanded, onToggle
             </div>
           )}
 
-          {task.dependencies !== "None" && (
+          {!editing && task.dependencies !== "None" && (
             <div className="ml-6 flex items-start gap-2">
               {task.runStatus === "blocked" && <Lock className="h-3 w-3 text-zinc-600 mt-0.5 shrink-0" />}
               <p className="text-xs text-zinc-500">
@@ -395,7 +519,7 @@ function TaskRow({ task, allTasks, agents, assigning, isLast, expanded, onToggle
             </div>
           )}
 
-          {task.criteria && (
+          {!editing && task.criteria && (
             <div className="ml-6">
               <p className="text-xs text-zinc-600 mb-1">Acceptance criteria</p>
               <p className="text-xs text-zinc-400 leading-relaxed">{task.criteria}</p>
@@ -422,9 +546,149 @@ function TaskRow({ task, allTasks, agents, assigning, isLast, expanded, onToggle
             </div>
             {assigning && <span className="text-[11px] text-zinc-500">Saving…</span>}
           </div>
+
+          <div className="ml-6 flex items-center gap-2 pt-1">
+            {!editing ? (
+              <>
+                <button
+                  onClick={() => setEditing(true)}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                >
+                  <Pencil className="h-3 w-3" />
+                  Edit
+                </button>
+                <button
+                  onClick={onDelete}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-red-900/60 text-red-300 hover:bg-red-950/30"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Delete
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  disabled={saving || !draftTitle.trim()}
+                  onClick={async () => {
+                    setSaving(true);
+                    try {
+                      await onSaveEdits({
+                        title: draftTitle.trim(),
+                        description: draftDescription.trim(),
+                        dependencies: draftDependencies.trim() || "None",
+                        criteria: draftCriteria.trim(),
+                      });
+                      setEditing(false);
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  <Save className="h-3 w-3" />
+                  Save
+                </button>
+                <button
+                  disabled={saving}
+                  onClick={() => {
+                    setEditing(false);
+                    setDraftTitle(task.title);
+                    setDraftDescription(task.description);
+                    setDraftDependencies(task.dependencies);
+                    setDraftCriteria(task.criteria);
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                >
+                  <X className="h-3 w-3" />
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
     </>
+  );
+}
+
+function collectDependentTaskIds(taskId: number, allTasks: ParsedTask[]): number[] {
+  const selected = new Set<number>([taskId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const task of allTasks) {
+      if (selected.has(task.id)) continue;
+      const deps = parseDependencyIds(task.dependencies);
+      if (deps.some((dep) => selected.has(dep))) {
+        selected.add(task.id);
+        changed = true;
+      }
+    }
+  }
+  selected.delete(taskId);
+  return Array.from(selected).sort((a, b) => a - b);
+}
+
+function DeleteTaskDialog({
+  taskId,
+  allTasks,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  taskId: number;
+  allTasks: ParsedTask[];
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: (cascade: boolean) => void;
+}) {
+  const dependentTaskIds = collectDependentTaskIds(taskId, allTasks);
+  const [cascade, setCascade] = useState(dependentTaskIds.length > 0);
+
+  useEffect(() => {
+    setCascade(dependentTaskIds.length > 0);
+  }, [taskId, dependentTaskIds.length]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <div className="w-full max-w-lg bg-zinc-900 border border-zinc-700 rounded-lg">
+        <div className="px-4 py-3 border-b border-zinc-800">
+          <h3 className="text-sm font-medium text-zinc-100">Delete Task #{taskId}</h3>
+        </div>
+        <div className="px-4 py-4 space-y-3 text-sm">
+          <p className="text-zinc-300">This will remove Task #{taskId} from the current plan.</p>
+          {dependentTaskIds.length > 0 && (
+            <label className="flex items-start gap-2 text-zinc-300">
+              <input
+                type="checkbox"
+                checked={cascade}
+                onChange={(e) => setCascade(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Also delete dependent tasks: {dependentTaskIds.map((id) => `#${id}`).join(", ")}
+              </span>
+            </label>
+          )}
+        </div>
+        <div className="px-4 py-3 border-t border-zinc-800 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            className="px-3 py-1.5 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm(cascade)}
+            disabled={deleting}
+            className="px-3 py-1.5 text-xs border border-red-900/60 text-red-200 hover:bg-red-950/30 disabled:opacity-50"
+          >
+            {deleting ? "Deleting..." : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

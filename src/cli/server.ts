@@ -2284,6 +2284,9 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
       const projectRoot = getProject();
       const state = new StateManager(projectRoot);
       const context = await state.gatherContext();
+      const label = auditType === "security" ? "Security audit" : "Test harness audit";
+
+      adapter.header(`Bender ${label}`);
 
       if (!context.architecture) {
         throw new Error("Project needs architecture to be analyzed before auditing. Run analyze first.");
@@ -2311,7 +2314,6 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
       }
 
       const roleName = auditType === "security" ? "security-auditor" : "test-auditor";
-      const label = auditType === "security" ? "Security audit" : "Test harness audit";
 
       try {
         adapter.subheader(`Running ${label}...`);
@@ -2333,15 +2335,22 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
         ].join("\n");
 
         adapter.info(`Analyzing with ${analyzerAgent.name} (${analyzerAgent.modelTier})...`);
+        const spin = adapter.spinner("Running LLM audit...");
 
         const model = getModelForTier(models, analyzerAgent.modelTier);
-        const rawOutput = await runRole(
-          model,
-          roleName,
-          systemContext,
-          userMessage,
-          runtime ?? undefined,
-        );
+        let rawOutput = "";
+        try {
+          rawOutput = await runRole(
+            model,
+            roleName,
+            systemContext,
+            userMessage,
+            runtime ?? undefined,
+          );
+        } catch (err) {
+          spin.fail("LLM audit failed");
+          throw err;
+        }
 
         // Parse JSON from output (strip markdown fences if present)
         let jsonStr = rawOutput.trim();
@@ -2353,8 +2362,10 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
         try {
           parsed = JSON.parse(jsonStr) as typeof parsed;
         } catch {
+          spin.fail("Audit response parse failed");
           throw new Error("Audit returned invalid JSON. Try again.");
         }
+        spin.succeed("LLM audit complete");
 
         const result: AuditResult = {
           type: auditType,
@@ -2373,6 +2384,32 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
         };
 
         await state.writeAudit(auditType, result);
+        if (result.summary) {
+          adapter.info(`Summary: ${result.summary}`);
+        }
+        if (result.coverageEstimate) {
+          adapter.info(`Coverage estimate: ${result.coverageEstimate}`);
+        }
+        const severityCounts = result.issues.reduce(
+          (acc, issue) => {
+            acc[issue.severity] += 1;
+            return acc;
+          },
+          { low: 0, medium: 0, high: 0, critical: 0 } as Record<AuditIssue["severity"], number>,
+        );
+        adapter.info(
+          `Severity counts: critical ${severityCounts.critical}, high ${severityCounts.high}, medium ${severityCounts.medium}, low ${severityCounts.low}`,
+        );
+        if (result.issues.length > 0) {
+          adapter.subheader("Top findings");
+          for (const issue of result.issues.slice(0, 8)) {
+            const issueFiles = issue.files ?? [];
+            const files = issueFiles.length > 0 ? ` [${issueFiles.join(", ")}]` : "";
+            adapter.warn(`${issue.severity.toUpperCase()}: ${issue.title}${files}`);
+          }
+        } else {
+          adapter.success("No issues reported by this audit.");
+        }
         adapter.success(`${label} complete — ${result.issues.length} issue(s) found.`);
       } finally {
         await runtime?.close();
@@ -2403,6 +2440,157 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
       const updated = (existing ?? "") + newEntry;
       await state.writeCurrentTasks(updated.trim());
       res.json({ ok: true, taskId });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  function parseDependencyIds(depStr: string): number[] {
+    if (!depStr || depStr.trim().toLowerCase() === "none") return [];
+    const matches = depStr.match(/\d+/g);
+    return matches ? matches.map(Number) : [];
+  }
+
+  interface ParsedTaskBlock {
+    id: number;
+    title: string;
+    body: string;
+    start: number;
+    end: number;
+    dependencies: string;
+  }
+
+  function parseTaskBlocks(markdown: string): ParsedTaskBlock[] {
+    const tasks: ParsedTaskBlock[] = [];
+    const pattern = /###\s*Task\s*(\d+):\s*(.+?)\n([\s\S]*?)(?=\n###\s*Task|\n##\s|$)/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(markdown)) !== null) {
+      const body = match[3];
+      const depsMatch = body.match(/\*\*Dependencies\*\*:\s*(.+)/);
+      tasks.push({
+        id: Number(match[1]),
+        title: match[2].trim(),
+        body,
+        start: match.index,
+        end: match.index + match[0].length,
+        dependencies: depsMatch ? depsMatch[1].trim() : "None",
+      });
+    }
+    return tasks;
+  }
+
+  function replaceTaskBodyField(body: string, label: string, value: string): string {
+    const fieldPattern = new RegExp(`(\\*\\*${label}\\*\\*:\\s*)([\\s\\S]*?)(?=\\n-\\s*\\*\\*|\\n###|$)`);
+    if (fieldPattern.test(body)) {
+      return body.replace(fieldPattern, `$1${value}`);
+    }
+    const trimmed = body.trimEnd();
+    const prefix = trimmed.length > 0 ? `${trimmed}\n` : "";
+    return `${prefix}- **${label}**: ${value}\n`;
+  }
+
+  app.patch("/api/tasks/:taskId", async (req, res) => {
+    try {
+      const { taskId } = req.params;
+      const id = Number(taskId);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "taskId must be numeric" });
+      }
+      const { title, description, dependencies, criteria } = (req.body ?? {}) as {
+        title?: string;
+        description?: string;
+        dependencies?: string;
+        criteria?: string;
+      };
+
+      if (title === undefined && description === undefined && dependencies === undefined && criteria === undefined) {
+        return res.status(400).json({ error: "No task fields provided" });
+      }
+
+      const state = new StateManager(getProject());
+      const markdown = await state.readCurrentTasks();
+      if (!markdown) {
+        return res.status(400).json({ error: "No current task plan found" });
+      }
+
+      const tasks = parseTaskBlocks(markdown);
+      const target = tasks.find((t) => t.id === id);
+      if (!target) {
+        return res.status(404).json({ error: `Task ${id} not found` });
+      }
+
+      const nextTitle = title !== undefined ? title.trim() : target.title;
+      let nextBody = target.body;
+      if (description !== undefined) nextBody = replaceTaskBodyField(nextBody, "Description", description.trim());
+      if (dependencies !== undefined) nextBody = replaceTaskBodyField(nextBody, "Dependencies", dependencies.trim() || "None");
+      if (criteria !== undefined) nextBody = replaceTaskBodyField(nextBody, "Acceptance criteria", criteria.trim());
+
+      const updatedBlock = `### Task ${id}: ${nextTitle}\n${nextBody}`;
+      const updated = `${markdown.slice(0, target.start)}${updatedBlock}${markdown.slice(target.end)}`;
+      await state.writeCurrentTasks(updated.trim());
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/tasks/:taskId", async (req, res) => {
+    try {
+      const { taskId } = req.params;
+      const id = Number(taskId);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "taskId must be numeric" });
+      }
+      const { cascadeDependents } = (req.body ?? {}) as { cascadeDependents?: boolean };
+
+      const state = new StateManager(getProject());
+      const markdown = await state.readCurrentTasks();
+      if (!markdown) {
+        return res.status(400).json({ error: "No current task plan found" });
+      }
+
+      const tasks = parseTaskBlocks(markdown);
+      const target = tasks.find((t) => t.id === id);
+      if (!target) {
+        return res.status(404).json({ error: `Task ${id} not found` });
+      }
+
+      const idsToDelete = new Set<number>([id]);
+      if (cascadeDependents) {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const task of tasks) {
+            if (idsToDelete.has(task.id)) continue;
+            const deps = parseDependencyIds(task.dependencies);
+            if (deps.some((depId) => idsToDelete.has(depId))) {
+              idsToDelete.add(task.id);
+              changed = true;
+            }
+          }
+        }
+      }
+
+      let updated = markdown;
+      for (const task of tasks.filter((t) => idsToDelete.has(t.id)).sort((a, b) => b.start - a.start)) {
+        updated = `${updated.slice(0, task.start)}${updated.slice(task.end)}`;
+      }
+      await state.writeCurrentTasks(updated.trim());
+
+      const taskAgents = await state.readTaskAgents();
+      let changedAssignments = false;
+      for (const deletedId of idsToDelete) {
+        const key = String(deletedId);
+        if (taskAgents[key]) {
+          delete taskAgents[key];
+          changedAssignments = true;
+        }
+      }
+      if (changedAssignments) {
+        await state.writeTaskAgents(taskAgents);
+      }
+
+      res.json({ ok: true, deletedTaskIds: Array.from(idsToDelete).sort((a, b) => a - b) });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

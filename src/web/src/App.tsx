@@ -163,6 +163,7 @@ export function App() {
                   onImplement={() => op.startOperation("/api/run/implement", {})}
                   onNewTask={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
                   onRunTask={(taskId) => op.startOperation("/api/run/implement", { taskId })}
+                  onTasksChanged={refresh}
                 />
               )}
               {activeView === "architecture" && state && <ArchitectureView state={state} />}
@@ -181,8 +182,6 @@ export function App() {
           modal={op.modal}
           inputText={op.inputText}
           currentProjectPath={state?.projectRoot ?? null}
-          activeView={activeView}
-          projectState={state}
           onSetDrawerOpen={op.setDrawerOpen}
           onSetModal={op.setModal}
           onSetInputText={op.setInputText}

@@ -8,11 +8,8 @@ import {
   Loader2,
   X,
   Terminal as TerminalIcon,
-  CornerDownLeft,
 } from "lucide-react";
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
-import type { View } from "./Sidebar";
-import type { ProjectState } from "../hooks/useApi";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
 type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
@@ -80,8 +77,6 @@ interface OperationDrawerProps {
   modal: OperationModal;
   inputText: string;
   currentProjectPath: string | null;
-  activeView?: View;
-  projectState?: ProjectState | null;
   onSetDrawerOpen: (open: boolean) => void;
   onSetModal: (modal: OperationModal) => void;
   onSetInputText: (text: string) => void;
@@ -107,6 +102,12 @@ function TerminalPanel({ projectPath }: { projectPath: string | null }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [history]);
+
+  useEffect(() => {
+    if (!running) {
+      inputRef.current?.focus();
+    }
+  }, [running]);
 
   const runCommand = useCallback(async (cmd: string) => {
     const trimmed = cmd.trim();
@@ -142,6 +143,7 @@ function TerminalPanel({ projectPath }: { projectPath: string | null }) {
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") {
+      e.preventDefault();
       const cmd = input;
       setInput("");
       void runCommand(cmd);
@@ -161,118 +163,56 @@ function TerminalPanel({ projectPath }: { projectPath: string | null }) {
   const cwd = projectPath ? projectPath.split("/").pop() ?? projectPath : "~";
 
   return (
-    <div className="h-full flex flex-col font-mono text-xs" onClick={() => inputRef.current?.focus()}>
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+    <div
+      className="h-full overflow-y-auto bg-[#0b0b0d] text-[#d7d7da] font-mono text-[12px] leading-6 p-3"
+      onClick={() => inputRef.current?.focus()}
+    >
+      <div className="space-y-0">
         {history.length === 0 && (
-          <p className="text-zinc-600 italic">Type a command to run in the project directory.</p>
+          <p className="text-zinc-600 italic mb-2">Terminal ready. Commands run in project root.</p>
         )}
         {history.map((entry, i) => (
-          <div key={i}>
-            <div className="flex items-center gap-1.5 text-zinc-400">
-              <span className="text-emerald-500/70">{cwd}</span>
+          <div key={i} className="mb-1">
+            <div className="flex items-center gap-2 text-zinc-300">
+              <span className="text-zinc-500">{cwd}</span>
               <span className="text-zinc-600">$</span>
-              <span className="text-zinc-300">{entry.command}</span>
+              <span>{entry.command}</span>
             </div>
             {entry.stdout && (
-              <pre className="mt-0.5 text-zinc-300 whitespace-pre-wrap leading-relaxed">{entry.stdout}</pre>
+              <pre className="text-zinc-300 whitespace-pre-wrap leading-relaxed">{entry.stdout}</pre>
             )}
             {entry.stderr && (
-              <pre className={`mt-0.5 whitespace-pre-wrap leading-relaxed ${entry.exitCode !== 0 ? "text-red-400/80" : "text-zinc-500"}`}>{entry.stderr}</pre>
+              <pre className={`whitespace-pre-wrap leading-relaxed ${entry.exitCode !== 0 ? "text-red-400/90" : "text-zinc-500"}`}>{entry.stderr}</pre>
             )}
           </div>
         ))}
+        {!running && (
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500">{cwd}</span>
+            <span className="text-zinc-600">$</span>
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={!projectPath}
+              placeholder={projectPath ? "" : "No project selected"}
+              className="flex-1 bg-transparent outline-none text-zinc-200 placeholder:text-zinc-600"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+        )}
         {running && (
-          <div className="flex items-center gap-1.5 text-zinc-500">
-            <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-pulse" />
+          <div className="flex items-center gap-2 text-zinc-500">
+            <span className="text-zinc-500">{cwd}</span>
+            <span className="text-zinc-600">$</span>
             <span>running…</span>
           </div>
         )}
         <div ref={bottomRef} />
       </div>
-      <div className="border-t border-zinc-800 px-3 py-2 flex items-center gap-2 shrink-0">
-        <span className="text-emerald-500/70 text-xs shrink-0">{cwd} $</span>
-        <input
-          ref={inputRef}
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={running || !projectPath}
-          placeholder={projectPath ? "command…" : "No project selected"}
-          className="flex-1 bg-transparent text-zinc-300 placeholder-zinc-600 outline-none text-xs"
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <button
-          onClick={() => { const cmd = input; setInput(""); void runCommand(cmd); }}
-          disabled={running || !input.trim() || !projectPath}
-          className="text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30"
-        >
-          <CornerDownLeft className="h-3.5 w-3.5" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Context panel ─────────────────────────────────────────────────────────────
-
-function ContextPanel({ activeView, state }: { activeView?: View; state?: ProjectState | null }) {
-  if (!state || !activeView) {
-    return <p className="text-zinc-600 text-xs p-4 italic">No context available.</p>;
-  }
-
-  const sections: Array<{ label: string; value: string }> = [];
-
-  if (activeView === "plan") {
-    const tasksText = state.currentTasks ?? "";
-    const taskMatches = tasksText.match(/###\s*Task\s*\d+/g) ?? [];
-    sections.push({ label: "Task count", value: String(taskMatches.length) });
-    const completed = (state.completedTasks ?? []).length;
-    if (completed > 0) sections.push({ label: "Completed", value: String(completed) });
-    if (state.brief) {
-      const firstLine = state.brief.split("\n").find((l: string) => l.trim()) ?? "";
-      sections.push({ label: "Project", value: firstLine.replace(/^#+\s*/, "").slice(0, 120) });
-    }
-  } else if (activeView === "architecture") {
-    if (state.config?.stack) {
-      sections.push({ label: "Framework", value: state.config.stack.framework });
-      sections.push({ label: "Database", value: state.config.stack.database });
-      sections.push({ label: "Auth", value: state.config.stack.auth });
-    }
-    if (state.decisions?.length) {
-      sections.push({ label: "ADRs", value: String(state.decisions.length) });
-    }
-  } else if (activeView === "git") {
-    const commits = state.git?.recentCommits ?? [];
-    if (commits.length > 0) {
-      sections.push({ label: "Last commit", value: commits[0].message.slice(0, 80) });
-    }
-    const branch = state.git?.branch;
-    if (branch) sections.push({ label: "Branch", value: branch });
-    sections.push({ label: "Status", value: state.git?.clean ? "clean" : "uncommitted changes" });
-  } else if (activeView === "brief") {
-    if (state.brief) {
-      const lines = state.brief.split("\n").filter((l: string) => l.trim()).slice(0, 5);
-      sections.push({ label: "Brief", value: lines.join(" · ").slice(0, 200) });
-    }
-  }
-
-  if (sections.length === 0) {
-    return <p className="text-zinc-600 text-xs p-4 italic">No context for this view.</p>;
-  }
-
-  return (
-    <div className="p-4 space-y-2 text-xs">
-      <p className="text-zinc-600 uppercase tracking-wider text-[10px] font-medium mb-3">
-        {activeView?.charAt(0).toUpperCase()}{activeView?.slice(1)} context
-      </p>
-      {sections.map((s) => (
-        <div key={s.label} className="flex items-start gap-3">
-          <span className="text-zinc-600 shrink-0 w-24">{s.label}</span>
-          <span className="text-zinc-400 leading-relaxed">{s.value}</span>
-        </div>
-      ))}
     </div>
   );
 }
@@ -304,8 +244,6 @@ export function OperationDrawer({
   modal,
   inputText,
   currentProjectPath,
-  activeView,
-  projectState,
   onSetDrawerOpen,
   onSetModal,
   onSetInputText,
@@ -316,7 +254,7 @@ export function OperationDrawer({
   onSubmitInit,
   onSubmitPlan,
 }: OperationDrawerProps) {
-  const [activeTab, setActiveTab] = useState<"console" | "review" | "terminal" | "context">("console");
+  const [activeTab, setActiveTab] = useState<"console" | "review" | "terminal">("console");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(288);
   const [isResizing, setIsResizing] = useState(false);
@@ -382,6 +320,12 @@ export function OperationDrawer({
   const visibleLines = activeTab === "review"
     ? lines.filter((_, i) => reviewIndexes.has(i))
     : lines;
+
+  useEffect(() => {
+    if (activeTab === "review" && reviewCount === 0) {
+      setActiveTab("console");
+    }
+  }, [activeTab, reviewCount]);
 
   function clampDrawerHeight(height: number): number {
     const minHeight = 160;
@@ -464,10 +408,13 @@ export function OperationDrawer({
       {modal?.kind === "plan" && (
         <PlanTaskModal
           initialDescription={inputText}
+          lines={lines}
+          status={status}
+          onConfirm={onConfirm}
+          onPromptSubmit={onPromptSubmit}
           onCancel={() => { onSetModal(null); onSetInputText(""); }}
           onSubmit={(submission) => {
             onSetInputText("");
-            onSetModal(null);
             onSubmitPlan(submission);
           }}
         />
@@ -503,26 +450,18 @@ export function OperationDrawer({
             >
               Console
             </button>
-            <button
-              onClick={() => setActiveTab("review")}
-              className={`px-3 h-full rounded-none text-[11px] transition-colors ${
-                activeTab === "review"
-                  ? "text-zinc-100 bg-zinc-900"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
-              }`}
-            >
-              Review{reviewCount > 0 ? ` (${reviewCount})` : ""}
-            </button>
-            <button
-              onClick={() => setActiveTab("context")}
-              className={`px-3 h-full rounded-none text-[11px] transition-colors ${
-                activeTab === "context"
-                  ? "text-zinc-100 bg-zinc-900"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
-              }`}
-            >
-              Context
-            </button>
+            {reviewCount > 0 && (
+              <button
+                onClick={() => setActiveTab("review")}
+                className={`px-3 h-full rounded-none text-[11px] transition-colors ${
+                  activeTab === "review"
+                    ? "text-zinc-100 bg-zinc-900"
+                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
+                }`}
+              >
+                Review ({reviewCount})
+              </button>
+            )}
             <button
               onClick={() => setActiveTab("terminal")}
               className={`px-3 h-full rounded-none text-[11px] transition-colors flex items-center gap-1 ${
@@ -578,13 +517,7 @@ export function OperationDrawer({
           <TerminalPanel projectPath={currentProjectPath} />
         )}
 
-        {!collapsed && activeTab === "context" && (
-          <div className="flex-1 overflow-y-auto">
-            <ContextPanel activeView={activeView} state={projectState} />
-          </div>
-        )}
-
-        {!collapsed && activeTab !== "terminal" && activeTab !== "context" && (
+        {!collapsed && activeTab !== "terminal" && (
           <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-0.5">
             {visibleLines.length === 0 && (
               <p className="text-zinc-600 italic">Starting…</p>
@@ -596,6 +529,7 @@ export function OperationDrawer({
                 lineIdx={i}
                 onConfirm={onConfirm}
                 onPromptSubmit={onPromptSubmit}
+                interactivePrompts={modal?.kind !== "plan"}
               />
             ))}
             {isRunning && (
@@ -1049,9 +983,10 @@ interface LineProps {
   lineIdx: number;
   onConfirm: (id: string, idx: number, answer: boolean) => void;
   onPromptSubmit: (id: string, idx: number, text: string) => void;
+  interactivePrompts?: boolean;
 }
 
-function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps) {
+function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactivePrompts = true }: LineProps) {
   const [promptInput, setPromptInput] = useState("");
 
   switch (line.kind) {
@@ -1106,6 +1041,8 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
             <p className={`text-xs font-sans ${line.answer ? "text-emerald-400" : "text-red-400"}`}>
               → {line.answer ? "Approved" : "Declined"}
             </p>
+          ) : !interactivePrompts ? (
+            <p className="text-xs text-zinc-500 font-sans">Answer this prompt in the active modal.</p>
           ) : (
             <div className="flex gap-2">
               <button
@@ -1131,6 +1068,8 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
           <p className="text-zinc-200 font-sans">{line.question}</p>
           {line.answered ? (
             <p className="text-xs text-zinc-400 italic font-sans">→ {line.answer?.slice(0, 80)}{(line.answer?.length ?? 0) > 80 ? "…" : ""}</p>
+          ) : !interactivePrompts ? (
+            <p className="text-xs text-zinc-500 font-sans">Answer this prompt in the active modal.</p>
           ) : (
             <div className="space-y-2">
               <textarea
@@ -1168,6 +1107,10 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
 
 interface PlanTaskModalProps {
   initialDescription: string;
+  lines: OutputLine[];
+  status: OperationStatus;
+  onConfirm: (id: string, idx: number, answer: boolean) => void;
+  onPromptSubmit: (id: string, idx: number, text: string) => void;
   onSubmit: (submission: PlanModalSubmission) => void;
   onCancel: () => void;
 }
@@ -1193,7 +1136,15 @@ function detectRoleFromDescription(text: string): BaseRole {
   return "planner";
 }
 
-function PlanTaskModal({ initialDescription, onSubmit, onCancel }: PlanTaskModalProps) {
+function PlanTaskModal({
+  initialDescription,
+  lines,
+  status,
+  onConfirm,
+  onPromptSubmit,
+  onSubmit,
+  onCancel,
+}: PlanTaskModalProps) {
   const [description, setDescription] = useState(initialDescription);
   const [role, setRole] = useState<BaseRole>(detectRoleFromDescription(initialDescription));
   const [roleManuallySet, setRoleManuallySet] = useState(false);
@@ -1220,6 +1171,8 @@ function PlanTaskModal({ initialDescription, onSubmit, onCancel }: PlanTaskModal
 
   const roleAgents = agents.filter((a) => a.baseRole === role);
   const canSubmit = description.trim().length > 0;
+  const started = status === "running" || status === "done" || status === "error";
+  const showOperationLog = started || lines.length > 0;
 
   useEffect(() => {
     if (agentId && !roleAgents.some((a) => a.id === agentId)) {
@@ -1229,11 +1182,11 @@ function PlanTaskModal({ initialDescription, onSubmit, onCancel }: PlanTaskModal
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-2xl shadow-2xl">
+      <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-3xl shadow-2xl max-h-[92vh] flex flex-col">
         <div className="px-5 py-4 border-b border-zinc-800">
           <h3 className="text-sm font-semibold text-zinc-100">New Task</h3>
         </div>
-        <div className="p-5 space-y-5">
+        <div className="p-5 space-y-5 overflow-y-auto">
           <div className="space-y-1.5">
             <label className="text-xs text-zinc-500 uppercase tracking-wide">Description</label>
             <textarea
@@ -1243,7 +1196,7 @@ function PlanTaskModal({ initialDescription, onSubmit, onCancel }: PlanTaskModal
               placeholder="Describe the feature, fix, or change…"
               rows={5}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSubmit) {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSubmit && status !== "running") {
                   onSubmit({
                     feature: description.trim(),
                     role,
@@ -1331,6 +1284,30 @@ function PlanTaskModal({ initialDescription, onSubmit, onCancel }: PlanTaskModal
             </label>
           </div>
 
+          {showOperationLog && (
+            <section className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-zinc-500 uppercase tracking-wide">Run Output</p>
+                <p className="text-[11px] text-zinc-600">
+                  {status === "running" ? "Running..." : status === "done" ? "Done" : status === "error" ? "Error" : "Idle"}
+                </p>
+              </div>
+              <div className="max-h-56 overflow-y-auto border border-zinc-800 rounded-lg bg-zinc-950 p-3 font-mono text-xs space-y-0.5">
+                {lines.length === 0 && <p className="text-zinc-600 italic">Waiting for output...</p>}
+                {lines.map((line, i) => (
+                  <OutputLineView
+                    key={i}
+                    line={line}
+                    lineIdx={i}
+                    onConfirm={onConfirm}
+                    onPromptSubmit={onPromptSubmit}
+                    interactivePrompts
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           <p className="text-xs text-zinc-600">⌘ Enter to start</p>
         </div>
         <div className="px-5 py-3 border-t border-zinc-800 flex justify-end gap-2">
@@ -1346,10 +1323,10 @@ function PlanTaskModal({ initialDescription, onSubmit, onCancel }: PlanTaskModal
               requireArchitectureApproval,
               requirePlanApproval,
             })}
-            disabled={!canSubmit}
+            disabled={!canSubmit || status === "running"}
             className="px-4 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-900 rounded-md hover:bg-white disabled:opacity-40 transition-colors"
           >
-            Start
+            {status === "running" ? "Running..." : "Start"}
           </button>
         </div>
       </div>
