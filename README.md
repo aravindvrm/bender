@@ -1,115 +1,184 @@
 # Bender
 
-Bender is an AI software-factory CLI + local dashboard that plans and executes work against a project directory, with persistent state in `.bender/`.
+Bender is a local AI agent workspace for planning, implementing, and tracking software work.
 
-## Current Product Spec
+It combines a CLI and a local dashboard to analyze codebases, persist project context in `.bender/`, and execute work through custom agents, reusable skills, and MCP-connected tools.
 
-### CLI commands
+## Why Bender
 
-- `bender bend` opens the local web dashboard.
-- `bender open` and `bender review` are aliases to `bend`.
-- `bender init -d <dir>` initializes `.bender/` state for a project.
-- `bender analyze -d <dir>` analyzes an existing codebase into `.bender/` state.
-- `bender plan "<description>" -d <dir>` creates a new task plan.
-- `bender implement -d <dir>` executes the active task plan.
-- `bender status -d <dir>` prints current project status.
+Bender is built for project-aware execution, not one-off code generation.
 
-### Dashboard IA (current)
+It helps you work against a real codebase by combining:
 
-- Two-pane sidebar:
-- Left rail (global): project browser, new project, analyze, settings, git clean/dirty dot.
-- Right panel (project): logo header + `Overview`, `Tasks`, `Architecture`, `Changes`.
-- Main content area with view-specific pages.
-- Bottom drawer labeled `Console` for streamed operation output + confirmations/prompts.
+- persistent local project memory
+- task planning and implementation workflows
+- custom agents that can be assigned to tasks
+- reusable skills
+- MCP server integration for external tools and systems
+- a local dashboard for visibility, review, and control
 
-### New Project modal (current)
+The result is a workspace where AI agents can operate with more structure, more context, and better tool access.
 
-The `New Project` flow is fully multi-section:
+## Core Concepts
 
-1. Directory:
-- path input + browse explorer
-- directory inspection status (`does not exist`, `file path`, `empty dir`, `existing dir`, `already has .bender`)
-2. Description:
-- required "What are you building?" textarea
-3. Stack (optional quick-pick):
-- `Next.js SaaS`, `Express API`, `Let AI Decide`
-4. LLM setup (conditional):
-- shown when no usable API key/provider is detected
-- provider picker + inline API key field (except `ollama`)
+### Persistent Project State
 
-`/api/run/init` now accepts:
-- `path`
-- `description`
-- `template` (`nextjs-saas` | `express-api` | `auto`)
-- `llmProvider`
-- `llmApiKey`
+Bender stores structured project state under `.bender/`, including architecture, conventions, flows, decisions, contracts, tasks, and session history. This gives agents durable context across runs.
 
-### Architecture view (current)
+### Custom Agents
 
-- Tabbed architecture page: `Architecture`, `Schema`, `Flows`, `Decisions`, `Conventions`.
-- `Schema` renders an ERD from SQL via Mermaid and also shows raw SQL.
-- `Flows` can generate Mermaid user flows via `/api/run/flows`, persisted to `.bender/flows.md`.
+Bender lets you build custom agents from providers, models, skills, MCP connectors, and prompts, then save and assign them to specific tasks.
 
-### Config/runtime capabilities
+### Skills
 
-- Per-provider API key support (`anthropic`, `openai`, `google`, `groq`, `ollama`) in config + env fallback.
-- MCP server configuration in Settings, with runtime support for:
-- OpenAI provider tool wiring via AI SDK MCP tools.
-- Anthropic provider MCP server options.
-- Skills context injection from configured markdown/text paths.
+Bender can inject reusable skill context from configured markdown or text sources. Skills let you package instructions, workflows, and domain-specific guidance so agents can execute tasks consistently.
 
-### Persistent state
+### MCP Integration
 
-Bender writes project state under `.bender/`, including:
+Bender supports MCP server configuration so agents can access external tools and systems at runtime. This creates a path for integrating things like filesystem access, GitHub, databases, or other tool servers into task execution.
 
-- `brief.md`
-- `architecture.md`
-- `conventions.md`
-- `schema.sql`
-- `flows.md`
-- `config.yaml`
-- `decisions/*.md`
-- `tasks/current.md`
-- `tasks/completed/*.md`
-- `api-contracts/routes.yaml`
-- `sessions/*.md`
+## What Bender Does
 
-## Setup
+Bender helps you work against a real project directory by maintaining structured project state, including:
 
-Requirements:
+- project brief
+- architecture and conventions
+- schema and flows
+- decisions and API contracts
+- active and completed tasks
+- session history and runtime config
+
+All project state is stored locally under `.bender/`.
+
+## Core Commands
+
+- `bender bend`  
+  Open the local dashboard.
+
+- `bender open` / `bender review`  
+  Aliases for `bender bend`.
+
+- `bender init -d <dir>`  
+  Initialize `.bender/` state for a project.
+
+- `bender analyze -d <dir>`  
+  Analyze an existing codebase and generate project state.
+
+- `bender plan "<description>" -d <dir>`  
+  Create a new task plan.
+
+- `bender implement -d <dir>`  
+  Execute the active task plan.
+
+- `bender status -d <dir>`  
+  Show current project status.
+
+## Dashboard
+
+The local dashboard is organized around project execution:
+
+- **Overview** — high-level project status
+- **Tasks** — active and completed work
+- **Architecture** — architecture, schema, flows, decisions, and conventions
+- **Changes** — tracked project modifications
+- **Console** — streamed execution output, prompts, and confirmations
+
+## Project Initialization
+
+`bender init` supports a guided new-project flow with:
+
+- target directory selection and validation
+- required project description
+- optional stack quick-pick:
+  - `Next.js SaaS`
+  - `Express API`
+  - `Let AI Decide`
+- provider/API key setup when required
+
+## Architecture Support
+
+Bender can persist and render project architecture artifacts, including:
+
+- architecture documentation
+- conventions
+- SQL schema
+- Mermaid ERD generation from SQL
+- Mermaid flow generation
+- architectural decisions
+- API contracts
+
+Generated flows are persisted to `.bender/flows.md`.
+
+## Runtime and Integrations
+
+Bender supports:
+
+- per-provider API key configuration for:
+  - `anthropic`
+  - `openai`
+  - `google`
+  - `groq`
+  - `ollama`
+- environment variable fallback for provider credentials
+- MCP server configuration in Settings
+- provider-specific MCP tool wiring
+- skills context injection from configured markdown or text files
+- custom agent composition and task assignment
+
+## Project State
+
+Bender stores project state under `.bender/`, including:
+
+```text
+.bender/
+  brief.md
+  architecture.md
+  conventions.md
+  schema.sql
+  flows.md
+  config.yaml
+  decisions/
+  tasks/
+  api-contracts/
+  sessions/
+```
+
+## Installation
+
+### Requirements
 
 - Node.js `>=20`
 - npm
 
-Install + build:
+### Install and Build
 
 ```bash
 npm install
 npm run build
 ```
 
-Run dashboard from repo:
+### Run the Dashboard
 
 ```bash
 npm run bend
 ```
 
-Use `bender` as a command globally (optional):
+### Install the CLI Globally
 
 ```bash
 npm link
 bender bend
 ```
 
-## Dev Scripts
+## Development Scripts
 
-- `npm run build` – build CLI + web
-- `npm run build:cli` – build CLI only
-- `npm run build:web` – build web only
-- `npm run dev` – TypeScript watch
-- `npm run dev:web` – Vite dev server
-- `npm run bend` – build CLI and run `bender bend`
-- `npm run test` – full test harness (`build:cli` + unit + integration)
-- `npm run test:unit` – deterministic unit tests for config/state/skills/runtime
-- `npm run test:integration` – CLI integration smoke tests against built `dist/cli`
-- `npm run test:e2e:smoke` – end-to-end LLM smoke script (requires API key)
+- `npm run build` — build CLI and web
+- `npm run build:cli` — build CLI only
+- `npm run build:web` — build web only
+- `npm run dev` — TypeScript watch mode
+- `npm run dev:web` — Vite dev server
+- `npm run bend` — build CLI and run `bender bend`
+- `npm run test` — full test suite
+- `npm run test:unit` — unit tests
+- `npm run test:integration` — CLI integration smoke tests
+- `npm run test:e2e:smoke` — end-to-end LLM smoke test (requires API key)
