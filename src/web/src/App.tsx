@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useProjectState } from "./hooks/useApi";
 import { useOperation } from "./hooks/useOperation";
 import { Sidebar, type View } from "./components/Sidebar";
-import { OperationDrawer } from "./components/OperationDrawer";
+import { OperationDrawer, type InitModalSubmission } from "./components/OperationDrawer";
 import { PlanView } from "./pages/PlanView";
 import { ArchitectureView } from "./pages/ArchitectureView";
 import { BriefView } from "./pages/BriefView";
@@ -61,12 +61,12 @@ export function App() {
     }
   }
 
-  function handleSubmitModal(kind: "init" | "plan", text: string) {
-    if (kind === "init") {
-      op.startOperation("/api/run/init", { description: text });
-    } else {
-      op.startOperation("/api/run/plan", { feature: text });
-    }
+  function handleSubmitInit(submission: InitModalSubmission) {
+    op.startOperation("/api/run/init", submission);
+  }
+
+  function handleSubmitPlan(text: string) {
+    op.startOperation("/api/run/plan", { feature: text });
   }
 
   return (
@@ -147,6 +147,7 @@ export function App() {
           drawerOpen={op.drawerOpen}
           modal={op.modal}
           inputText={op.inputText}
+          currentProjectPath={state?.projectRoot ?? null}
           onSetDrawerOpen={op.setDrawerOpen}
           onSetModal={op.setModal}
           onSetInputText={op.setInputText}
@@ -154,7 +155,8 @@ export function App() {
           onPromptSubmit={op.handlePromptSubmit}
           onClear={op.clearOutput}
           onAbort={op.abort}
-          onSubmitModal={handleSubmitModal}
+          onSubmitInit={handleSubmitInit}
+          onSubmitPlan={handleSubmitPlan}
         />
       </main>
     </div>

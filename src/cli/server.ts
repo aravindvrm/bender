@@ -43,6 +43,19 @@ function getProject(): string {
   return currentProject;
 }
 
+function normalizeUserPath(input?: string): string {
+  const raw = (input ?? "").trim();
+  let targetPath = raw;
+
+  if (!targetPath || targetPath === "~") {
+    targetPath = homedir();
+  } else if (targetPath.startsWith("~/")) {
+    targetPath = join(homedir(), targetPath.slice(2));
+  }
+
+  return resolve(targetPath);
+}
+
 // ── Pending answers ──────────────────────────────────────────────────────────
 
 const pendingAnswers = new Map<string, (answer: string) => void>();
@@ -197,16 +210,8 @@ export async function startServer(initialProject?: string): Promise<void> {
 
   app.get("/api/fs/browse", async (req, res) => {
     try {
-      const queryPath = typeof req.query.path === "string" ? req.query.path.trim() : "";
-      let targetPath = queryPath;
-
-      if (!targetPath || targetPath === "~") {
-        targetPath = homedir();
-      } else if (targetPath.startsWith("~/")) {
-        targetPath = join(homedir(), targetPath.slice(2));
-      }
-
-      targetPath = resolve(targetPath);
+      const queryPath = typeof req.query.path === "string" ? req.query.path : "";
+      const targetPath = normalizeUserPath(queryPath);
 
       if (!existsSync(targetPath)) {
         res.status(400).json({ error: "Path does not exist" });
@@ -250,6 +255,116 @@ export async function startServer(initialProject?: string): Promise<void> {
         parent: dirname(targetPath) !== targetPath ? dirname(targetPath) : null,
         dirs: [...dirs, ...hiddenDirs],
         hasBender: existsSync(join(targetPath, ".bender")),
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/fs/inspect", async (req, res) => {
+    try {
+      const rawPath = typeof req.query.path === "string" ? req.query.path : "";
+      if (!rawPath.trim()) {
+        res.status(400).json({ error: "path required" });
+        return;
+      }
+
+      const targetPath = normalizeUserPath(rawPath);
+      if (!existsSync(targetPath)) {
+        res.json({
+          path: targetPath,
+          exists: false,
+          isDirectory: false,
+          empty: true,
+          hasBender: false,
+          initialized: false,
+          entryCount: 0,
+          fileCount: 0,
+          dirCount: 0,
+        });
+        return;
+      }
+
+      const targetStat = await stat(targetPath);
+      if (!targetStat.isDirectory()) {
+        res.json({
+          path: targetPath,
+          exists: true,
+          isDirectory: false,
+          empty: false,
+          hasBender: false,
+          initialized: false,
+          entryCount: 0,
+          fileCount: 0,
+          dirCount: 0,
+        });
+        return;
+      }
+
+      const entries = await readdir(targetPath, { withFileTypes: true });
+      const fileCount = entries.filter((e) => e.isFile()).length;
+      const dirCount = entries.filter((e) => e.isDirectory()).length;
+      const hasBender = existsSync(join(targetPath, ".bender"));
+
+      res.json({
+        path: targetPath,
+        exists: true,
+        isDirectory: true,
+        empty: entries.length === 0,
+        hasBender,
+        initialized: hasBender,
+        entryCount: entries.length,
+        fileCount,
+        dirCount,
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/llm/status", async (req, res) => {
+    try {
+      const rawPath = typeof req.query.path === "string" ? req.query.path : "";
+      const targetPath = rawPath.trim()
+        ? normalizeUserPath(rawPath)
+        : (currentProject ?? null);
+
+      const config = targetPath ? await readConfig(targetPath) : null;
+      const envFlags = {
+        anthropic: !!process.env.ANTHROPIC_API_KEY,
+        openai: !!process.env.OPENAI_API_KEY,
+        google: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY || !!process.env.GOOGLE_API_KEY,
+        groq: !!process.env.GROQ_API_KEY,
+        ollama: false,
+      };
+
+      const configFlags = {
+        anthropic: !!config?.providers?.anthropic?.apiKey || (config?.llm.provider === "anthropic" && !!config?.llm.apiKey),
+        openai: !!config?.providers?.openai?.apiKey || (config?.llm.provider === "openai" && !!config?.llm.apiKey),
+        google: !!config?.providers?.google?.apiKey || (config?.llm.provider === "google" && !!config?.llm.apiKey),
+        groq: !!config?.providers?.groq?.apiKey || (config?.llm.provider === "groq" && !!config?.llm.apiKey),
+        ollama: config?.llm.provider === "ollama",
+      };
+
+      const providers = {
+        anthropic: { configured: envFlags.anthropic || configFlags.anthropic },
+        openai: { configured: envFlags.openai || configFlags.openai },
+        google: { configured: envFlags.google || configFlags.google },
+        groq: { configured: envFlags.groq || configFlags.groq },
+        ollama: { configured: envFlags.ollama || configFlags.ollama },
+      };
+
+      const hasAnyKey =
+        providers.anthropic.configured
+        || providers.openai.configured
+        || providers.google.configured
+        || providers.groq.configured
+        || providers.ollama.configured;
+
+      res.json({
+        hasAnyKey,
+        activeProvider: config?.llm.provider ?? "anthropic",
+        providers,
       });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -461,9 +576,69 @@ export async function startServer(initialProject?: string): Promise<void> {
   });
 
   app.post("/api/run/init", async (req, res) => {
-    const { description } = req.body as { description?: string };
+    const {
+      description,
+      path: requestedPath,
+      template,
+      llmProvider,
+      llmApiKey,
+    } = req.body as {
+      description?: string;
+      path?: string;
+      template?: "nextjs-saas" | "express-api" | "auto";
+      llmProvider?: "anthropic" | "openai" | "google" | "groq" | "ollama";
+      llmApiKey?: string;
+    };
+
     await runOperation(res, async (adapter) => {
-      const projectRoot = getProject();
+      let projectRoot: string;
+      if (requestedPath?.trim()) {
+        projectRoot = normalizeUserPath(requestedPath);
+        if (!existsSync(projectRoot)) {
+          await mkdir(projectRoot, { recursive: true });
+        } else {
+          const rootStat = await stat(projectRoot);
+          if (!rootStat.isDirectory()) {
+            throw new Error("Selected path is not a directory.");
+          }
+        }
+      } else {
+        projectRoot = getProject();
+      }
+
+      currentProject = projectRoot;
+
+      const initialConfig = await readConfig(projectRoot);
+      let shouldWriteConfig = false;
+      const nextConfig = {
+        ...initialConfig,
+        llm: { ...initialConfig.llm },
+        providers: { ...(initialConfig.providers ?? {}) },
+        stack: { ...initialConfig.stack },
+      };
+
+      if (template && template !== "auto") {
+        nextConfig.stack.template = template;
+        if (template === "nextjs-saas") {
+          nextConfig.stack.framework = "next.js";
+        } else if (template === "express-api") {
+          nextConfig.stack.framework = "express";
+        }
+        shouldWriteConfig = true;
+      }
+
+      if (llmProvider) {
+        nextConfig.llm.provider = llmProvider;
+        if (llmApiKey?.trim() && llmProvider !== "ollama") {
+          nextConfig.providers[llmProvider] = { apiKey: llmApiKey.trim() };
+        }
+        shouldWriteConfig = true;
+      }
+
+      if (shouldWriteConfig) {
+        await writeConfig(projectRoot, nextConfig);
+      }
+
       let firstPrompt = true;
       const originalPrompt = adapter.promptMultiline.bind(adapter);
       adapter.promptMultiline = async (q: string) => {
