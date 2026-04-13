@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -7,8 +7,12 @@ import {
   FolderOpen,
   Loader2,
   X,
+  Terminal as TerminalIcon,
+  CornerDownLeft,
 } from "lucide-react";
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
+import type { View } from "./Sidebar";
+import type { ProjectState } from "../hooks/useApi";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
 type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
@@ -52,6 +56,13 @@ export interface InitModalSubmission {
   llmApiKey?: string;
 }
 
+interface TerminalEntry {
+  command: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
 interface OperationDrawerProps {
   lines: OutputLine[];
   status: OperationStatus;
@@ -59,6 +70,8 @@ interface OperationDrawerProps {
   modal: OperationModal;
   inputText: string;
   currentProjectPath: string | null;
+  activeView?: View;
+  projectState?: ProjectState | null;
   onSetDrawerOpen: (open: boolean) => void;
   onSetModal: (modal: OperationModal) => void;
   onSetInputText: (text: string) => void;
@@ -68,6 +81,190 @@ interface OperationDrawerProps {
   onAbort: () => void;
   onSubmitInit: (submission: InitModalSubmission) => void;
   onSubmitPlan: (text: string) => void;
+}
+
+// ── Terminal component ────────────────────────────────────────────────────────
+
+function TerminalPanel({ projectPath }: { projectPath: string | null }) {
+  const [input, setInput] = useState("");
+  const [history, setHistory] = useState<TerminalEntry[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [running, setRunning] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [history]);
+
+  const runCommand = useCallback(async (cmd: string) => {
+    const trimmed = cmd.trim();
+    if (!trimmed) return;
+
+    setRunning(true);
+    setCommandHistory((prev) => [trimmed, ...prev.slice(0, 49)]);
+    setHistoryIndex(-1);
+
+    try {
+      const res = await fetch("/api/terminal/exec", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: trimmed }),
+      });
+      const data = await res.json() as { stdout?: string; stderr?: string; exitCode?: number; error?: string };
+      if (data.error) {
+        setHistory((prev) => [...prev, { command: trimmed, stdout: "", stderr: data.error ?? "", exitCode: 1 }]);
+      } else {
+        setHistory((prev) => [...prev, {
+          command: trimmed,
+          stdout: data.stdout ?? "",
+          stderr: data.stderr ?? "",
+          exitCode: data.exitCode ?? 0,
+        }]);
+      }
+    } catch (err) {
+      setHistory((prev) => [...prev, { command: trimmed, stdout: "", stderr: (err as Error).message, exitCode: 1 }]);
+    } finally {
+      setRunning(false);
+    }
+  }, []);
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      const cmd = input;
+      setInput("");
+      void runCommand(cmd);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const next = Math.min(historyIndex + 1, commandHistory.length - 1);
+      setHistoryIndex(next);
+      if (commandHistory[next]) setInput(commandHistory[next]);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const next = Math.max(historyIndex - 1, -1);
+      setHistoryIndex(next);
+      setInput(next === -1 ? "" : (commandHistory[next] ?? ""));
+    }
+  }
+
+  const cwd = projectPath ? projectPath.split("/").pop() ?? projectPath : "~";
+
+  return (
+    <div className="h-full flex flex-col font-mono text-xs" onClick={() => inputRef.current?.focus()}>
+      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+        {history.length === 0 && (
+          <p className="text-zinc-600 italic">Type a command to run in the project directory.</p>
+        )}
+        {history.map((entry, i) => (
+          <div key={i}>
+            <div className="flex items-center gap-1.5 text-zinc-400">
+              <span className="text-emerald-500/70">{cwd}</span>
+              <span className="text-zinc-600">$</span>
+              <span className="text-zinc-300">{entry.command}</span>
+            </div>
+            {entry.stdout && (
+              <pre className="mt-0.5 text-zinc-300 whitespace-pre-wrap leading-relaxed">{entry.stdout}</pre>
+            )}
+            {entry.stderr && (
+              <pre className={`mt-0.5 whitespace-pre-wrap leading-relaxed ${entry.exitCode !== 0 ? "text-red-400/80" : "text-zinc-500"}`}>{entry.stderr}</pre>
+            )}
+          </div>
+        ))}
+        {running && (
+          <div className="flex items-center gap-1.5 text-zinc-500">
+            <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-pulse" />
+            <span>running…</span>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+      <div className="border-t border-zinc-800 px-3 py-2 flex items-center gap-2 shrink-0">
+        <span className="text-emerald-500/70 text-xs shrink-0">{cwd} $</span>
+        <input
+          ref={inputRef}
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={running || !projectPath}
+          placeholder={projectPath ? "command…" : "No project selected"}
+          className="flex-1 bg-transparent text-zinc-300 placeholder-zinc-600 outline-none text-xs"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          onClick={() => { const cmd = input; setInput(""); void runCommand(cmd); }}
+          disabled={running || !input.trim() || !projectPath}
+          className="text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30"
+        >
+          <CornerDownLeft className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Context panel ─────────────────────────────────────────────────────────────
+
+function ContextPanel({ activeView, state }: { activeView?: View; state?: ProjectState | null }) {
+  if (!state || !activeView) {
+    return <p className="text-zinc-600 text-xs p-4 italic">No context available.</p>;
+  }
+
+  const sections: Array<{ label: string; value: string }> = [];
+
+  if (activeView === "plan") {
+    const tasksText = state.currentTasks ?? "";
+    const taskMatches = tasksText.match(/###\s*Task\s*\d+/g) ?? [];
+    sections.push({ label: "Task count", value: String(taskMatches.length) });
+    const completed = (state.completedTasks ?? []).length;
+    if (completed > 0) sections.push({ label: "Completed", value: String(completed) });
+    if (state.brief) {
+      const firstLine = state.brief.split("\n").find((l: string) => l.trim()) ?? "";
+      sections.push({ label: "Project", value: firstLine.replace(/^#+\s*/, "").slice(0, 120) });
+    }
+  } else if (activeView === "architecture") {
+    if (state.config?.stack) {
+      sections.push({ label: "Framework", value: state.config.stack.framework });
+      sections.push({ label: "Database", value: state.config.stack.database });
+      sections.push({ label: "Auth", value: state.config.stack.auth });
+    }
+    if (state.decisions?.length) {
+      sections.push({ label: "ADRs", value: String(state.decisions.length) });
+    }
+  } else if (activeView === "git") {
+    const commits = state.git?.recentCommits ?? [];
+    if (commits.length > 0) {
+      sections.push({ label: "Last commit", value: commits[0].message.slice(0, 80) });
+    }
+    const branch = state.git?.branch;
+    if (branch) sections.push({ label: "Branch", value: branch });
+    sections.push({ label: "Status", value: state.git?.clean ? "clean" : "uncommitted changes" });
+  } else if (activeView === "brief") {
+    if (state.brief) {
+      const lines = state.brief.split("\n").filter((l: string) => l.trim()).slice(0, 5);
+      sections.push({ label: "Brief", value: lines.join(" · ").slice(0, 200) });
+    }
+  }
+
+  if (sections.length === 0) {
+    return <p className="text-zinc-600 text-xs p-4 italic">No context for this view.</p>;
+  }
+
+  return (
+    <div className="p-4 space-y-2 text-xs">
+      <p className="text-zinc-600 uppercase tracking-wider text-[10px] font-medium mb-3">
+        {activeView?.charAt(0).toUpperCase()}{activeView?.slice(1)} context
+      </p>
+      {sections.map((s) => (
+        <div key={s.label} className="flex items-start gap-3">
+          <span className="text-zinc-600 shrink-0 w-24">{s.label}</span>
+          <span className="text-zinc-400 leading-relaxed">{s.value}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 async function browseDir(path?: string): Promise<BrowseResult> {
@@ -97,6 +294,8 @@ export function OperationDrawer({
   modal,
   inputText,
   currentProjectPath,
+  activeView,
+  projectState,
   onSetDrawerOpen,
   onSetModal,
   onSetInputText,
@@ -107,7 +306,7 @@ export function OperationDrawer({
   onSubmitInit,
   onSubmitPlan,
 }: OperationDrawerProps) {
-  const [activeTab, setActiveTab] = useState<"console" | "review">("console");
+  const [activeTab, setActiveTab] = useState<"console" | "review" | "terminal" | "context">("console");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(288);
   const [isResizing, setIsResizing] = useState(false);
@@ -309,6 +508,27 @@ export function OperationDrawer({
             >
               Review{reviewCount > 0 ? ` (${reviewCount})` : ""}
             </button>
+            <button
+              onClick={() => setActiveTab("context")}
+              className={`px-3 h-full rounded-none text-[11px] transition-colors ${
+                activeTab === "context"
+                  ? "text-zinc-100 bg-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
+              }`}
+            >
+              Context
+            </button>
+            <button
+              onClick={() => setActiveTab("terminal")}
+              className={`px-3 h-full rounded-none text-[11px] transition-colors flex items-center gap-1 ${
+                activeTab === "terminal"
+                  ? "text-zinc-100 bg-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
+              }`}
+            >
+              <TerminalIcon className="h-3 w-3" />
+              Terminal
+            </button>
           </div>
 
           <div className="flex-1" />
@@ -349,7 +569,17 @@ export function OperationDrawer({
           </button>
         </div>
 
-        {!collapsed && (
+        {!collapsed && activeTab === "terminal" && (
+          <TerminalPanel projectPath={currentProjectPath} />
+        )}
+
+        {!collapsed && activeTab === "context" && (
+          <div className="flex-1 overflow-y-auto">
+            <ContextPanel activeView={activeView} state={projectState} />
+          </div>
+        )}
+
+        {!collapsed && activeTab !== "terminal" && activeTab !== "context" && (
           <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-0.5">
             {visibleLines.length === 0 && (
               <p className="text-zinc-600 italic">Starting…</p>

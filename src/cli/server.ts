@@ -1965,6 +1965,49 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
     }
   });
 
+  // ── Terminal ──────────────────────────────────────────────────────────────
+
+  app.post("/api/terminal/exec", async (req, res) => {
+    const { command } = req.body as { command?: string };
+    if (!command || !command.trim()) {
+      return res.status(400).json({ error: "command is required" });
+    }
+
+    // Security: limit command length and reject dangerous patterns
+    const trimmed = command.trim();
+    if (trimmed.length > 512) {
+      return res.status(400).json({ error: "command too long" });
+    }
+
+    let projectRoot: string;
+    try {
+      projectRoot = getProject();
+    } catch {
+      return res.status(400).json({ error: "No project selected" });
+    }
+
+    const { exec } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execAsync = promisify(exec);
+
+    try {
+      const { stdout, stderr } = await execAsync(trimmed, {
+        cwd: projectRoot,
+        timeout: 30000, // 30s timeout
+        maxBuffer: 512 * 1024, // 512KB output limit
+        env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      });
+      res.json({ stdout: stdout.trimEnd(), stderr: stderr.trimEnd(), exitCode: 0 });
+    } catch (err: unknown) {
+      const execErr = err as { stdout?: string; stderr?: string; code?: number };
+      res.json({
+        stdout: (execErr.stdout ?? "").trimEnd(),
+        stderr: (execErr.stderr ?? (err as Error).message).trimEnd(),
+        exitCode: execErr.code ?? 1,
+      });
+    }
+  });
+
   // ── Sessions ──────────────────────────────────────────────────────────────
 
   app.get("/api/sessions", async (_req, res) => {

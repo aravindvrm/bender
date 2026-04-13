@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Terminal } from "lucide-react";
 import { useProjectState } from "./hooks/useApi";
 import { useOperation } from "./hooks/useOperation";
 import { Sidebar, type View } from "./components/Sidebar";
@@ -93,6 +94,15 @@ export function App() {
                 {state.git.recentCommits[0].hash} {state.git.recentCommits[0].message.slice(0, 40)}
               </span>
             )}
+            {hasProject && (
+              <button
+                onClick={() => { op.setDrawerOpen(true); }}
+                title="Open terminal"
+                className="text-zinc-600 hover:text-zinc-400 transition-colors"
+              >
+                <Terminal className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </header>
 
@@ -159,6 +169,8 @@ export function App() {
           modal={op.modal}
           inputText={op.inputText}
           currentProjectPath={state?.projectRoot ?? null}
+          activeView={activeView}
+          projectState={state}
           onSetDrawerOpen={op.setDrawerOpen}
           onSetModal={op.setModal}
           onSetInputText={op.setInputText}
