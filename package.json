@@ -15,8 +15,12 @@
     "bend": "npm run build:cli && node dist/cli/index.js bend",
     "open": "npm run bend",
     "start": "node dist/cli/index.js",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "npm run test:harness",
+    "test:unit": "vitest run --config vitest.config.ts tests/unit",
+    "test:integration": "vitest run --config vitest.config.ts tests/integration",
+    "test:harness": "npm run build:cli && npm run test:unit && npm run test:integration",
+    "test:e2e:smoke": "node tests/e2e-smoke.mjs",
+    "test:watch": "vitest --config vitest.config.ts"
   },
   "keywords": [
     "ai",

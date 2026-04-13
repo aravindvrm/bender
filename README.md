@@ -109,4 +109,7 @@ bender bend
 - `npm run dev` – TypeScript watch
 - `npm run dev:web` – Vite dev server
 - `npm run bend` – build CLI and run `bender bend`
-- `npm run test` – run tests
+- `npm run test` – full test harness (`build:cli` + unit + integration)
+- `npm run test:unit` – deterministic unit tests for config/state/skills/runtime
+- `npm run test:integration` – CLI integration smoke tests against built `dist/cli`
+- `npm run test:e2e:smoke` – end-to-end LLM smoke script (requires API key)
