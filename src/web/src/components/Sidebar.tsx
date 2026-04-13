@@ -51,9 +51,8 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
         {/* New project */}
         <button
           onClick={() => onGlobalAction("new-project")}
-          disabled={!hasProject}
           title="New Project"
-          className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed"
+          className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
         >
           <FilePlus className="h-4 w-4" />
         </button>
