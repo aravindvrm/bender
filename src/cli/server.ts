@@ -9,20 +9,93 @@ import { spawn } from "node:child_process";
 import type { Server as HttpServer } from "node:http";
 import { simpleGit } from "simple-git";
 import { readEffectiveConfig, readGlobalConfig, writeConfig, writeGlobalConfig, type BenderConfig } from "../state/config.js";
-import { createModelSet } from "../llm/provider.js";
+import { createModelSet, getModelForTier } from "../llm/provider.js";
 import { createRoleRuntime } from "../llm/runtime.js";
 import { StateManager } from "../state/manager.js";
 import { GitOperations } from "../git/operations.js";
 import { readRegistry, addToRegistry, removeFromRegistry } from "../state/registry.js";
+import { fetchRegistry, readRegistry as readSkillsRegistry } from "../state/skills.js";
+import {
+  getAllAgents,
+  readCustomAgents,
+  writeCustomAgents,
+  readRoleSelections,
+  writeRoleSelection,
+  getEffectiveAgentForRole,
+  BUILTIN_AGENTS,
+  MAX_MCP_SERVERS_PER_AGENT,
+  MAX_PINNED_SKILLS_PER_AGENT,
+  type AgentConfig,
+  type BaseRole,
+} from "../state/agents.js";
 import { initCommand } from "./init.js";
 import { planCommand } from "./plan.js";
 import { implementCommand, implementSingleTask } from "./implement.js";
 import { analyzeCommand } from "./analyze.js";
 import { generateFlows } from "../roles/flowcharter.js";
+import { loadPrompt } from "../roles/base.js";
 import type { UIAdapter, SpinnerAdapter } from "./adapter.js";
 
 const API_PORT = 3142;
 type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
+const BASE_ROLES: BaseRole[] = ["analyzer", "architect", "planner", "implementer", "reviewer"];
+const MODEL_TIERS = ["fast", "default", "strong"] as const;
+const MAX_AGENT_NAME_CHARS = 80;
+const MAX_SYSTEM_PROMPT_ADDITION_CHARS = 4000;
+const MASKED_VALUE = "••••••••";
+
+interface CuratedMcpServerDefinition {
+  id: string;
+  name: string;
+  url: string;
+  description: string;
+}
+
+const CURATED_MCP_CONNECTORS: CuratedMcpServerDefinition[] = [
+  {
+    id: "github",
+    name: "GitHub",
+    url: "https://api.githubcopilot.com/mcp/",
+    description: "Repository management, file operations, pull requests, and issues.",
+  },
+  {
+    id: "figma",
+    name: "Figma",
+    url: "https://mcp.figma.com/mcp",
+    description: "Access Figma designs and design tokens.",
+  },
+  {
+    id: "neon",
+    name: "Neon (Postgres)",
+    url: "https://mcp.neon.tech/mcp",
+    description: "Query and manage Neon Postgres databases.",
+  },
+  {
+    id: "vercel",
+    name: "Vercel",
+    url: "https://mcp.vercel.com",
+    description: "Deploy projects, manage environments, inspect deployments.",
+  },
+];
+
+function toPromptSnippet(prompt: string, maxChars = 220): string {
+  const paragraphs = prompt
+    .split(/\n\s*\n/g)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const normalized = paragraphs
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  const preferred =
+    normalized.find((p) => /^(your job is|your role is|you check|this role)/i.test(p))
+    ?? normalized.find((p) => !/^you are the\b/i.test(p))
+    ?? normalized[0]
+    ?? "";
+
+  if (preferred.length <= maxChars) return preferred;
+  return `${preferred.slice(0, Math.max(0, maxChars - 3))}...`;
+}
 
 // ── SSE event types ──────────────────────────────────────────────────────────
 
@@ -66,6 +139,163 @@ function isLlmProvider(value: string): value is LlmProvider {
     || value === "google"
     || value === "groq"
     || value === "ollama";
+}
+
+function isBaseRole(value: string): value is BaseRole {
+  return BASE_ROLES.includes(value as BaseRole);
+}
+
+function isModelTier(value: string): value is (typeof MODEL_TIERS)[number] {
+  return MODEL_TIERS.includes(value as (typeof MODEL_TIERS)[number]);
+}
+
+function normalizePinnedSkills(
+  input: unknown,
+): { value?: string[]; error?: string } {
+  if (input === undefined) return { value: undefined };
+  if (!Array.isArray(input)) return { error: "pinnedSkills must be an array of skill names" };
+  const seen = new Set<string>();
+  const skills: string[] = [];
+  for (const item of input) {
+    if (typeof item !== "string") continue;
+    const skill = item.trim();
+    if (!skill || seen.has(skill)) continue;
+    seen.add(skill);
+    skills.push(skill);
+  }
+  if (skills.length > MAX_PINNED_SKILLS_PER_AGENT) {
+    return { error: `pinnedSkills cannot exceed ${MAX_PINNED_SKILLS_PER_AGENT} items` };
+  }
+  return { value: skills };
+}
+
+function normalizeMcpServerIds(
+  input: unknown,
+): { value?: string[]; error?: string } {
+  if (input === undefined) return { value: undefined };
+  if (!Array.isArray(input)) return { error: "mcpServerIds must be an array of connector IDs" };
+  const allowed = new Set(CURATED_MCP_CONNECTORS.map((c) => c.id));
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const item of input) {
+    if (typeof item !== "string") continue;
+    const id = item.trim();
+    if (!id || seen.has(id) || !allowed.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  if (ids.length > MAX_MCP_SERVERS_PER_AGENT) {
+    return { error: `mcpServerIds cannot exceed ${MAX_MCP_SERVERS_PER_AGENT} items` };
+  }
+  return { value: ids };
+}
+
+function normalizeSystemPromptAddition(
+  input: unknown,
+): { value?: string; error?: string } {
+  if (input === undefined) return { value: undefined };
+  if (input === null) return { value: undefined };
+  if (typeof input !== "string") {
+    return { error: "systemPromptAddition must be a string" };
+  }
+  const trimmed = input.trim();
+  if (!trimmed) return { value: undefined };
+  if (trimmed.length > MAX_SYSTEM_PROMPT_ADDITION_CHARS) {
+    return { error: `systemPromptAddition cannot exceed ${MAX_SYSTEM_PROMPT_ADDITION_CHARS} characters` };
+  }
+  return { value: trimmed };
+}
+
+function normalizeAgentCreatePayload(
+  input: Partial<AgentConfig>,
+): { value?: AgentConfig; error?: string } {
+  const id = input.id?.trim();
+  const name = input.name?.trim();
+  const baseRole = input.baseRole;
+  if (!id || !name || !baseRole) {
+    return { error: "Missing required fields: id, name, baseRole" };
+  }
+  if (name.length > MAX_AGENT_NAME_CHARS) {
+    return { error: `name cannot exceed ${MAX_AGENT_NAME_CHARS} characters` };
+  }
+  if (!isBaseRole(baseRole)) {
+    return { error: `Invalid baseRole: ${baseRole}` };
+  }
+  const modelTierRaw = input.modelTier ?? "default";
+  if (!isModelTier(modelTierRaw)) {
+    return { error: `Invalid modelTier: ${String(modelTierRaw)}` };
+  }
+  const normalizedSkills = normalizePinnedSkills(input.pinnedSkills ?? []);
+  if (normalizedSkills.error) return { error: normalizedSkills.error };
+  const normalizedMcpServers = normalizeMcpServerIds(input.mcpServerIds ?? []);
+  if (normalizedMcpServers.error) return { error: normalizedMcpServers.error };
+  const normalizedPrompt = normalizeSystemPromptAddition(input.systemPromptAddition);
+  if (normalizedPrompt.error) return { error: normalizedPrompt.error };
+
+  return {
+    value: {
+      id,
+      name,
+      baseRole,
+      modelTier: modelTierRaw,
+      pinnedSkills: normalizedSkills.value ?? [],
+      mcpServerIds: normalizedMcpServers.value ?? [],
+      systemPromptAddition: normalizedPrompt.value,
+      isBuiltin: false,
+    },
+  };
+}
+
+function normalizeAgentPatchPayload(
+  current: AgentConfig,
+  input: Partial<AgentConfig>,
+): { value?: AgentConfig; error?: string } {
+  const next: AgentConfig = { ...current, isBuiltin: false };
+
+  if (input.name !== undefined) {
+    if (typeof input.name !== "string" || !input.name.trim()) {
+      return { error: "name must be a non-empty string" };
+    }
+    const trimmed = input.name.trim();
+    if (trimmed.length > MAX_AGENT_NAME_CHARS) {
+      return { error: `name cannot exceed ${MAX_AGENT_NAME_CHARS} characters` };
+    }
+    next.name = trimmed;
+  }
+
+  if (input.baseRole !== undefined) {
+    if (!isBaseRole(input.baseRole)) {
+      return { error: `Invalid baseRole: ${input.baseRole}` };
+    }
+    next.baseRole = input.baseRole;
+  }
+
+  if (input.modelTier !== undefined) {
+    if (!isModelTier(input.modelTier)) {
+      return { error: `Invalid modelTier: ${String(input.modelTier)}` };
+    }
+    next.modelTier = input.modelTier;
+  }
+
+  if (input.pinnedSkills !== undefined) {
+    const normalizedSkills = normalizePinnedSkills(input.pinnedSkills);
+    if (normalizedSkills.error) return { error: normalizedSkills.error };
+    next.pinnedSkills = normalizedSkills.value ?? [];
+  }
+
+  if (input.mcpServerIds !== undefined) {
+    const normalizedMcpServers = normalizeMcpServerIds(input.mcpServerIds);
+    if (normalizedMcpServers.error) return { error: normalizedMcpServers.error };
+    next.mcpServerIds = normalizedMcpServers.value ?? [];
+  }
+
+  if (input.systemPromptAddition !== undefined) {
+    const normalizedPrompt = normalizeSystemPromptAddition(input.systemPromptAddition);
+    if (normalizedPrompt.error) return { error: normalizedPrompt.error };
+    next.systemPromptAddition = normalizedPrompt.value;
+  }
+
+  return { value: next };
 }
 
 function resolveProviderApiKey(provider: LlmProvider, config: BenderConfig | null): string | undefined {
@@ -1136,6 +1366,7 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
       const decisions = await state.readDecisions();
       const completedTasks = await state.readCompletedTasks();
       const flows = await state.readFlows();
+      const taskAgents = await state.readTaskAgents();
 
       let git = null;
       try {
@@ -1158,6 +1389,7 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
         decisions,
         currentTasks: context.currentTasks,
         completedTasks,
+        taskAgents,
         apiContracts: context.apiContracts,
         flows,
         config: {
@@ -1281,6 +1513,90 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
 
       await writeGlobalConfig(nextConfig);
       res.json({ ok: true, scope: "global" });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── MCP Connectors (curated) ─────────────────────────────────────────────
+
+  app.get("/api/mcp/connectors", async (_req, res) => {
+    try {
+      const config = await readGlobalConfig();
+      const servers = config.mcp?.servers ?? [];
+      const connectors = CURATED_MCP_CONNECTORS.map((def) => {
+        const existing = servers.find((s) => s.id === def.id);
+        const token = existing?.authorizationToken;
+        return {
+          ...def,
+          enabled: existing?.enabled ?? false,
+          configured: !!token,
+          authorizationToken: token ? MASKED_VALUE : "",
+        };
+      });
+      res.json({ connectors });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/mcp/connectors/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const def = CURATED_MCP_CONNECTORS.find((c) => c.id === id);
+      if (!def) {
+        return res.status(400).json({ error: `Unknown connector: ${id}` });
+      }
+
+      const body = req.body as { enabled?: boolean; authorizationToken?: string };
+      const current = await readGlobalConfig();
+      const servers = [...(current.mcp?.servers ?? [])];
+      const idx = servers.findIndex((s) => s.id === id);
+      const existing = idx >= 0 ? servers[idx] : undefined;
+
+      const nextToken = (() => {
+        if (typeof body.authorizationToken !== "string") return existing?.authorizationToken;
+        const trimmed = body.authorizationToken.trim();
+        if (!trimmed || trimmed === MASKED_VALUE) return existing?.authorizationToken;
+        return trimmed;
+      })();
+
+      const nextEnabled = typeof body.enabled === "boolean" ? body.enabled : (existing?.enabled ?? false);
+      const nextServer = {
+        ...(existing ?? {}),
+        id: def.id,
+        name: def.name,
+        url: def.url,
+        description: def.description,
+        enabled: nextEnabled,
+        authorizationToken: nextToken,
+      };
+
+      if (idx >= 0) {
+        servers[idx] = nextServer;
+      } else {
+        servers.push(nextServer);
+      }
+
+      const nextConfig = {
+        ...current,
+        mcp: {
+          ...current.mcp,
+          enabled: (current.mcp?.enabled ?? false) || nextEnabled,
+          servers,
+        },
+      };
+
+      await writeGlobalConfig(nextConfig);
+
+      res.json({
+        connector: {
+          ...def,
+          enabled: nextEnabled,
+          configured: !!nextToken,
+          authorizationToken: nextToken ? MASKED_VALUE : "",
+        },
+      });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -1636,6 +1952,68 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
     }
   });
 
+  // ── Task Agent Assignments ────────────────────────────────────────────────
+
+  app.get("/api/tasks/agents", async (_req, res) => {
+    if (!currentProject) {
+      res.json({ assignments: {} });
+      return;
+    }
+    try {
+      const state = new StateManager(currentProject);
+      if (!state.isInitialized()) {
+        res.json({ assignments: {} });
+        return;
+      }
+      const assignments = await state.readTaskAgents();
+      res.json({ assignments });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/tasks/agents/:taskId", async (req, res) => {
+    if (!currentProject) {
+      res.status(400).json({ error: "No project selected" });
+      return;
+    }
+    try {
+      const { taskId } = req.params;
+      const { agentId } = req.body as { agentId?: string | null };
+      const normalizedAgentId = typeof agentId === "string" ? agentId.trim() : null;
+      const normalizedTaskId = taskId.trim();
+      if (!normalizedTaskId || !/^\d+$/.test(normalizedTaskId)) {
+        res.status(400).json({ error: "taskId must be numeric" });
+        return;
+      }
+
+      if (normalizedAgentId) {
+        const allAgents = await getAllAgents();
+        const selected = allAgents.find((a) => a.id === normalizedAgentId);
+        if (!selected) {
+          res.status(400).json({ error: `Unknown agent: ${normalizedAgentId}` });
+          return;
+        }
+        if (selected.baseRole !== "implementer") {
+          res.status(400).json({ error: `Agent ${normalizedAgentId} is not an implementer agent` });
+          return;
+        }
+      }
+
+      const state = new StateManager(currentProject);
+      if (!state.isInitialized()) {
+        res.status(400).json({ error: "Project is not initialized" });
+        return;
+      }
+
+      await state.setTaskAgent(normalizedTaskId, normalizedAgentId || null);
+      const assignments = await state.readTaskAgents();
+      res.json({ ok: true, assignments });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Run operations (SSE) ──────────────────────────────────────────────────
 
   app.post("/api/run/answer", (req, res) => {
@@ -1751,21 +2129,35 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
 
       let models;
       let runtime;
+      let architectTier: "fast" | "default" | "strong" = "default";
+      let architectAgentName = "Architect";
       try {
         const config = await readEffectiveConfig(projectRoot);
         models = createModelSet(config);
-        runtime = await createRoleRuntime(projectRoot, config, {
-          info: (msg) => adapter.info(msg),
-          warn: (msg) => adapter.warn(msg),
-        });
+        const architectAgent = await getEffectiveAgentForRole("architect");
+        architectTier = architectAgent.modelTier;
+        architectAgentName = architectAgent.name;
+        runtime = await createRoleRuntime(
+          projectRoot,
+          config,
+          {
+            role: "architect",
+            pinnedSkills: architectAgent.pinnedSkills,
+            mcpServerIds: architectAgent.mcpServerIds,
+            modelTier: architectAgent.modelTier,
+          },
+          context.architecture ?? undefined,
+          { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+        );
       } catch (err: unknown) {
         throw new Error(`Failed to initialize LLM provider: ${(err as Error).message}`);
       }
 
       try {
         adapter.subheader("Generating user flow diagrams...");
+        adapter.info(`Using agent: ${architectAgentName} (${architectTier})`);
         const flows = await generateFlows(
-          models.default,
+          getModelForTier(models, architectTier),
           context.brief,
           context.architecture,
           context.schema,
@@ -1779,6 +2171,165 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
         await runtime?.close();
       }
     });
+  });
+
+  // ── Skills registry ───────────────────────────────────────────────────────
+
+  app.get("/api/skills/registry", async (_req, res) => {
+    try {
+      const registry = await readSkillsRegistry();
+      if (!registry) {
+        return res.json({ skills: [], fetchedAt: null, needsRefresh: true });
+      }
+      res.json({ skills: registry.skills, fetchedAt: registry.fetchedAt, needsRefresh: false });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/skills/refresh", async (_req, res) => {
+    try {
+      const registry = await fetchRegistry(true);
+      res.json({ skills: registry.skills, fetchedAt: registry.fetchedAt });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Agents ────────────────────────────────────────────────────────────────
+
+  app.get("/api/agents", async (_req, res) => {
+    try {
+      const agents = await getAllAgents();
+      res.json({ agents });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/agents/selection", async (_req, res) => {
+    try {
+      const selectedByRole = await readRoleSelections();
+      res.json({ selectedByRole });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/agents/selection/:role", async (req, res) => {
+    try {
+      const role = req.params.role;
+      if (!isBaseRole(role)) {
+        return res.status(400).json({ error: `Invalid role: ${role}` });
+      }
+
+      const { agentId } = req.body as { agentId?: string | null };
+      const normalizedAgentId = typeof agentId === "string" ? agentId.trim() : "";
+
+      if (normalizedAgentId) {
+        const allAgents = await getAllAgents();
+        const agent = allAgents.find((a) => a.id === normalizedAgentId);
+        if (!agent) {
+          return res.status(400).json({ error: `Unknown agent: ${normalizedAgentId}` });
+        }
+        if (agent.baseRole !== role) {
+          return res.status(400).json({ error: `Agent ${normalizedAgentId} cannot be assigned to role ${role}` });
+        }
+      }
+
+      await writeRoleSelection(role, normalizedAgentId || null);
+      const selectedByRole = await readRoleSelections();
+      res.json({ ok: true, selectedByRole });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/agents/prompt-snippets", async (_req, res) => {
+    try {
+      const snippets: Partial<Record<BaseRole, string>> = {};
+      for (const role of BASE_ROLES) {
+        try {
+          const prompt = await loadPrompt(role);
+          snippets[role] = toPromptSnippet(prompt);
+        } catch {
+          // Skip missing prompt for this role; frontend will show fallback.
+        }
+      }
+      res.json({ snippets });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/agents", async (req, res) => {
+    try {
+      const normalized = normalizeAgentCreatePayload(req.body as Partial<AgentConfig>);
+      if (normalized.error || !normalized.value) {
+        return res.status(400).json({ error: normalized.error ?? "Invalid agent payload" });
+      }
+      const agent = normalized.value;
+      if (BUILTIN_AGENTS.some((a) => a.id === agent.id)) {
+        return res.status(400).json({ error: "Cannot override a builtin agent ID" });
+      }
+      const custom = await readCustomAgents();
+      const existing = custom.findIndex((a) => a.id === agent.id);
+      if (existing >= 0) {
+        custom[existing] = agent;
+      } else {
+        custom.push(agent);
+      }
+      await writeCustomAgents(custom);
+      res.json({ agent });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/agents/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (BUILTIN_AGENTS.some((a) => a.id === id)) {
+        return res.status(400).json({ error: "Cannot edit builtin agents" });
+      }
+      const patch = req.body as Partial<AgentConfig>;
+      const custom = await readCustomAgents();
+      const idx = custom.findIndex((a) => a.id === id);
+      if (idx < 0) return res.status(404).json({ error: "Agent not found" });
+      const normalized = normalizeAgentPatchPayload(custom[idx], patch);
+      if (normalized.error || !normalized.value) {
+        return res.status(400).json({ error: normalized.error ?? "Invalid agent payload" });
+      }
+      custom[idx] = { ...normalized.value, id, isBuiltin: false };
+      await writeCustomAgents(custom);
+      res.json({ agent: custom[idx] });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/agents/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (BUILTIN_AGENTS.some((a) => a.id === id)) {
+        return res.status(400).json({ error: "Cannot delete builtin agents" });
+      }
+      const custom = await readCustomAgents();
+      const filtered = custom.filter((a) => a.id !== id);
+      if (filtered.length === custom.length) {
+        return res.status(404).json({ error: "Agent not found" });
+      }
+      await writeCustomAgents(filtered);
+      const selectedByRole = await readRoleSelections();
+      for (const role of BASE_ROLES) {
+        if (selectedByRole[role] === id) {
+          await writeRoleSelection(role, null);
+        }
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // ── SPA fallback ──────────────────────────────────────────────────────────

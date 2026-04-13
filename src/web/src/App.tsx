@@ -8,12 +8,14 @@ import { ArchitectureView } from "./pages/ArchitectureView";
 import { BriefView } from "./pages/BriefView";
 import { GitView } from "./pages/ChangesView";
 import { SettingsView } from "./pages/SettingsView";
+import { AgentsView } from "./pages/AgentsView";
 
 const VIEW_LABELS: Record<View, string> = {
   plan: "Tasks",
   architecture: "Architecture",
   brief: "Overview",
   git: "Git",
+  agents: "Agents",
   settings: "Settings",
 };
 
@@ -49,8 +51,9 @@ export function App() {
 
   const hasProject = !!state?.projectRoot;
   const isInitialized = state?.initialized ?? false;
-  const needsProject = !hasProject && activeView !== "settings";
-  const needsInit = hasProject && !isInitialized && activeView !== "settings";
+  const allowsNoProject = activeView === "settings" || activeView === "agents";
+  const needsProject = !hasProject && !allowsNoProject;
+  const needsInit = hasProject && !isInitialized && !allowsNoProject;
 
   function handleGlobalAction(action: "new-project" | "analyze") {
     if (action === "new-project") {
@@ -142,6 +145,7 @@ export function App() {
               )}
               {activeView === "architecture" && state && <ArchitectureView state={state} />}
               {activeView === "git" && state && <GitView state={state} onStateChange={refresh} />}
+              {activeView === "agents" && <AgentsView />}
               {activeView === "settings" && <SettingsView />}
             </div>
           )}

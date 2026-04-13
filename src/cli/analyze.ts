@@ -1,10 +1,12 @@
 import { readEffectiveConfig, writeConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { createModelSet } from "../llm/provider.js";
+import { getModelForTier } from "../llm/provider.js";
 import { scanCodebase, analyzeCodebase, parseAnalysisOutput } from "../roles/analyzer.js";
 import { GitOperations } from "../git/operations.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
+import { getEffectiveAgentForRole } from "../state/agents.js";
 
 export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header("Bender Analyze — Existing Project");
@@ -56,12 +58,21 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
   adapter.subheader("Step 2: Analyzing");
   adapter.info("Generating project brief and architecture from existing code...\n");
 
+  const analyzerAgent = await getEffectiveAgentForRole("analyzer");
   let runtime: RoleRuntime;
   try {
-    runtime = await createRoleRuntime(projectRoot, config, {
-      info: (msg) => adapter.info(msg),
-      warn: (msg) => adapter.warn(msg),
-    });
+    runtime = await createRoleRuntime(
+      projectRoot,
+      config,
+      {
+        role: "analyzer",
+        pinnedSkills: analyzerAgent.pinnedSkills,
+        mcpServerIds: analyzerAgent.mcpServerIds,
+        modelTier: analyzerAgent.modelTier,
+      },
+      undefined,
+      { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+    );
   } catch (err: unknown) {
     adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
     adapter.cleanup();
@@ -71,8 +82,9 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
   // Use the strong model — analysis is a one-shot expensive operation
   let rawOutput: string;
   try {
+    adapter.info(`Using agent: ${analyzerAgent.name} (${analyzerAgent.modelTier})`);
     rawOutput = await analyzeCodebase(
-      models.strong,
+      getModelForTier(models, analyzerAgent.modelTier),
       projectRoot,
       summary,
       adapter.streamWriter(),

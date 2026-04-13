@@ -137,6 +137,39 @@ export class StateManager {
     return tasks;
   }
 
+  // --- Task Agent Assignments ---
+
+  async readTaskAgents(): Promise<Record<string, string>> {
+    const raw = await this.readFileOrNull("tasks/agents.json");
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const result: Record<string, string> = {};
+      for (const [taskId, agentId] of Object.entries(parsed)) {
+        if (typeof taskId === "string" && typeof agentId === "string" && taskId.trim() && agentId.trim()) {
+          result[taskId] = agentId;
+        }
+      }
+      return result;
+    } catch {
+      return {};
+    }
+  }
+
+  async writeTaskAgents(assignments: Record<string, string>): Promise<void> {
+    await this.writeStateFile("tasks/agents.json", JSON.stringify(assignments, null, 2));
+  }
+
+  async setTaskAgent(taskId: string, agentId: string | null): Promise<void> {
+    const current = await this.readTaskAgents();
+    if (!agentId) {
+      delete current[taskId];
+    } else {
+      current[taskId] = agentId;
+    }
+    await this.writeTaskAgents(current);
+  }
+
   // --- Sessions ---
 
   async writeSession(operation: string, content: string): Promise<void> {

@@ -3,13 +3,14 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readEffectiveConfig, writeConfig, type BenderConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
-import { createModelSet, getModelForRole } from "../llm/provider.js";
+import { createModelSet, getModelForTier } from "../llm/provider.js";
 import { generateClarifyingQuestions, generateBrief } from "../roles/clarifier.js";
 import { generateArchitecture } from "../roles/architect.js";
 import { generateInitialPlan } from "../roles/planner.js";
 import { GitOperations } from "../git/operations.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
+import { getEffectiveAgentForRole } from "../state/agents.js";
 
 export async function initCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header("Bender Init — New Project Setup");
@@ -57,13 +58,25 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
     return;
   }
 
-  // Step 2: Clarification
-  let runtime: RoleRuntime;
+  const plannerAgent = await getEffectiveAgentForRole("planner");
+  const architectAgent = await getEffectiveAgentForRole("architect");
+
+  // Step 2, 3, 5 use planner runtime
+  let plannerRuntime: RoleRuntime;
   try {
-    runtime = await createRoleRuntime(projectRoot, config, {
-      info: (msg) => adapter.info(msg),
-      warn: (msg) => adapter.warn(msg),
-    });
+    plannerRuntime = await createRoleRuntime(
+      projectRoot,
+      config,
+      {
+        role: "planner",
+        taskDescription: description,
+        pinnedSkills: plannerAgent.pinnedSkills,
+        mcpServerIds: plannerAgent.mcpServerIds,
+        modelTier: plannerAgent.modelTier,
+      },
+      undefined,
+      { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+    );
   } catch (err: unknown) {
     adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
     adapter.cleanup();
@@ -73,14 +86,15 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
   try {
     adapter.subheader("Step 2: Clarification");
     adapter.info("Generating clarifying questions...\n");
+    adapter.info(`Using planner agent: ${plannerAgent.name} (${plannerAgent.modelTier})`);
 
-    const clarifierModel = getModelForRole(models, "clarifier");
+    const clarifierModel = getModelForTier(models, plannerAgent.modelTier);
     const questions = await generateClarifyingQuestions(
       clarifierModel,
       description,
       null,
       adapter.streamWriter(),
-      runtime,
+      plannerRuntime,
     );
 
     const answers = await adapter.promptMultiline("Answer the questions above (or leave blank for defaults):");
@@ -95,7 +109,7 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
     const spin = adapter.spinner("Generating product brief...");
     spin.start();
 
-    const brief = await generateBrief(clarifierModel, description, clarificationQA, null, undefined, runtime);
+    const brief = await generateBrief(clarifierModel, description, clarificationQA, null, undefined, plannerRuntime);
     spin.succeed("Brief generated");
 
     adapter.info(brief);
@@ -114,16 +128,43 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
     // Step 4: Generate architecture
     adapter.subheader("Step 4: Architecture");
     adapter.info("Generating architecture document...\n");
+    adapter.info(`Using architect agent: ${architectAgent.name} (${architectAgent.modelTier})`);
 
-    const architectModel = getModelForRole(models, "architect");
-    const architecture = await generateArchitecture(
-      architectModel,
-      brief,
-      config,
-      null,
-      adapter.streamWriter(),
-      runtime,
-    );
+    const architectModel = getModelForTier(models, architectAgent.modelTier);
+    let architectureRuntime: RoleRuntime;
+    try {
+      architectureRuntime = await createRoleRuntime(
+        projectRoot,
+        config,
+        {
+          role: "architect",
+          taskDescription: brief,
+          pinnedSkills: architectAgent.pinnedSkills,
+          mcpServerIds: architectAgent.mcpServerIds,
+          modelTier: architectAgent.modelTier,
+        },
+        undefined,
+        { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+      );
+    } catch (err: unknown) {
+      adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
+      adapter.cleanup();
+      return;
+    }
+
+    let architecture = "";
+    try {
+      architecture = await generateArchitecture(
+        architectModel,
+        brief,
+        config,
+        null,
+        adapter.streamWriter(),
+        architectureRuntime,
+      );
+    } finally {
+      await architectureRuntime.close();
+    }
 
     const archApproved = await adapter.confirm("Approve this architecture?");
     if (!archApproved) {
@@ -152,8 +193,8 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
     adapter.subheader("Step 5: Task Plan");
     adapter.info("Generating implementation plan...\n");
 
-    const plannerModel = getModelForRole(models, "planner");
-    const plan = await generateInitialPlan(plannerModel, brief, architecture, adapter.streamWriter(), runtime);
+    const plannerModel = getModelForTier(models, plannerAgent.modelTier);
+    const plan = await generateInitialPlan(plannerModel, brief, architecture, adapter.streamWriter(), plannerRuntime);
 
     const planApproved = await adapter.confirm("Approve this task plan?");
     if (!planApproved) {
@@ -185,6 +226,6 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
     adapter.info("Next step: run `bender implement` to start executing the task plan.");
     adapter.cleanup();
   } finally {
-    await runtime.close();
+    await plannerRuntime.close();
   }
 }

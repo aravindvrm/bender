@@ -107,6 +107,7 @@ export function OperationDrawer({
   onSubmitInit,
   onSubmitPlan,
 }: OperationDrawerProps) {
+  const [activeTab, setActiveTab] = useState<"console" | "review">("console");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(288);
   const [isResizing, setIsResizing] = useState(false);
@@ -114,6 +115,64 @@ export function OperationDrawer({
   const resizeStartYRef = useRef(0);
   const resizeStartHeightRef = useRef(288);
   const isRunning = status === "running";
+
+  function lineText(line: OutputLine): string {
+    if (line.kind === "header" || line.kind === "subheader" || line.kind === "stream") return line.text;
+    if (line.kind === "output") return line.text;
+    if (line.kind === "spinner") return line.text;
+    if (line.kind === "error") return line.message;
+    if (line.kind === "confirm") return line.question;
+    if (line.kind === "prompt") return line.question;
+    if (line.kind === "done") return line.success ? "done" : "failed";
+    if (line.kind === "files") return line.ops.map((op) => `${op.action} ${op.path}`).join(" ");
+    return "";
+  }
+
+  function collectReviewLineIndexes(allLines: OutputLine[]): Set<number> {
+    const indexes = new Set<number>();
+    let inReviewSection = false;
+
+    for (let i = 0; i < allLines.length; i += 1) {
+      const line = allLines[i];
+
+      if (line.kind === "subheader") {
+        if (line.text.trim().toLowerCase() === "reviewer gate") {
+          inReviewSection = true;
+          indexes.add(i);
+          continue;
+        }
+        if (inReviewSection) {
+          inReviewSection = false;
+        }
+      }
+
+      if (line.kind === "header" && inReviewSection) {
+        inReviewSection = false;
+      }
+
+      const text = lineText(line).toLowerCase();
+      const looksReviewerSpecific =
+        text.includes("reviewer status")
+        || text.includes("using reviewer agent")
+        || text.includes("reviewer checks")
+        || text.includes("reviewer returned")
+        || text.includes("reviewer provided")
+        || text.includes("reviewer observations")
+        || text.includes("reviewer found");
+
+      if (inReviewSection || looksReviewerSpecific) {
+        indexes.add(i);
+      }
+    }
+
+    return indexes;
+  }
+
+  const reviewIndexes = collectReviewLineIndexes(lines);
+  const reviewCount = reviewIndexes.size;
+  const visibleLines = activeTab === "review"
+    ? lines.filter((_, i) => reviewIndexes.has(i))
+    : lines;
 
   function clampDrawerHeight(height: number): number {
     const minHeight = 160;
@@ -135,7 +194,7 @@ export function OperationDrawer({
     if (!collapsed) {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [lines, collapsed]);
+  }, [visibleLines, collapsed]);
 
   useEffect(() => {
     if (status === "running") setCollapsed(false);
@@ -171,7 +230,7 @@ export function OperationDrawer({
   const statusLabel =
     status === "running" ? "Running…" :
     status === "done" ? "Done" :
-    status === "error" ? "Error" : "Console";
+    status === "error" ? "Error" : "";
 
   const statusColor =
     status === "running" ? "text-zinc-400" :
@@ -225,7 +284,34 @@ export function OperationDrawer({
           {isRunning && (
             <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-pulse shrink-0" />
           )}
-          <span className={`text-xs font-medium ${statusColor} flex-1`}>{statusLabel}</span>
+          {statusLabel && (
+            <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
+          )}
+
+          <div className="ml-2 self-stretch flex items-stretch border-l border-r border-zinc-800/60">
+            <button
+              onClick={() => setActiveTab("console")}
+              className={`px-3 h-full rounded-none text-[11px] transition-colors ${
+                activeTab === "console"
+                  ? "text-zinc-100 bg-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
+              }`}
+            >
+              Console
+            </button>
+            <button
+              onClick={() => setActiveTab("review")}
+              className={`px-3 h-full rounded-none text-[11px] transition-colors ${
+                activeTab === "review"
+                  ? "text-zinc-100 bg-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
+              }`}
+            >
+              Review{reviewCount > 0 ? ` (${reviewCount})` : ""}
+            </button>
+          </div>
+
+          <div className="flex-1" />
 
           {isRunning && (
             <button
@@ -265,10 +351,10 @@ export function OperationDrawer({
 
         {!collapsed && (
           <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-0.5">
-            {lines.length === 0 && (
+            {visibleLines.length === 0 && (
               <p className="text-zinc-600 italic">Starting…</p>
             )}
-            {lines.map((line, i) => (
+            {visibleLines.map((line, i) => (
               <OutputLineView
                 key={i}
                 line={line}

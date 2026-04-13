@@ -8,10 +8,11 @@ import {
   MonitorCog,
   ScanEye,
   Settings,
+  Bot,
   type LucideIcon,
 } from "lucide-react";
 
-export type View = "plan" | "architecture" | "brief" | "git" | "settings";
+export type View = "plan" | "architecture" | "brief" | "git" | "agents" | "settings";
 
 interface SidebarProps {
   activeView: View;
@@ -23,6 +24,7 @@ interface SidebarProps {
 
 const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "brief", label: "Overview", icon: FileText },
+  { id: "agents", label: "Agents", icon: Bot },
   { id: "plan", label: "Tasks", icon: MonitorCog },
   { id: "architecture", label: "Architecture", icon: FolderTree },
   { id: "git", label: "Git", icon: GitCompareArrows },
@@ -95,7 +97,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
         </div>
 
         {/* Project nav */}
-        <nav className="flex-1 px-2 py-3 space-y-0.5">
+        <nav className="flex-1 py-3">
           {projectNav.map((item) => {
             const Icon = item.icon;
             const isActive = activeView === item.id;
@@ -110,7 +112,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
               <button
                 key={item.id}
                 onClick={() => onViewChange(item.id)}
-                className={`w-full flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
+                className={`w-full flex items-center gap-2.5 rounded-none px-4 py-2 text-sm transition-colors ${
                   isActive
                     ? "bg-zinc-800/80 text-zinc-100"
                     : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"

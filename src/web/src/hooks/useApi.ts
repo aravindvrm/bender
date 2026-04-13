@@ -12,6 +12,7 @@ export interface ProjectState {
   decisions: { name: string; content: string }[];
   currentTasks: string | null;
   completedTasks: { name: string; content: string }[];
+  taskAgents?: Record<string, string>;
   apiContracts: string | null;
   flows: string | null;
   config: {

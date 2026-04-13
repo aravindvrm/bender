@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ProjectState } from "../hooks/useApi";
 import { Play, Sparkles, Search, ChevronDown, Lock } from "lucide-react";
 
@@ -16,6 +16,14 @@ interface ParsedTask {
   files: string[];
   dependencies: string;
   criteria: string;
+}
+
+interface AgentOption {
+  id: string;
+  name: string;
+  baseRole: string;
+  modelTier: "fast" | "default" | "strong";
+  isBuiltin?: boolean;
 }
 
 function parseTasks(markdown: string): ParsedTask[] {
@@ -70,6 +78,24 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [taskAgents, setTaskAgents] = useState<Record<string, string>>(state.taskAgents ?? {});
+  const [assigningTaskId, setAssigningTaskId] = useState<number | null>(null);
+  const [assignError, setAssignError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTaskAgents(state.taskAgents ?? {});
+  }, [state.taskAgents]);
+
+  useEffect(() => {
+    fetch("/api/agents")
+      .then((r) => r.json())
+      .then((data) => {
+        const all = (data.agents ?? []) as AgentOption[];
+        setAgents(all.filter((agent) => agent.baseRole === "implementer"));
+      })
+      .catch(() => {});
+  }, []);
 
   if (!state.currentTasks) {
     return (
@@ -97,6 +123,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
     ...task,
     completed: isTaskCompleted(task.id, state.completedTasks),
     runStatus: getTaskRunStatus(task, state.completedTasks),
+    assignedAgentId: taskAgents[String(task.id)] ?? "",
   }));
 
   const filtered = tasksWithStatus.filter((task) => {
@@ -111,6 +138,28 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
 
   const completedCount = tasksWithStatus.filter((t) => t.completed).length;
   const progress = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
+
+  async function assignAgent(taskId: number, agentId: string) {
+    const previous = taskAgents[String(taskId)] ?? "";
+    setAssignError(null);
+    setAssigningTaskId(taskId);
+    setTaskAgents((prev) => ({ ...prev, [String(taskId)]: agentId }));
+    try {
+      const res = await fetch(`/api/tasks/agents/${taskId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId: agentId || null }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to assign agent");
+      setTaskAgents(body.assignments ?? {});
+    } catch (err) {
+      setTaskAgents((prev) => ({ ...prev, [String(taskId)]: previous }));
+      setAssignError((err as Error).message);
+    } finally {
+      setAssigningTaskId(null);
+    }
+  }
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
@@ -167,6 +216,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
           />
         </div>
       </div>
+      {assignError && <p className="text-xs text-red-400">{assignError}</p>}
 
       {/* Table */}
       <div className="border border-zinc-800 rounded-xl overflow-hidden">
@@ -186,10 +236,13 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
               key={task.id}
               task={task}
               allTasks={tasksWithStatus}
+              agents={agents}
+              assigning={assigningTaskId === task.id}
               isLast={idx === filtered.length - 1}
               expanded={expandedId === task.id}
               onToggleExpand={() => setExpandedId(expandedId === task.id ? null : task.id)}
               onRun={() => onRunTask(task.id)}
+              onAssignAgent={(agentId) => void assignAgent(task.id, agentId)}
             />
           ))
         )}
@@ -207,15 +260,18 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask }: PlanViewP
 }
 
 interface TaskRowProps {
-  task: ParsedTask & { completed: boolean; runStatus: TaskRunStatus };
+  task: ParsedTask & { completed: boolean; runStatus: TaskRunStatus; assignedAgentId: string };
   allTasks: (ParsedTask & { completed: boolean })[];
+  agents: AgentOption[];
+  assigning: boolean;
   isLast: boolean;
   expanded: boolean;
   onToggleExpand: () => void;
   onRun: () => void;
+  onAssignAgent: (agentId: string) => void;
 }
 
-function TaskRow({ task, allTasks, isLast, expanded, onToggleExpand, onRun }: TaskRowProps) {
+function TaskRow({ task, allTasks, agents, assigning, isLast, expanded, onToggleExpand, onRun, onAssignAgent }: TaskRowProps) {
   const progress = task.completed ? 100 : 0;
   const barColor = task.completed ? "bg-emerald-500" : "bg-zinc-700";
 
@@ -345,6 +401,27 @@ function TaskRow({ task, allTasks, isLast, expanded, onToggleExpand, onRun }: Ta
               <p className="text-xs text-zinc-400 leading-relaxed">{task.criteria}</p>
             </div>
           )}
+
+          <div className="ml-6 flex items-center gap-2">
+            <p className="text-xs text-zinc-600">Agent</p>
+            <div className="relative">
+              <select
+                value={task.assignedAgentId}
+                onChange={(e) => onAssignAgent(e.target.value)}
+                disabled={assigning}
+                className="select-flat pl-2 pr-7 py-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <option value="">Default Implementer</option>
+                {agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name} ({agent.modelTier})
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
+            </div>
+            {assigning && <span className="text-[11px] text-zinc-500">Saving…</span>}
+          </div>
         </div>
       )}
     </>
@@ -362,7 +439,7 @@ function StatusSelect({ value, onChange }: StatusSelectProps) {
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as StatusFilter)}
-        className="appearance-none pl-3 pr-7 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-xs text-zinc-300 focus:outline-none focus:border-zinc-500 cursor-pointer"
+        className="select-flat pl-3 pr-7 py-1.5 text-xs cursor-pointer"
       >
         <option value="all">All Statuses</option>
         <option value="completed">Completed</option>

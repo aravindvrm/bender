@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import type { ProjectState } from "../hooks/useApi";
 
 interface GitViewProps {
@@ -552,14 +553,17 @@ export function GitView({ state, onStateChange }: GitViewProps) {
             placeholder="Git author email"
             className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-xs text-zinc-300"
           />
-          <select
-            value={identityScope}
-            onChange={(e) => setIdentityScope(e.target.value === "global" ? "global" : "local")}
-            className="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-2 text-xs text-zinc-200"
-          >
-            <option value="local">Local Repo</option>
-            <option value="global">Global</option>
-          </select>
+          <div className="relative">
+            <select
+              value={identityScope}
+              onChange={(e) => setIdentityScope(e.target.value === "global" ? "global" : "local")}
+              className="select-flat w-full pl-2 pr-7 py-2 text-xs"
+            >
+              <option value="local">Local Repo</option>
+              <option value="global">Global</option>
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
+          </div>
           <button
             onClick={() => void saveIdentity()}
             className="px-3 py-2 text-xs rounded border border-zinc-700 text-zinc-300 hover:text-zinc-100 hover:border-zinc-500"
@@ -675,14 +679,17 @@ export function GitView({ state, onStateChange }: GitViewProps) {
             </div>
 
             <div className="grid sm:grid-cols-[1fr_auto] gap-2">
-              <select
-                value={repo.branch ?? ""}
-                onChange={(e) => void checkoutBranch(e.target.value)}
-                className="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-2 text-xs text-zinc-200"
-              >
-                {!branches && <option value="">No branches</option>}
-                {branches?.all.map((b) => <option key={b} value={b}>{b}</option>)}
-              </select>
+              <div className="relative">
+                <select
+                  value={repo.branch ?? ""}
+                  onChange={(e) => void checkoutBranch(e.target.value)}
+                  className="select-flat w-full pl-2 pr-7 py-2 text-xs"
+                >
+                  {!branches && <option value="">No branches</option>}
+                  {branches?.all.map((b) => <option key={b} value={b}>{b}</option>)}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
+              </div>
               <div className="flex gap-2">
                 <input
                   value={newBranch}

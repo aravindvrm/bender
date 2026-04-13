@@ -13,6 +13,8 @@ export interface ModelConfig {
 }
 
 export interface McpServerConfig {
+  /** Curated server ID (e.g. "github", "figma"). Used for known servers. */
+  id?: string;
   name: string;
   url: string;
   enabled?: boolean;
@@ -42,6 +44,9 @@ export interface BenderConfig {
   };
   skills?: {
     enabled?: boolean;
+    /** Registry-based skills: list of skill names from openai/skills. */
+    enabledSkills?: string[];
+    /** Legacy: local file/directory paths (still supported). */
     paths?: string[];
     maxChars?: number;
   };
@@ -77,6 +82,7 @@ export const DEFAULT_CONFIG: BenderConfig = {
   },
   skills: {
     enabled: false,
+    enabledSkills: [],
     paths: [],
     maxChars: 12000,
   },
@@ -187,6 +193,7 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
     skills: {
       ...defaults.skills,
       ...overrides.skills,
+      enabledSkills: overrides.skills?.enabledSkills ?? defaults.skills?.enabledSkills ?? [],
       paths: overrides.skills?.paths ?? defaults.skills?.paths ?? [],
       maxChars: overrides.skills?.maxChars ?? defaults.skills?.maxChars ?? 12000,
     },

@@ -3,12 +3,17 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { readEffectiveConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
-import { createModelSet, getModelForRole } from "../llm/provider.js";
+import { createModelSet, getModelForTier } from "../llm/provider.js";
 import { implementTask, type TaskDescription, type FileOperation } from "../roles/implementer.js";
+import { reviewCode, type ReviewResult } from "../roles/reviewer.js";
 import { GitOperations } from "../git/operations.js";
 import { runTests, runTypeCheck } from "../test/runner.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
+import { getAllAgents, getEffectiveAgentForRole, type AgentConfig } from "../state/agents.js";
+import type { BenderConfig } from "../state/config.js";
+import type { ModelSet } from "../llm/provider.js";
+import type { ProjectContext } from "../state/manager.js";
 
 /**
  * Parse a task plan markdown into structured task descriptions.
@@ -58,6 +63,107 @@ async function applyFileOperations(projectRoot: string, operations: FileOperatio
   }
 }
 
+function printReviewSummary(adapter: UIAdapter, review: ReviewResult): void {
+  const statusColor = review.status === "APPROVED"
+    ? adapter.success.bind(adapter)
+    : review.status === "NEEDS_CHANGES"
+      ? adapter.warn.bind(adapter)
+      : adapter.error.bind(adapter);
+
+  statusColor(`Reviewer status: ${review.status}`);
+
+  if (review.issues.length > 0) {
+    adapter.warn(`Reviewer found ${review.issues.length} issue(s):`);
+    for (const issue of review.issues) {
+      const location = issue.file ? ` [${issue.file}]` : "";
+      adapter.warn(`- ${issue.severity.toUpperCase()}${location}: ${issue.description}`);
+      if (issue.fix) {
+        adapter.info(`  Fix: ${issue.fix}`);
+      }
+    }
+  } else {
+    adapter.info("Reviewer provided no structured issues.");
+  }
+
+  if (review.observations.length > 0) {
+    adapter.info("Reviewer observations:");
+    for (const obs of review.observations) {
+      adapter.info(`- ${obs}`);
+    }
+  }
+}
+
+async function runReviewerGate(
+  projectRoot: string,
+  config: BenderConfig,
+  models: ModelSet,
+  task: TaskDescription,
+  fileOps: FileOperation[],
+  context: ProjectContext,
+  adapter: UIAdapter,
+  reviewerAgent: AgentConfig,
+): Promise<boolean> {
+  adapter.subheader("Reviewer Gate");
+  adapter.info(`Using reviewer agent: ${reviewerAgent.name} (${reviewerAgent.modelTier})`);
+
+  const reviewerModel = getModelForTier(models, reviewerAgent.modelTier);
+  let reviewerRuntime: RoleRuntime;
+  try {
+    reviewerRuntime = await createRoleRuntime(
+      projectRoot,
+      config,
+      {
+        role: "reviewer",
+        taskDescription: `${task.title}\n${task.description}`,
+        pinnedSkills: reviewerAgent.pinnedSkills,
+        mcpServerIds: reviewerAgent.mcpServerIds,
+        modelTier: reviewerAgent.modelTier,
+      },
+      context.architecture ?? undefined,
+      { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+    );
+  } catch (err: unknown) {
+    adapter.error(`Failed to initialize reviewer runtime: ${(err as Error).message}`);
+    return false;
+  }
+
+  try {
+    const spin = adapter.spinner("Running reviewer checks...");
+    spin.start();
+    let review: ReviewResult;
+    try {
+      review = await reviewCode(
+        reviewerModel,
+        task.title,
+        fileOps,
+        context,
+        reviewerRuntime,
+      );
+    } catch (err: unknown) {
+      spin.fail(`Reviewer failed: ${(err as Error).message}`);
+      return false;
+    }
+    spin.stop();
+    printReviewSummary(adapter, review);
+
+    if (review.status === "APPROVED") {
+      return true;
+    }
+
+    const proceed = await adapter.confirm(
+      `Reviewer returned ${review.status}. Continue with these changes anyway?`,
+      false,
+    );
+    if (!proceed) {
+      adapter.info("Skipped based on reviewer feedback.");
+      return false;
+    }
+    return true;
+  } finally {
+    await reviewerRuntime.close();
+  }
+}
+
 export async function implementSingleTask(projectRoot: string, taskId: number, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header(`Bender Implement — Task ${taskId}`);
 
@@ -97,16 +203,37 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
     return;
   }
 
-  const implementerModel = getModelForRole(models, "implementer");
+  const taskAgents = await state.readTaskAgents();
+  const allAgents = await getAllAgents();
+  const defaultAgent = await getEffectiveAgentForRole("implementer");
+  const assignedAgentId = taskAgents[String(task.id)];
+  const assignedAgent = assignedAgentId
+    ? allAgents.find((a) => a.id === assignedAgentId && a.baseRole === "implementer")
+    : null;
+  if (assignedAgentId && !assignedAgent) {
+    adapter.warn(`Assigned agent '${assignedAgentId}' not found. Falling back to ${defaultAgent.name}.`);
+  }
+  const agent: AgentConfig = assignedAgent ?? defaultAgent;
+  const reviewerAgent = await getEffectiveAgentForRole("reviewer");
+  const implementerModel = getModelForTier(models, agent.modelTier);
   const git = new GitOperations(projectRoot);
   const gitEnabled = await git.isRepo();
 
   let runtime: RoleRuntime;
   try {
-    runtime = await createRoleRuntime(projectRoot, config, {
-      info: (msg) => adapter.info(msg),
-      warn: (msg) => adapter.warn(msg),
-    });
+    runtime = await createRoleRuntime(
+      projectRoot,
+      config,
+      {
+        role: "implementer",
+        taskDescription: task.description,
+        pinnedSkills: agent.pinnedSkills,
+        mcpServerIds: agent.mcpServerIds,
+        modelTier: agent.modelTier,
+      },
+      undefined,
+      { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+    );
   } catch (err: unknown) {
     adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
     adapter.cleanup();
@@ -115,6 +242,7 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
 
   try {
     const context = await state.gatherContext();
+    adapter.info(`Using agent: ${agent.name} (${agent.modelTier})`);
     const spin = adapter.spinner(`Implementing task ${task.id}...`);
     spin.start();
 
@@ -133,6 +261,21 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
 
     if (fileOps.length === 0) {
       adapter.warn("No file operations produced.");
+      adapter.cleanup();
+      return;
+    }
+
+    const reviewPassed = await runReviewerGate(
+      projectRoot,
+      config,
+      models,
+      task,
+      fileOps,
+      context,
+      adapter,
+      reviewerAgent,
+    );
+    if (!reviewPassed) {
       adapter.cleanup();
       return;
     }
@@ -220,7 +363,6 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
     return;
   }
 
-  const implementerModel = getModelForRole(models, "implementer");
   const git = new GitOperations(projectRoot);
   let gitEnabled = await git.isRepo();
   if (!gitEnabled) {
@@ -234,24 +376,47 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
       adapter.info("Continuing without git commits.");
     }
   }
+  const taskAgents = await state.readTaskAgents();
+  const allAgents = await getAllAgents();
+  const defaultAgent = await getEffectiveAgentForRole("implementer");
+  const reviewerAgent = await getEffectiveAgentForRole("reviewer");
   const completedTaskSummaries: string[] = [];
-  let runtime: RoleRuntime;
-  try {
-    runtime = await createRoleRuntime(projectRoot, config, {
-      info: (msg) => adapter.info(msg),
-      warn: (msg) => adapter.warn(msg),
-    });
-  } catch (err: unknown) {
-    adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
-    adapter.cleanup();
-    return;
-  }
+  for (const task of tasks) {
+    const assignedAgentId = taskAgents[String(task.id)];
+    const assignedAgent = assignedAgentId
+      ? allAgents.find((a) => a.id === assignedAgentId && a.baseRole === "implementer")
+      : null;
+    if (assignedAgentId && !assignedAgent) {
+      adapter.warn(`Task ${task.id} assigned agent '${assignedAgentId}' not found. Falling back to ${defaultAgent.name}.`);
+    }
+    const agent: AgentConfig = assignedAgent ?? defaultAgent;
+    const implementerModel = getModelForTier(models, agent.modelTier);
+    let runtime: RoleRuntime;
+    try {
+      runtime = await createRoleRuntime(
+        projectRoot,
+        config,
+        {
+          role: "implementer",
+          taskDescription: task.description,
+          pinnedSkills: agent.pinnedSkills,
+          mcpServerIds: agent.mcpServerIds,
+          modelTier: agent.modelTier,
+        },
+        undefined,
+        { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+      );
+    } catch (err: unknown) {
+      adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
+      adapter.cleanup();
+      return;
+    }
 
-  try {
-    for (const task of tasks) {
-      adapter.subheader(`Task ${task.id}: ${task.title}`);
-      adapter.info(task.description);
+    adapter.subheader(`Task ${task.id}: ${task.title}`);
+    adapter.info(task.description);
+    adapter.info(`Using agent: ${agent.name} (${agent.modelTier})`);
 
+    try {
       const context = await state.gatherContext();
 
       const spin = adapter.spinner(`Implementing task ${task.id}...`);
@@ -274,6 +439,22 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
       if (fileOps.length === 0) {
         adapter.warn("No file operations produced. The implementer may have failed to follow the output format.");
         const shouldContinue = await adapter.confirm("Continue with next task?");
+        if (!shouldContinue) break;
+        continue;
+      }
+
+      const reviewPassed = await runReviewerGate(
+        projectRoot,
+        config,
+        models,
+        task,
+        fileOps,
+        context,
+        adapter,
+        reviewerAgent,
+      );
+      if (!reviewPassed) {
+        const shouldContinue = await adapter.confirm("Continue with next task?", false);
         if (!shouldContinue) break;
         continue;
       }
@@ -323,9 +504,9 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
       );
 
       completedTaskSummaries.push(`Task ${task.id}: ${task.title}`);
+    } finally {
+      await runtime.close();
     }
-  } finally {
-    await runtime.close();
   }
 
   // Write session log

@@ -741,20 +741,23 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
 
                   <div className="space-y-1">
                     <label className="text-[11px] text-zinc-500">Installation (account/org)</label>
-                    <select
-                      value={githubInstallationId ?? ""}
-                      onChange={(e) => {
-                        const next = e.target.value ? Number(e.target.value) : null;
-                        setGithubInstallationId(next);
-                        void refreshGitHubRepos(next);
-                      }}
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-xs text-zinc-200"
-                    >
-                      {githubInstallations.length === 0 && <option value="">No installations</option>}
-                      {githubInstallations.map((inst) => (
-                        <option key={inst.id} value={inst.id}>{inst.account} ({inst.appSlug || "app"})</option>
-                      ))}
-                    </select>
+                    <div className="relative">
+                      <select
+                        value={githubInstallationId ?? ""}
+                        onChange={(e) => {
+                          const next = e.target.value ? Number(e.target.value) : null;
+                          setGithubInstallationId(next);
+                          void refreshGitHubRepos(next);
+                        }}
+                        className="select-flat w-full pl-2 pr-7 py-1.5 text-xs"
+                      >
+                        {githubInstallations.length === 0 && <option value="">No installations</option>}
+                        {githubInstallations.map((inst) => (
+                          <option key={inst.id} value={inst.id}>{inst.account} ({inst.appSlug || "app"})</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
+                    </div>
                   </div>
 
                   <div className="max-h-64 overflow-y-auto space-y-1">

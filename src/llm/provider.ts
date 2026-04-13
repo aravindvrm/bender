@@ -89,6 +89,10 @@ export interface ModelSet {
   strong: LanguageModel;
 }
 
+export function getModelForTier(models: ModelSet, tier: ModelTier): LanguageModel {
+  return models[tier];
+}
+
 /**
  * Create the full set of tiered models from a BenderConfig.
  */
@@ -118,5 +122,5 @@ const roleTierMap: Record<string, ModelTier> = {
 
 export function getModelForRole(models: ModelSet, role: string): LanguageModel {
   const tier = roleTierMap[role] ?? "default";
-  return models[tier];
+  return getModelForTier(models, tier);
 }
