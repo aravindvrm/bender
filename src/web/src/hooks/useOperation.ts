@@ -82,7 +82,7 @@ async function sendAnswer(id: string, answer: string) {
 export function useOperation(onStateChange?: () => void) {
   const [lines, setLines] = useState<OutputLine[]>([]);
   const [status, setStatus] = useState<OperationStatus>("idle");
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(true);
   const [modal, setModal] = useState<OperationModal>(null);
   const [inputText, setInputText] = useState("");
   const abortRef = useRef<AbortController | null>(null);
@@ -203,7 +203,7 @@ export function useOperation(onStateChange?: () => void) {
   const clearOutput = useCallback(() => {
     setLines([]);
     setStatus("idle");
-    setDrawerOpen(false);
+    setDrawerOpen(true);
   }, []);
 
   const abort = useCallback(() => {

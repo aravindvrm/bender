@@ -1,7 +1,7 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { readConfig } from "../state/config.js";
+import { readEffectiveConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { createModelSet, getModelForRole } from "../llm/provider.js";
 import { implementTask, type TaskDescription, type FileOperation } from "../roles/implementer.js";
@@ -68,7 +68,7 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
     return;
   }
 
-  const config = await readConfig(projectRoot);
+  const config = await readEffectiveConfig(projectRoot);
   const currentTasks = await state.readCurrentTasks();
 
   if (!currentTasks) {
@@ -97,6 +97,18 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
 
   const implementerModel = getModelForRole(models, "implementer");
   const git = new GitOperations(projectRoot);
+  let gitEnabled = await git.isRepo();
+  if (!gitEnabled) {
+    adapter.warn("No git repository detected for this project.");
+    const shouldInitGit = await adapter.confirm("Initialize a git repository now?", true);
+    if (shouldInitGit) {
+      await git.init();
+      gitEnabled = true;
+      adapter.success("Initialized git repository.");
+    } else {
+      adapter.info("Continuing without git commits.");
+    }
+  }
   const completedTaskSummaries: string[] = [];
   let runtime: RoleRuntime;
   try {
@@ -170,9 +182,13 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
       }
 
       // Git commit
-      if (await git.hasChanges()) {
-        await git.commitAll(`feat: task ${task.id} — ${task.title}`);
-        adapter.success(`Committed: task ${task.id} — ${task.title}`);
+      if (gitEnabled && await git.hasChanges()) {
+        try {
+          await git.commitAll(`feat: task ${task.id} — ${task.title}`);
+          adapter.success(`Committed: task ${task.id} — ${task.title}`);
+        } catch (err) {
+          adapter.warn(`Git commit skipped: ${(err as Error).message}`);
+        }
       }
 
       // Mark task as completed

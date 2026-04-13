@@ -1,11 +1,14 @@
 import express, { type Response } from "express";
 import cors from "cors";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname, resolve, basename } from "node:path";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, stat, readFile, writeFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
-import { readConfig, writeConfig } from "../state/config.js";
+import { homedir, platform as osPlatform } from "node:os";
+import { spawn } from "node:child_process";
+import type { Server as HttpServer } from "node:http";
+import { simpleGit } from "simple-git";
+import { readEffectiveConfig, readGlobalConfig, writeConfig, writeGlobalConfig, type BenderConfig } from "../state/config.js";
 import { createModelSet } from "../llm/provider.js";
 import { createRoleRuntime } from "../llm/runtime.js";
 import { StateManager } from "../state/manager.js";
@@ -19,6 +22,7 @@ import { generateFlows } from "../roles/flowcharter.js";
 import type { UIAdapter, SpinnerAdapter } from "./adapter.js";
 
 const API_PORT = 3142;
+type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
 
 // ── SSE event types ──────────────────────────────────────────────────────────
 
@@ -54,6 +58,399 @@ function normalizeUserPath(input?: string): string {
   }
 
   return resolve(targetPath);
+}
+
+function isLlmProvider(value: string): value is LlmProvider {
+  return value === "anthropic"
+    || value === "openai"
+    || value === "google"
+    || value === "groq"
+    || value === "ollama";
+}
+
+function resolveProviderApiKey(provider: LlmProvider, config: BenderConfig | null): string | undefined {
+  if (provider === "anthropic") {
+    return config?.providers?.anthropic?.apiKey
+      ?? (config?.llm.provider === "anthropic" ? config.llm.apiKey : undefined)
+      ?? process.env.ANTHROPIC_API_KEY;
+  }
+  if (provider === "openai") {
+    return config?.providers?.openai?.apiKey
+      ?? (config?.llm.provider === "openai" ? config.llm.apiKey : undefined)
+      ?? process.env.OPENAI_API_KEY;
+  }
+  if (provider === "google") {
+    return config?.providers?.google?.apiKey
+      ?? (config?.llm.provider === "google" ? config.llm.apiKey : undefined)
+      ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY
+      ?? process.env.GOOGLE_API_KEY;
+  }
+  if (provider === "groq") {
+    return config?.providers?.groq?.apiKey
+      ?? (config?.llm.provider === "groq" ? config.llm.apiKey : undefined)
+      ?? process.env.GROQ_API_KEY;
+  }
+  return "ollama";
+}
+
+function uniqueSorted(items: string[]): string[] {
+  return [...new Set(items.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+async function fetchLiveModels(provider: LlmProvider, apiKey?: string): Promise<string[]> {
+  if (provider === "openai") {
+    if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
+    const res = await fetch("https://api.openai.com/v1/models", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!res.ok) throw new Error(`OpenAI model list failed (${res.status})`);
+    const body = await res.json() as { data?: Array<{ id?: string }> };
+    const ids = (body.data ?? [])
+      .map((m) => m.id ?? "")
+      .filter((id) =>
+        /^(gpt-|o[1-9]|chatgpt)/.test(id)
+        && !/(audio|realtime|transcribe|tts|image|moderation|embedding|whisper|davinci|babbage)/.test(id),
+      );
+    return uniqueSorted(ids).reverse();
+  }
+
+  if (provider === "anthropic") {
+    if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+    const res = await fetch("https://api.anthropic.com/v1/models", {
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+    });
+    if (!res.ok) throw new Error(`Anthropic model list failed (${res.status})`);
+    const body = await res.json() as { data?: Array<{ id?: string }> };
+    return uniqueSorted((body.data ?? []).map((m) => m.id ?? "")).reverse();
+  }
+
+  if (provider === "google") {
+    if (!apiKey) throw new Error("Missing GOOGLE_GENERATIVE_AI_API_KEY");
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Google model list failed (${res.status})`);
+    const body = await res.json() as { models?: Array<{ name?: string }> };
+    const ids = (body.models ?? [])
+      .map((m) => (m.name ?? "").replace(/^models\//, ""))
+      .filter((id) => id.startsWith("gemini"));
+    return uniqueSorted(ids).reverse();
+  }
+
+  if (provider === "groq") {
+    if (!apiKey) throw new Error("Missing GROQ_API_KEY");
+    const res = await fetch("https://api.groq.com/openai/v1/models", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!res.ok) throw new Error(`Groq model list failed (${res.status})`);
+    const body = await res.json() as { data?: Array<{ id?: string }> };
+    return uniqueSorted((body.data ?? []).map((m) => m.id ?? "")).reverse();
+  }
+
+  const res = await fetch("http://localhost:11434/api/tags");
+  if (!res.ok) throw new Error(`Ollama model list failed (${res.status})`);
+  const body = await res.json() as { models?: Array<{ name?: string }> };
+  return uniqueSorted((body.models ?? []).map((m) => m.name ?? "")).reverse();
+}
+
+interface GitHubSession {
+  accessToken: string;
+  tokenType?: string;
+  scope?: string;
+}
+
+interface StoredGitHubAuthConfig {
+  clientId?: string;
+  clientSecret?: string;
+  redirectUri?: string;
+}
+
+interface GitHubDeviceSession {
+  id: string;
+  deviceCode: string;
+  intervalSec: number;
+  expiresAt: number;
+}
+
+const githubAuthStates = new Map<string, number>();
+const githubDeviceSessions = new Map<string, GitHubDeviceSession>();
+const GITHUB_SESSION_FILE = join(homedir(), ".bender", "github-session.json");
+const GITHUB_AUTH_CONFIG_FILE = join(homedir(), ".bender", "github-auth.json");
+
+async function readStoredGitHubAuthConfig(): Promise<StoredGitHubAuthConfig> {
+  if (!existsSync(GITHUB_AUTH_CONFIG_FILE)) return {};
+  try {
+    const raw = await readFile(GITHUB_AUTH_CONFIG_FILE, "utf-8");
+    const parsed = JSON.parse(raw) as StoredGitHubAuthConfig;
+    return {
+      clientId: parsed.clientId?.trim() || undefined,
+      clientSecret: parsed.clientSecret?.trim() || undefined,
+      redirectUri: parsed.redirectUri?.trim() || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+async function writeStoredGitHubAuthConfig(config: StoredGitHubAuthConfig): Promise<void> {
+  const dir = dirname(GITHUB_AUTH_CONFIG_FILE);
+  if (!existsSync(dir)) {
+    await mkdir(dir, { recursive: true });
+  }
+  await writeFile(GITHUB_AUTH_CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
+}
+
+async function getGithubAuthConfig() {
+  const stored = await readStoredGitHubAuthConfig();
+  return {
+    clientId: process.env.GITHUB_APP_CLIENT_ID ?? process.env.GITHUB_CLIENT_ID ?? stored.clientId,
+    clientSecret: process.env.GITHUB_APP_CLIENT_SECRET ?? process.env.GITHUB_CLIENT_SECRET ?? stored.clientSecret,
+    redirectUri: process.env.GITHUB_APP_REDIRECT_URI ?? stored.redirectUri ?? `http://localhost:${API_PORT}/api/github/auth/callback`,
+  };
+}
+
+async function startGitHubDeviceFlow(): Promise<{
+  sessionId: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  intervalSec: number;
+  expiresAt: number;
+}> {
+  const cfg = await getGithubAuthConfig();
+  if (!cfg.clientId) {
+    throw new Error("Missing GITHUB_APP_CLIENT_ID");
+  }
+
+  const response = await fetch("https://github.com/login/device/code", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      client_id: cfg.clientId,
+      scope: "repo read:org",
+    }),
+  });
+
+  const body = await response.json() as {
+    device_code?: string;
+    user_code?: string;
+    verification_uri?: string;
+    verification_uri_complete?: string;
+    expires_in?: number;
+    interval?: number;
+    error?: string;
+    error_description?: string;
+  };
+
+  if (!response.ok || !body.device_code || !body.user_code || !body.verification_uri || !body.expires_in) {
+    const message = body.error_description ?? body.error ?? "Failed to start GitHub device flow";
+    throw new Error(message);
+  }
+
+  const sessionId = randomUUID();
+  const intervalSec = Math.max(2, body.interval ?? 5);
+  const expiresAt = Date.now() + body.expires_in * 1000;
+
+  githubDeviceSessions.set(sessionId, {
+    id: sessionId,
+    deviceCode: body.device_code,
+    intervalSec,
+    expiresAt,
+  });
+
+  return {
+    sessionId,
+    userCode: body.user_code,
+    verificationUri: body.verification_uri,
+    verificationUriComplete: body.verification_uri_complete,
+    intervalSec,
+    expiresAt,
+  };
+}
+
+async function pollGitHubDeviceFlow(sessionId: string): Promise<
+  | { status: "pending"; intervalSec: number }
+  | { status: "expired" | "denied" }
+  | { status: "connected"; login?: string }
+> {
+  const cfg = await getGithubAuthConfig();
+  if (!cfg.clientId) throw new Error("Missing GITHUB_APP_CLIENT_ID");
+
+  const session = githubDeviceSessions.get(sessionId);
+  if (!session) return { status: "expired" };
+  if (Date.now() > session.expiresAt) {
+    githubDeviceSessions.delete(sessionId);
+    return { status: "expired" };
+  }
+
+  const payload = new URLSearchParams({
+    client_id: cfg.clientId,
+    device_code: session.deviceCode,
+    grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+  });
+  if (cfg.clientSecret) {
+    payload.set("client_secret", cfg.clientSecret);
+  }
+
+  const response = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: payload,
+  });
+
+  const body = await response.json() as {
+    access_token?: string;
+    token_type?: string;
+    scope?: string;
+    error?: string;
+    error_description?: string;
+    interval?: number;
+  };
+
+  if (body.access_token) {
+    await writeGitHubSession({
+      accessToken: body.access_token,
+      tokenType: body.token_type,
+      scope: body.scope,
+    });
+    githubDeviceSessions.delete(sessionId);
+    let login: string | undefined;
+    try {
+      const user = await githubApi<{ login: string }>("/user", body.access_token);
+      login = user.login;
+    } catch {
+      // ignore user lookup failure; session is still valid
+    }
+    return { status: "connected", login };
+  }
+
+  if (body.error === "authorization_pending") {
+    return { status: "pending", intervalSec: session.intervalSec };
+  }
+  if (body.error === "slow_down") {
+    const nextInterval = Math.max(session.intervalSec + 5, body.interval ?? session.intervalSec + 5);
+    githubDeviceSessions.set(sessionId, {
+      ...session,
+      intervalSec: nextInterval,
+    });
+    return { status: "pending", intervalSec: nextInterval };
+  }
+  if (body.error === "access_denied") {
+    githubDeviceSessions.delete(sessionId);
+    return { status: "denied" };
+  }
+  if (body.error === "expired_token") {
+    githubDeviceSessions.delete(sessionId);
+    return { status: "expired" };
+  }
+
+  const message = body.error_description ?? body.error ?? `GitHub device flow failed (${response.status})`;
+  throw new Error(message);
+}
+
+async function readGitConfigValue(projectRoot: string, key: string, global = false): Promise<string | null> {
+  const git = simpleGit(projectRoot);
+  try {
+    const args = global
+      ? ["config", "--global", "--get", key]
+      : ["config", "--local", "--get", key];
+    const value = await git.raw(args);
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function setGitConfigValue(projectRoot: string, key: string, value: string, global = false): Promise<void> {
+  const git = simpleGit(projectRoot);
+  const args = global
+    ? ["config", "--global", key, value]
+    : ["config", "--local", key, value];
+  await git.raw(args);
+}
+
+async function approveGitHubCredential(projectRoot: string, username: string, token: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("git", ["credential", "approve"], {
+      cwd: projectRoot,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || "Failed to save git credential"));
+    });
+    child.stdin.write(`protocol=https\nhost=github.com\nusername=${username}\npassword=${token}\n\n`);
+    child.stdin.end();
+  });
+}
+
+async function readGitHubSession(): Promise<GitHubSession | null> {
+  if (!existsSync(GITHUB_SESSION_FILE)) return null;
+  try {
+    const raw = await readFile(GITHUB_SESSION_FILE, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<GitHubSession>;
+    if (!parsed.accessToken) return null;
+    return {
+      accessToken: parsed.accessToken,
+      tokenType: parsed.tokenType,
+      scope: parsed.scope,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeGitHubSession(session: GitHubSession): Promise<void> {
+  const dir = dirname(GITHUB_SESSION_FILE);
+  if (!existsSync(dir)) {
+    await mkdir(dir, { recursive: true });
+  }
+  await writeFile(GITHUB_SESSION_FILE, JSON.stringify(session, null, 2), "utf-8");
+}
+
+async function clearGitHubSession(): Promise<void> {
+  try {
+    if (existsSync(GITHUB_SESSION_FILE)) {
+      await unlink(GITHUB_SESSION_FILE);
+    }
+  } catch {
+    // ignore cleanup failure
+  }
+}
+
+async function githubApi<T>(path: string, token: string): Promise<T> {
+  const res = await fetch(`https://api.github.com${path}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "bender-local",
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub API ${path} failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+function authCloneUrl(cloneUrl: string, token: string): string {
+  if (!cloneUrl.startsWith("https://")) return cloneUrl;
+  return cloneUrl.replace("https://", `https://x-access-token:${encodeURIComponent(token)}@`);
 }
 
 // ── Pending answers ──────────────────────────────────────────────────────────
@@ -147,7 +544,7 @@ async function runOperation(
 
 // ── Server ────────────────────────────────────────────────────────────────────
 
-export async function startServer(initialProject?: string): Promise<void> {
+export async function startServer(initialProject?: string): Promise<HttpServer> {
   if (initialProject) {
     currentProject = initialProject;
     await addToRegistry(initialProject);
@@ -181,22 +578,29 @@ export async function startServer(initialProject?: string): Promise<void> {
   app.post("/api/project/select", async (req, res) => {
     const { path } = req.body as { path: string };
     if (!path) { res.status(400).json({ error: "path required" }); return; }
-    if (!existsSync(path)) { res.status(400).json({ error: "Directory does not exist" }); return; }
-    currentProject = path;
-    await addToRegistry(path);
-    res.json({ ok: true, path });
+    const normalizedPath = normalizeUserPath(path);
+    if (!existsSync(normalizedPath)) { res.status(400).json({ error: "Directory does not exist" }); return; }
+    const dirStat = await stat(normalizedPath);
+    if (!dirStat.isDirectory()) { res.status(400).json({ error: "Path is not a directory" }); return; }
+    currentProject = normalizedPath;
+    await addToRegistry(normalizedPath);
+    res.json({ ok: true, path: normalizedPath });
   });
 
   // Open a directory (create if needed, don't init .bender yet)
   app.post("/api/project/open", async (req, res) => {
     const { path } = req.body as { path: string };
     if (!path) { res.status(400).json({ error: "path required" }); return; }
-    if (!existsSync(path)) {
-      await mkdir(path, { recursive: true });
+    const normalizedPath = normalizeUserPath(path);
+    if (!existsSync(normalizedPath)) {
+      await mkdir(normalizedPath, { recursive: true });
+    } else {
+      const dirStat = await stat(normalizedPath);
+      if (!dirStat.isDirectory()) { res.status(400).json({ error: "Path is not a directory" }); return; }
     }
-    currentProject = path;
-    await addToRegistry(path);
-    res.json({ ok: true, path });
+    currentProject = normalizedPath;
+    await addToRegistry(normalizedPath);
+    res.json({ ok: true, path: normalizedPath });
   });
 
   // Remove from recents
@@ -204,6 +608,323 @@ export async function startServer(initialProject?: string): Promise<void> {
     const path = decodeURIComponent(req.params.encodedPath);
     await removeFromRegistry(path);
     res.json({ ok: true });
+  });
+
+  // ── GitHub App auth + repo access ────────────────────────────────────────
+
+  app.get("/api/github/auth/config", async (_req, res) => {
+    try {
+      const stored = await readStoredGitHubAuthConfig();
+      const cfg = await getGithubAuthConfig();
+      res.json({
+        clientId: cfg.clientId ?? "",
+        clientSecretSet: !!cfg.clientSecret,
+        redirectUri: cfg.redirectUri,
+        usingEnvClientId: !!(process.env.GITHUB_APP_CLIENT_ID ?? process.env.GITHUB_CLIENT_ID),
+        usingEnvClientSecret: !!(process.env.GITHUB_APP_CLIENT_SECRET ?? process.env.GITHUB_CLIENT_SECRET),
+        storedClientId: stored.clientId ?? "",
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/github/auth/config", async (req, res) => {
+    try {
+      const body = req.body as { clientId?: string; clientSecret?: string; redirectUri?: string };
+      const existing = await readStoredGitHubAuthConfig();
+
+      const hasClientId = Object.prototype.hasOwnProperty.call(body, "clientId");
+      const hasClientSecret = Object.prototype.hasOwnProperty.call(body, "clientSecret");
+      const hasRedirectUri = Object.prototype.hasOwnProperty.call(body, "redirectUri");
+
+      const nextConfig: StoredGitHubAuthConfig = {
+        clientId: hasClientId ? (body.clientId?.trim() || undefined) : existing.clientId,
+        clientSecret: hasClientSecret ? (body.clientSecret?.trim() || undefined) : existing.clientSecret,
+        redirectUri: hasRedirectUri ? (body.redirectUri?.trim() || undefined) : existing.redirectUri,
+      };
+
+      await writeStoredGitHubAuthConfig(nextConfig);
+      const cfg = await getGithubAuthConfig();
+      res.json({
+        ok: true,
+        clientId: cfg.clientId ?? "",
+        clientSecretSet: !!cfg.clientSecret,
+        redirectUri: cfg.redirectUri,
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/github/auth/status", async (_req, res) => {
+    try {
+      const cfg = await getGithubAuthConfig();
+      if (!cfg.clientId) {
+        res.json({
+          configured: false,
+          connected: false,
+          message: "Set GITHUB_APP_CLIENT_ID to enable GitHub device login",
+        });
+        return;
+      }
+
+      const session = await readGitHubSession();
+      if (!session?.accessToken) {
+        res.json({
+          configured: true,
+          connected: false,
+          authMode: cfg.clientSecret ? "oauth-or-device" : "device-only",
+        });
+        return;
+      }
+
+      try {
+        const user = await githubApi<{ login: string; avatar_url?: string }>("/user", session.accessToken);
+        res.json({
+          configured: true,
+          connected: true,
+          login: user.login,
+          avatarUrl: user.avatar_url,
+          authMode: cfg.clientSecret ? "oauth-or-device" : "device-only",
+        });
+      } catch {
+        await clearGitHubSession();
+        res.json({
+          configured: true,
+          connected: false,
+          authMode: cfg.clientSecret ? "oauth-or-device" : "device-only",
+        });
+      }
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/github/auth/start", (_req, res) => {
+    // OAuth callback flow kept for compatibility; device flow is preferred in UI.
+    const run = async () => {
+      const cfg = await getGithubAuthConfig();
+      if (!cfg.clientId || !cfg.clientSecret) {
+        res.status(400).json({ error: "OAuth callback flow is not configured. Use GitHub device login instead." });
+        return;
+      }
+
+      const state = randomUUID();
+      githubAuthStates.set(state, Date.now() + 10 * 60 * 1000);
+
+      const params = new URLSearchParams({
+        client_id: cfg.clientId,
+        redirect_uri: cfg.redirectUri,
+        scope: "repo read:org",
+        state,
+        allow_signup: "true",
+      });
+
+      res.json({ url: `https://github.com/login/oauth/authorize?${params.toString()}` });
+    };
+    void run().catch((err) => {
+      res.status(500).json({ error: (err as Error).message });
+    });
+  });
+
+  app.post("/api/github/device/start", async (_req, res) => {
+    try {
+      const flow = await startGitHubDeviceFlow();
+      res.json(flow);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/github/device/poll", async (req, res) => {
+    try {
+      const { sessionId } = req.body as { sessionId?: string };
+      const id = (sessionId ?? "").trim();
+      if (!id) {
+        res.status(400).json({ error: "sessionId is required" });
+        return;
+      }
+      const result = await pollGitHubDeviceFlow(id);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/github/auth/callback", async (req, res) => {
+    const cfg = await getGithubAuthConfig();
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const code = typeof req.query.code === "string" ? req.query.code : "";
+    const authError = typeof req.query.error === "string" ? req.query.error : "";
+
+    if (authError) {
+      res.status(400).send(`<html><body><h2>GitHub auth failed</h2><p>${authError}</p></body></html>`);
+      return;
+    }
+
+    const expiresAt = githubAuthStates.get(state);
+    githubAuthStates.delete(state);
+    if (!state || !expiresAt || Date.now() > expiresAt) {
+      res.status(400).send("<html><body><h2>GitHub auth failed</h2><p>Invalid or expired state.</p></body></html>");
+      return;
+    }
+    if (!cfg.clientId || !cfg.clientSecret || !code) {
+      res.status(400).send("<html><body><h2>GitHub auth failed</h2><p>Missing configuration or code.</p></body></html>");
+      return;
+    }
+
+    try {
+      const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: cfg.clientId,
+          client_secret: cfg.clientSecret,
+          code,
+          redirect_uri: cfg.redirectUri,
+        }),
+      });
+      const tokenBody = await tokenRes.json() as {
+        access_token?: string;
+        token_type?: string;
+        scope?: string;
+        error?: string;
+        error_description?: string;
+      };
+      if (!tokenRes.ok || !tokenBody.access_token) {
+        const message = tokenBody.error_description ?? tokenBody.error ?? "No access token returned";
+        throw new Error(message);
+      }
+
+      await writeGitHubSession({
+        accessToken: tokenBody.access_token,
+        tokenType: tokenBody.token_type,
+        scope: tokenBody.scope,
+      });
+
+      res.send("<html><body><h2>GitHub connected</h2><p>You can close this window and return to Bender.</p></body></html>");
+    } catch (err) {
+      res.status(500).send(`<html><body><h2>GitHub auth failed</h2><p>${(err as Error).message}</p></body></html>`);
+    }
+  });
+
+  app.post("/api/github/auth/disconnect", async (_req, res) => {
+    await clearGitHubSession();
+    res.json({ ok: true });
+  });
+
+  app.get("/api/github/installations", async (_req, res) => {
+    try {
+      const session = await readGitHubSession();
+      if (!session?.accessToken) {
+        res.status(401).json({ error: "Not connected to GitHub" });
+        return;
+      }
+      const data = await githubApi<{ installations: Array<{ id: number; account?: { login?: string }; app_slug?: string }> }>(
+        "/user/installations",
+        session.accessToken,
+      );
+      res.json({
+        installations: (data.installations ?? []).map((i) => ({
+          id: i.id,
+          account: i.account?.login ?? "",
+          appSlug: i.app_slug ?? "",
+        })),
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/github/repos", async (req, res) => {
+    try {
+      const installationId = typeof req.query.installationId === "string"
+        ? parseInt(req.query.installationId, 10)
+        : null;
+      const session = await readGitHubSession();
+      if (!session?.accessToken) {
+        res.status(401).json({ error: "Not connected to GitHub" });
+        return;
+      }
+
+      const fetchInstallationRepos = async (id: number) => {
+        const repos = await githubApi<{
+          repositories: Array<{
+            id: number;
+            name: string;
+            full_name: string;
+            private: boolean;
+            clone_url: string;
+            html_url: string;
+            default_branch: string;
+            owner?: { login?: string };
+          }>;
+        }>(`/user/installations/${id}/repositories?per_page=100`, session.accessToken);
+        return (repos.repositories ?? []).map((r) => ({
+          id: r.id,
+          name: r.name,
+          fullName: r.full_name,
+          private: r.private,
+          cloneUrl: r.clone_url,
+          htmlUrl: r.html_url,
+          defaultBranch: r.default_branch,
+          owner: r.owner?.login ?? "",
+          installationId: id,
+        }));
+      };
+
+      if (installationId) {
+        res.json({ repositories: await fetchInstallationRepos(installationId) });
+        return;
+      }
+
+      const installs = await githubApi<{ installations: Array<{ id: number }> }>("/user/installations", session.accessToken);
+      const all = (
+        await Promise.all((installs.installations ?? []).map((inst) => fetchInstallationRepos(inst.id)))
+      ).flat();
+      res.json({ repositories: all });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/github/clone", async (req, res) => {
+    try {
+      const { cloneUrl, targetPath } = req.body as { cloneUrl?: string; targetPath?: string };
+      const rawCloneUrl = (cloneUrl ?? "").trim();
+      const rawTarget = (targetPath ?? "").trim();
+      if (!rawCloneUrl) { res.status(400).json({ error: "cloneUrl is required" }); return; }
+      if (!rawTarget) { res.status(400).json({ error: "targetPath is required" }); return; }
+
+      const normalizedTarget = normalizeUserPath(rawTarget);
+      if (existsSync(normalizedTarget)) {
+        const targetStat = await stat(normalizedTarget);
+        if (!targetStat.isDirectory()) {
+          res.status(400).json({ error: "targetPath is not a directory" });
+          return;
+        }
+        const entries = await readdir(normalizedTarget);
+        if (entries.length > 0) {
+          res.status(400).json({ error: "targetPath must be empty for clone" });
+          return;
+        }
+      } else {
+        await mkdir(normalizedTarget, { recursive: true });
+      }
+
+      const session = await readGitHubSession();
+      const cloneWithAuth = session?.accessToken ? authCloneUrl(rawCloneUrl, session.accessToken) : rawCloneUrl;
+      const git = simpleGit();
+      await git.clone(cloneWithAuth, normalizedTarget);
+
+      currentProject = normalizedTarget;
+      await addToRegistry(normalizedTarget);
+
+      res.json({ ok: true, path: normalizedTarget, name: basename(normalizedTarget) });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // ── Filesystem browser ───────────────────────────────────────────────────
@@ -329,7 +1050,7 @@ export async function startServer(initialProject?: string): Promise<void> {
         ? normalizeUserPath(rawPath)
         : (currentProject ?? null);
 
-      const config = targetPath ? await readConfig(targetPath) : null;
+      const config = await readEffectiveConfig(targetPath).catch(() => null);
       const envFlags = {
         anthropic: !!process.env.ANTHROPIC_API_KEY,
         openai: !!process.env.OPENAI_API_KEY,
@@ -371,6 +1092,29 @@ export async function startServer(initialProject?: string): Promise<void> {
     }
   });
 
+  app.get("/api/llm/models", async (req, res) => {
+    try {
+      const rawProvider = typeof req.query.provider === "string" ? req.query.provider.trim().toLowerCase() : "";
+      if (!rawProvider || !isLlmProvider(rawProvider)) {
+        res.status(400).json({ error: "provider must be one of: anthropic, openai, google, groq, ollama" });
+        return;
+      }
+
+      const config = await readEffectiveConfig(currentProject).catch(() => null);
+      const apiKey = resolveProviderApiKey(rawProvider, config);
+      const models = await fetchLiveModels(rawProvider, apiKey);
+
+      res.json({
+        provider: rawProvider,
+        models,
+        source: "live",
+        count: models.length,
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Project state ─────────────────────────────────────────────────────────
 
   app.get("/api/state", async (_req, res) => {
@@ -387,7 +1131,7 @@ export async function startServer(initialProject?: string): Promise<void> {
         return;
       }
 
-      const config = await readConfig(projectRoot);
+      const config = await readEffectiveConfig(projectRoot);
       const context = await state.gatherContext();
       const decisions = await state.readDecisions();
       const completedTasks = await state.readCompletedTasks();
@@ -431,11 +1175,13 @@ export async function startServer(initialProject?: string): Promise<void> {
 
   app.get("/api/config", async (_req, res) => {
     try {
-      const projectRoot = getProject();
-      const config = await readConfig(projectRoot);
+      const projectRoot = currentProject;
+      const config = await readGlobalConfig();
       const MASK = "••••••••";
       const maskSensitive = (value?: string) => (value ? MASK : "");
       res.json({
+        scope: "global",
+        projectRoot,
         ...config,
         llm: { ...config.llm, apiKey: config.llm.apiKey ? MASK : undefined },
         providers: config.providers
@@ -463,8 +1209,7 @@ export async function startServer(initialProject?: string): Promise<void> {
 
   app.put("/api/config", async (req, res) => {
     try {
-      const projectRoot = getProject();
-      const current = await readConfig(projectRoot);
+      const current = await readGlobalConfig();
       const updates = req.body as Partial<typeof current>;
       const MASK = "••••••••";
 
@@ -509,7 +1254,7 @@ export async function startServer(initialProject?: string): Promise<void> {
         });
       })();
 
-      await writeConfig(projectRoot, {
+      const nextConfig = {
         ...current,
         ...updates,
         llm: {
@@ -532,14 +1277,339 @@ export async function startServer(initialProject?: string): Promise<void> {
         stack: { ...current.stack, ...updates.stack },
         deploy: { ...current.deploy, ...updates.deploy },
         test: { ...current.test, ...updates.test },
+      };
+
+      await writeGlobalConfig(nextConfig);
+      res.json({ ok: true, scope: "global" });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Git ───────────────────────────────────────────────────────────────────
+
+  app.get("/api/git/repo", async (_req, res) => {
+    try {
+      const projectRoot = getProject();
+      const gitOps = new GitOperations(projectRoot);
+      const isRepo = await gitOps.isRepo();
+
+      if (!isRepo) {
+        res.json({
+          isRepo: false,
+          branch: null,
+          clean: true,
+          ahead: 0,
+          behind: 0,
+          staged: [],
+          modified: [],
+          deleted: [],
+          untracked: [],
+          remotes: [],
+        });
+        return;
+      }
+
+      try {
+        const repo = await gitOps.getRepoState();
+        res.json({ isRepo: true, ...repo });
+      } catch (err) {
+        const rawMessage = (err as Error).message;
+        const message = rawMessage.includes("did not match the expected pattern")
+          ? "Git metadata could not be parsed. Reinitialize Git to repair this repository."
+          : rawMessage;
+        const likelyNotRepo = /not a git repository/i.test(message);
+        res.json({
+          isRepo: !likelyNotRepo,
+          branch: null,
+          clean: false,
+          ahead: 0,
+          behind: 0,
+          staged: [],
+          modified: [],
+          deleted: [],
+          untracked: [],
+          remotes: [],
+          error: message,
+        });
+      }
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/init", async (_req, res) => {
+    try {
+      const { force } = (_req.body ?? {}) as { force?: boolean };
+      const projectRoot = getProject();
+      const gitOps = new GitOperations(projectRoot);
+      await gitOps.init(!!force);
+      const repo = await gitOps.getRepoState().catch(() => ({
+        branch: null,
+        clean: false,
+        ahead: 0,
+        behind: 0,
+        staged: [],
+        modified: [],
+        deleted: [],
+        untracked: [],
+        remotes: [],
+      }));
+      res.json({ ok: true, ...repo });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/remote", async (req, res) => {
+    try {
+      const { name, url } = req.body as { name?: string; url?: string };
+      const remoteName = (name ?? "origin").trim();
+      const remoteUrl = (url ?? "").trim();
+      if (!remoteName) { res.status(400).json({ error: "name is required" }); return; }
+      if (!remoteUrl) { res.status(400).json({ error: "url is required" }); return; }
+
+      const projectRoot = getProject();
+      const gitOps = new GitOperations(projectRoot);
+      if (!(await gitOps.isRepo())) { res.status(400).json({ error: "Not a git repository" }); return; }
+
+      await gitOps.setRemote(remoteName, remoteUrl);
+      const repo = await gitOps.getRepoState().catch(() => ({
+        branch: null,
+        clean: false,
+        ahead: 0,
+        behind: 0,
+        staged: [],
+        modified: [],
+        deleted: [],
+        untracked: [],
+        remotes: [],
+      }));
+      res.json({ ok: true, ...repo });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/git/identity", async (_req, res) => {
+    try {
+      const projectRoot = getProject();
+      const localName = await readGitConfigValue(projectRoot, "user.name", false);
+      const localEmail = await readGitConfigValue(projectRoot, "user.email", false);
+      const globalName = await readGitConfigValue(projectRoot, "user.name", true);
+      const globalEmail = await readGitConfigValue(projectRoot, "user.email", true);
+      const localHelper = await readGitConfigValue(projectRoot, "credential.helper", false);
+      const globalHelper = await readGitConfigValue(projectRoot, "credential.helper", true);
+
+      res.json({
+        name: localName ?? globalName ?? "",
+        email: localEmail ?? globalEmail ?? "",
+        nameScope: localName ? "local" : globalName ? "global" : "unset",
+        emailScope: localEmail ? "local" : globalEmail ? "global" : "unset",
+        credentialHelper: localHelper ?? globalHelper ?? "",
+        credentialHelperScope: localHelper ? "local" : globalHelper ? "global" : "unset",
+        platform: osPlatform(),
       });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/identity", async (req, res) => {
+    try {
+      const { name, email, scope } = req.body as { name?: string; email?: string; scope?: "local" | "global" };
+      const normalizedName = (name ?? "").trim();
+      const normalizedEmail = (email ?? "").trim();
+      const targetScope = scope === "global" ? "global" : "local";
+
+      if (!normalizedName && !normalizedEmail) {
+        res.status(400).json({ error: "name or email is required" });
+        return;
+      }
+
+      const projectRoot = getProject();
+      if (normalizedName) {
+        await setGitConfigValue(projectRoot, "user.name", normalizedName, targetScope === "global");
+      }
+      if (normalizedEmail) {
+        await setGitConfigValue(projectRoot, "user.email", normalizedEmail, targetScope === "global");
+      }
+
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  // ── Git diff ──────────────────────────────────────────────────────────────
+  app.post("/api/git/credential-helper", async (req, res) => {
+    try {
+      const { helper, scope } = req.body as { helper?: string; scope?: "local" | "global" };
+      const targetScope = scope === "global" ? "global" : "local";
+      const normalizedHelper = (helper ?? "").trim() || (
+        osPlatform() === "darwin"
+          ? "osxkeychain"
+          : (osPlatform() === "win32" ? "manager-core" : "cache --timeout=7200")
+      );
+
+      await setGitConfigValue(getProject(), "credential.helper", normalizedHelper, targetScope === "global");
+      res.json({ ok: true, helper: normalizedHelper, scope: targetScope });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/github-credential", async (req, res) => {
+    try {
+      const { username, token } = req.body as { username?: string; token?: string };
+      const normalizedUsername = (username ?? "").trim();
+      const normalizedToken = (token ?? "").trim();
+      if (!normalizedUsername) {
+        res.status(400).json({ error: "username is required" });
+        return;
+      }
+      if (!normalizedToken) {
+        res.status(400).json({ error: "token is required" });
+        return;
+      }
+
+      const projectRoot = getProject();
+      const helper = await readGitConfigValue(projectRoot, "credential.helper", false)
+        ?? await readGitConfigValue(projectRoot, "credential.helper", true);
+      if (!helper) {
+        const fallbackHelper = osPlatform() === "darwin"
+          ? "osxkeychain"
+          : (osPlatform() === "win32" ? "manager-core" : "cache --timeout=7200");
+        await setGitConfigValue(projectRoot, "credential.helper", fallbackHelper, false);
+      }
+
+      await approveGitHubCredential(projectRoot, normalizedUsername, normalizedToken);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/git/branches", async (_req, res) => {
+    try {
+      const gitOps = new GitOperations(getProject());
+      if (!(await gitOps.isRepo())) { res.status(400).json({ error: "Not a git repository" }); return; }
+      const branches = await gitOps.getBranches().catch(() => ({ current: "", all: [] }));
+      res.json(branches);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/checkout", async (req, res) => {
+    try {
+      const { branch, create } = req.body as { branch?: string; create?: boolean };
+      const nextBranch = (branch ?? "").trim();
+      if (!nextBranch) { res.status(400).json({ error: "branch is required" }); return; }
+      const gitOps = new GitOperations(getProject());
+      if (!(await gitOps.isRepo())) { res.status(400).json({ error: "Not a git repository" }); return; }
+      await gitOps.checkoutBranch(nextBranch, !!create);
+      const repo = await gitOps.getRepoState();
+      res.json({ ok: true, ...repo });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/stage", async (req, res) => {
+    try {
+      const { path, all } = req.body as { path?: string; all?: boolean };
+      const gitOps = new GitOperations(getProject());
+      if (!(await gitOps.isRepo())) { res.status(400).json({ error: "Not a git repository" }); return; }
+      if (all) await gitOps.stageAll();
+      else if (path?.trim()) await gitOps.stageFile(path.trim());
+      else { res.status(400).json({ error: "path or all required" }); return; }
+      const repo = await gitOps.getRepoState();
+      res.json({ ok: true, ...repo });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/unstage", async (req, res) => {
+    try {
+      const { path } = req.body as { path?: string };
+      if (!path?.trim()) { res.status(400).json({ error: "path is required" }); return; }
+      const gitOps = new GitOperations(getProject());
+      if (!(await gitOps.isRepo())) { res.status(400).json({ error: "Not a git repository" }); return; }
+      await gitOps.unstageFile(path.trim());
+      const repo = await gitOps.getRepoState();
+      res.json({ ok: true, ...repo });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/discard", async (req, res) => {
+    try {
+      const { path } = req.body as { path?: string };
+      if (!path?.trim()) { res.status(400).json({ error: "path is required" }); return; }
+      const gitOps = new GitOperations(getProject());
+      if (!(await gitOps.isRepo())) { res.status(400).json({ error: "Not a git repository" }); return; }
+      await gitOps.discardFile(path.trim());
+      const repo = await gitOps.getRepoState();
+      res.json({ ok: true, ...repo });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/commit", async (req, res) => {
+    try {
+      const { message } = req.body as { message?: string };
+      const commitMessage = (message ?? "").trim();
+      if (!commitMessage) { res.status(400).json({ error: "message is required" }); return; }
+      const gitOps = new GitOperations(getProject());
+      if (!(await gitOps.isRepo())) { res.status(400).json({ error: "Not a git repository" }); return; }
+      const hash = await gitOps.commitAll(commitMessage);
+      const repo = await gitOps.getRepoState();
+      res.json({ ok: true, commit: hash, ...repo });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/fetch", async (_req, res) => {
+    try {
+      const gitOps = new GitOperations(getProject());
+      if (!(await gitOps.isRepo())) { res.status(400).json({ error: "Not a git repository" }); return; }
+      await gitOps.fetch();
+      const repo = await gitOps.getRepoState();
+      res.json({ ok: true, ...repo });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/pull", async (req, res) => {
+    try {
+      const { remote, branch } = req.body as { remote?: string; branch?: string };
+      const gitOps = new GitOperations(getProject());
+      if (!(await gitOps.isRepo())) { res.status(400).json({ error: "Not a git repository" }); return; }
+      await gitOps.pull((remote ?? "origin").trim() || "origin", branch?.trim() || undefined);
+      const repo = await gitOps.getRepoState();
+      res.json({ ok: true, ...repo });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/git/push", async (req, res) => {
+    try {
+      const { remote, branch } = req.body as { remote?: string; branch?: string };
+      const gitOps = new GitOperations(getProject());
+      if (!(await gitOps.isRepo())) { res.status(400).json({ error: "Not a git repository" }); return; }
+      await gitOps.push((remote ?? "origin").trim() || "origin", branch?.trim() || undefined);
+      const repo = await gitOps.getRepoState();
+      res.json({ ok: true, ...repo });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   app.get("/api/git/diff", async (req, res) => {
     try {
@@ -608,7 +1678,7 @@ export async function startServer(initialProject?: string): Promise<void> {
 
       currentProject = projectRoot;
 
-      const initialConfig = await readConfig(projectRoot);
+      const initialConfig = await readEffectiveConfig(projectRoot);
       let shouldWriteConfig = false;
       const nextConfig = {
         ...initialConfig,
@@ -677,7 +1747,7 @@ export async function startServer(initialProject?: string): Promise<void> {
       let models;
       let runtime;
       try {
-        const config = await readConfig(projectRoot);
+        const config = await readEffectiveConfig(projectRoot);
         models = createModelSet(config);
         runtime = await createRoleRuntime(projectRoot, config, {
           info: (msg) => adapter.info(msg),
@@ -714,5 +1784,8 @@ export async function startServer(initialProject?: string): Promise<void> {
     else res.status(404).send("Web UI not built. Run: npm run build:web");
   });
 
-  app.listen(API_PORT, () => { /* logged by CLI */ });
+  return await new Promise<HttpServer>((resolvePromise, rejectPromise) => {
+    const server = app.listen(API_PORT, () => resolvePromise(server));
+    server.once("error", rejectPromise);
+  });
 }

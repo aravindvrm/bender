@@ -1,7 +1,7 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { readConfig, writeConfig, type BenderConfig } from "../state/config.js";
+import { readEffectiveConfig, writeConfig, type BenderConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { createModelSet, getModelForRole } from "../llm/provider.js";
 import { generateClarifyingQuestions, generateBrief } from "../roles/clarifier.js";
@@ -42,7 +42,7 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
   }
 
   // Initialize state and config
-  const config = await readConfig(projectRoot);
+  const config = await readEffectiveConfig(projectRoot);
   await state.init();
   await writeConfig(projectRoot, config);
 

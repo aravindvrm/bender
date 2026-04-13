@@ -2,16 +2,16 @@ import type { ProjectState } from "../hooks/useApi";
 import { ProjectSelector } from "./ProjectSelector";
 import {
   FileText,
-  FilePlus,
+  CirclePlus,
   FolderTree,
   GitCompareArrows,
   MonitorCog,
-  ScanSearch,
+  ScanEye,
   Settings,
   type LucideIcon,
 } from "lucide-react";
 
-export type View = "plan" | "architecture" | "brief" | "changes" | "settings";
+export type View = "plan" | "architecture" | "brief" | "git" | "settings";
 
 interface SidebarProps {
   activeView: View;
@@ -25,7 +25,7 @@ const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "brief", label: "Overview", icon: FileText },
   { id: "plan", label: "Tasks", icon: MonitorCog },
   { id: "architecture", label: "Architecture", icon: FolderTree },
-  { id: "changes", label: "Changes", icon: GitCompareArrows },
+  { id: "git", label: "Git", icon: GitCompareArrows },
 ];
 
 export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGlobalAction }: SidebarProps) {
@@ -54,7 +54,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
           title="New Project"
           className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
         >
-          <FilePlus className="h-4 w-4" />
+          <CirclePlus className="h-4 w-4" />
         </button>
 
         {/* Analyze project */}
@@ -64,7 +64,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
           title="Analyze Project"
           className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed"
         >
-          <ScanSearch className="h-4 w-4" />
+          <ScanEye className="h-4 w-4" />
         </button>
 
         {/* Spacer */}

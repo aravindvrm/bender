@@ -9,7 +9,197 @@ interface ArchitectureViewProps {
   state: ProjectState;
 }
 
-type Tab = "overview" | "schema" | "flows" | "decisions" | "conventions";
+type Tab = "overview" | "schema" | "api" | "flows" | "decisions" | "conventions";
+
+type StackFieldKey = "framework" | "database" | "orm" | "auth" | "styling" | "language" | "deployment";
+interface MarkdownSection {
+  heading: string;
+  level: number;
+  body: string;
+}
+
+const STACK_FIELD_LABELS: Record<StackFieldKey, string> = {
+  framework: "Framework",
+  database: "Database",
+  orm: "ORM",
+  auth: "Auth",
+  styling: "Styling",
+  language: "Language",
+  deployment: "Deployment",
+};
+
+function normalizeStackKey(raw: string): StackFieldKey | null {
+  const key = raw.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (key === "framework") return "framework";
+  if (key === "database") return "database";
+  if (key === "orm") return "orm";
+  if (key === "auth" || key === "authentication") return "auth";
+  if (key === "styling" || key === "styles" || key === "ui") return "styling";
+  if (key === "language") return "language";
+  if (key === "deployment") return "deployment";
+  return null;
+}
+
+function parseStackLines(lines: string[]): Partial<Record<StackFieldKey, string>> {
+  const parsed: Partial<Record<StackFieldKey, string>> = {};
+  for (const line of lines) {
+    const cleaned = line.replace(/^[-*]\s+/, "").trim();
+    const match = cleaned.match(/^\**([^:*]+?)\**\s*:\s*(.+)$/);
+    if (!match) continue;
+    const key = normalizeStackKey(match[1]);
+    if (!key) continue;
+    parsed[key] = match[2].trim();
+  }
+  return parsed;
+}
+
+function extractStackFromArchitecture(content: string): Partial<Record<StackFieldKey, string>> {
+  const lines = content.split("\n");
+  const headingIndex = lines.findIndex((line) => /^#{1,6}\s*stack\s*$/i.test(line.trim()));
+  if (headingIndex >= 0) {
+    const section: string[] = [];
+    for (let i = headingIndex + 1; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (/^#{1,6}\s+\S/.test(line.trim())) break;
+      section.push(line);
+    }
+    const parsed = parseStackLines(section);
+    if (Object.keys(parsed).length > 0) return parsed;
+  }
+
+  const plainIndex = lines.findIndex((line) => /^stack$/i.test(line.trim()));
+  if (plainIndex >= 0) {
+    const section = lines.slice(plainIndex + 1, plainIndex + 20);
+    const parsed = parseStackLines(section);
+    if (Object.keys(parsed).length > 0) return parsed;
+  }
+
+  return parseStackLines(lines);
+}
+
+function isStackValueLine(line: string): boolean {
+  const cleaned = line.replace(/^[-*]\s+/, "").trim();
+  const match = cleaned.match(/^\**([^:*]+?)\**\s*:\s*(.+)$/);
+  if (!match) return false;
+  return normalizeStackKey(match[1]) !== null;
+}
+
+function normalizeHeadingTitle(heading: string): string {
+  return heading.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function parseMarkdownSections(content: string): { preface: string; sections: MarkdownSection[] } {
+  const lines = content.split("\n");
+  const sections: MarkdownSection[] = [];
+  const headingIndexes: Array<{ index: number; level: number; heading: string }> = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = lines[i].match(/^(#{1,6})\s+(.+)$/);
+    if (!match) continue;
+    headingIndexes.push({ index: i, level: match[1].length, heading: match[2].trim() });
+  }
+
+  if (headingIndexes.length === 0) {
+    return { preface: content.trim(), sections: [] };
+  }
+
+  const preface = lines.slice(0, headingIndexes[0].index).join("\n").trim();
+
+  for (let i = 0; i < headingIndexes.length; i += 1) {
+    const current = headingIndexes[i];
+    const next = headingIndexes[i + 1];
+    const body = lines.slice(current.index + 1, next ? next.index : lines.length).join("\n").trim();
+    sections.push({
+      heading: current.heading,
+      level: current.level,
+      body,
+    });
+  }
+
+  return { preface, sections };
+}
+
+function isStackHeading(heading: string): boolean {
+  return normalizeHeadingTitle(heading) === "stack";
+}
+
+function isSchemaHeading(heading: string): boolean {
+  const normalized = normalizeHeadingTitle(heading);
+  return normalized === "schema" || normalized === "database schema";
+}
+
+function isConventionsHeading(heading: string): boolean {
+  const normalized = normalizeHeadingTitle(heading);
+  return normalized === "conventions" || normalized === "coding conventions";
+}
+
+function isApiHeading(heading: string): boolean {
+  const normalized = normalizeHeadingTitle(heading);
+  return normalized === "api"
+    || normalized.startsWith("api ")
+    || normalized.includes(" api")
+    || normalized.includes("api contract")
+    || normalized === "endpoints"
+    || normalized === "routes";
+}
+
+function isDesignHeading(heading: string): boolean {
+  const normalized = normalizeHeadingTitle(heading);
+  return normalized === "design"
+    || normalized === "design decisions"
+    || normalized === "key design decisions"
+    || normalized === "key decisions";
+}
+
+function buildOverviewContent(content: string): string {
+  const withoutStackLines = content
+    .split("\n")
+    .filter((line) => !isStackValueLine(line))
+    .join("\n")
+    .trim();
+
+  const { preface, sections } = parseMarkdownSections(withoutStackLines);
+  const designSection = sections.find((section) => isDesignHeading(section.heading));
+  const filtered = sections.filter((section) =>
+    !isStackHeading(section.heading)
+    && !isSchemaHeading(section.heading)
+    && !isConventionsHeading(section.heading)
+    && !isApiHeading(section.heading)
+    && !isDesignHeading(section.heading),
+  );
+
+  const blocks: string[] = [];
+
+  if (designSection?.body) {
+    blocks.push(`## Design\n\n${designSection.body.trim()}`);
+  }
+
+  if (preface) {
+    blocks.push(preface);
+  }
+
+  for (const section of filtered) {
+    if (!section.body.trim()) continue;
+    const level = "#".repeat(Math.min(6, Math.max(1, section.level)));
+    blocks.push(`${level} ${section.heading}\n\n${section.body.trim()}`);
+  }
+
+  return blocks.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function extractApiContent(content: string): string | null {
+  const { sections } = parseMarkdownSections(content);
+  const apiSection = sections.find((section) => isApiHeading(section.heading) && section.body.trim().length > 0);
+  if (!apiSection) return null;
+  return apiSection.body.trim();
+}
+
+function formatApiContent(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("#") || trimmed.includes("```")) return trimmed;
+  return `\`\`\`yaml\n${trimmed}\n\`\`\``;
+}
 
 // Extract mermaid code blocks from markdown and render each one
 function FlowsContent({ content, onRegenerate, generating }: {
@@ -63,6 +253,47 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
   const [genError, setGenError] = useState<string | null>(null);
 
   const erDiagram = state.schema ? sqlToErDiagram(state.schema) : null;
+  const parsedStack = extractStackFromArchitecture(state.architecture ?? "");
+  const stackRows: Array<{ label: string; value: string }> = [
+    {
+      label: STACK_FIELD_LABELS.framework,
+      value: parsedStack.framework ?? state.config.stack.framework,
+    },
+    {
+      label: STACK_FIELD_LABELS.database,
+      value: parsedStack.database ?? state.config.stack.database,
+    },
+    {
+      label: STACK_FIELD_LABELS.orm,
+      value: parsedStack.orm ?? state.config.stack.orm,
+    },
+    {
+      label: STACK_FIELD_LABELS.auth,
+      value: parsedStack.auth ?? state.config.stack.auth,
+    },
+    {
+      label: STACK_FIELD_LABELS.styling,
+      value: parsedStack.styling ?? state.config.stack.styling,
+    },
+    {
+      label: STACK_FIELD_LABELS.language,
+      value: parsedStack.language ?? state.config.stack.language,
+    },
+  ];
+  if (parsedStack.deployment) {
+    stackRows.push({
+      label: STACK_FIELD_LABELS.deployment,
+      value: parsedStack.deployment,
+    });
+  }
+  const architectureContent = state.architecture ?? "";
+  const overviewContent = buildOverviewContent(architectureContent);
+  const apiContent = (() => {
+    const direct = state.apiContracts?.trim() ?? "";
+    if (direct) return formatApiContent(direct);
+    const extracted = extractApiContent(architectureContent);
+    return extracted ? formatApiContent(extracted) : "";
+  })();
 
   const generateFlows = useCallback(async () => {
     setGenerating(true);
@@ -112,6 +343,7 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
   const tabs: { id: Tab; label: string; available: boolean }[] = [
     { id: "overview", label: "Architecture", available: !!state.architecture },
     { id: "schema", label: "Schema", available: !!state.schema },
+    { id: "api", label: "API", available: true },
     { id: "flows", label: "Flows", available: true },
     { id: "decisions", label: `Decisions (${state.decisions.length})`, available: state.decisions.length > 0 },
     { id: "conventions", label: "Conventions", available: !!state.conventions },
@@ -139,7 +371,20 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
       {/* Content */}
       <div className="pb-8">
         {activeTab === "overview" && (
-          <MarkdownView content={state.architecture} />
+          <div className="space-y-6">
+            <section>
+              <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wide mb-3">Stack</h2>
+              <div className="grid grid-cols-2 gap-2">
+                {stackRows.map((row) => (
+                  <div key={row.label} className="flex items-center justify-between px-3 py-2 bg-zinc-900 rounded-md border border-zinc-800">
+                    <span className="text-xs text-zinc-500">{row.label}</span>
+                    <span className="text-xs text-zinc-300">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+            <MarkdownView content={overviewContent || state.architecture} />
+          </div>
         )}
 
         {activeTab === "schema" && state.schema && (
@@ -156,6 +401,19 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
                 <code className="text-sm text-zinc-300 leading-relaxed">{state.schema}</code>
               </pre>
             </div>
+          </div>
+        )}
+
+        {activeTab === "api" && (
+          <div className="space-y-4">
+            <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wide">API Contracts</h2>
+            {apiContent ? (
+              <MarkdownView content={apiContent} />
+            ) : (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-sm text-zinc-500">
+                No API contracts found yet.
+              </div>
+            )}
           </div>
         )}
 

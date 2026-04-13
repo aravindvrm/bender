@@ -108,8 +108,28 @@ export function OperationDrawer({
   onSubmitPlan,
 }: OperationDrawerProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [drawerHeight, setDrawerHeight] = useState(288);
+  const [isResizing, setIsResizing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const resizeStartYRef = useRef(0);
+  const resizeStartHeightRef = useRef(288);
   const isRunning = status === "running";
+
+  function clampDrawerHeight(height: number): number {
+    const minHeight = 160;
+    const maxHeight = typeof window !== "undefined"
+      ? Math.floor(window.innerHeight * 0.78)
+      : 640;
+    return Math.max(minHeight, Math.min(height, maxHeight));
+  }
+
+  function startResize(e: React.MouseEvent<HTMLDivElement>) {
+    if (collapsed) return;
+    e.preventDefault();
+    resizeStartYRef.current = e.clientY;
+    resizeStartHeightRef.current = drawerHeight;
+    setIsResizing(true);
+  }
 
   useEffect(() => {
     if (!collapsed) {
@@ -120,6 +140,33 @@ export function OperationDrawer({
   useEffect(() => {
     if (status === "running") setCollapsed(false);
   }, [status]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    function onMouseMove(e: MouseEvent) {
+      const delta = resizeStartYRef.current - e.clientY;
+      setDrawerHeight(clampDrawerHeight(resizeStartHeightRef.current + delta));
+    }
+
+    function stopResize() {
+      setIsResizing(false);
+    }
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", stopResize);
+    window.addEventListener("mouseleave", stopResize);
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", stopResize);
+      window.removeEventListener("mouseleave", stopResize);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [isResizing]);
 
   const statusLabel =
     status === "running" ? "Running…" :
@@ -163,7 +210,17 @@ export function OperationDrawer({
         />
       )}
 
-      <div className={`shrink-0 border-t border-zinc-800 bg-zinc-950 flex flex-col transition-all duration-200 ${collapsed ? "h-10" : "h-72"}`}>
+      <div
+        className={`shrink-0 border-t border-zinc-800 bg-zinc-950 flex flex-col ${isResizing ? "" : "transition-[height] duration-150"} ${collapsed ? "h-10" : ""}`}
+        style={!collapsed ? { height: `${drawerHeight}px` } : undefined}
+      >
+        {!collapsed && (
+          <div
+            onMouseDown={startResize}
+            className={`h-1.5 shrink-0 cursor-ns-resize transition-colors ${isResizing ? "bg-zinc-700/80" : "bg-zinc-900 hover:bg-zinc-800"}`}
+            title="Drag to resize console"
+          />
+        )}
         <div className="flex items-center gap-2 px-4 h-10 shrink-0 border-b border-zinc-800/60">
           {isRunning && (
             <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-pulse shrink-0" />
@@ -180,7 +237,10 @@ export function OperationDrawer({
           )}
           {(status === "done" || status === "error") && (
             <button
-              onClick={onClear}
+              onClick={() => {
+                onClear();
+                setCollapsed(true);
+              }}
               className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 rounded border border-zinc-800 hover:border-zinc-600"
             >
               Clear
@@ -195,9 +255,9 @@ export function OperationDrawer({
             {collapsed ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           </button>
           <button
-            onClick={() => onSetDrawerOpen(false)}
+            onClick={() => setCollapsed(true)}
             className="text-zinc-600 hover:text-zinc-400 transition-colors"
-            title="Close"
+            title="Minimize"
           >
             <X className="h-3.5 w-3.5" />
           </button>

@@ -1,4 +1,4 @@
-import { readConfig } from "../state/config.js";
+import { readEffectiveConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { createModelSet, getModelForRole } from "../llm/provider.js";
 import { generateClarifyingQuestions, generateBrief } from "../roles/clarifier.js";
@@ -17,7 +17,7 @@ export async function planCommand(projectRoot: string, featureDescription: strin
     return;
   }
 
-  const config = await readConfig(projectRoot);
+  const config = await readEffectiveConfig(projectRoot);
   const existingContext = await state.gatherContext();
 
   if (!existingContext.brief || !existingContext.architecture) {
