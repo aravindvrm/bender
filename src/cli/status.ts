@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { readConfig } from "../state/config.js";
+import { readEffectiveConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { GitOperations } from "../git/operations.js";
 import * as ui from "./ui.js";
@@ -12,7 +12,7 @@ export async function statusCommand(projectRoot: string): Promise<void> {
     return;
   }
 
-  const config = await readConfig(projectRoot);
+  const config = await readEffectiveConfig(projectRoot);
   const context = await state.gatherContext();
 
   ui.header("Bender Project Status");

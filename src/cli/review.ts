@@ -1,14 +1,31 @@
 import { resolve } from "node:path";
 import { startServer } from "./server.js";
+import {
+  clearDashboardPid,
+  clearDashboardPidSync,
+  isProcessRunning,
+  readDashboardPid,
+  writeDashboardPid,
+} from "./serverProcess.js";
 import * as ui from "./ui.js";
 
 export async function bendCommand(projectDir?: string): Promise<void> {
   const initialProject = projectDir ? resolve(projectDir) : undefined;
 
+  const existingPid = await readDashboardPid();
+  if (existingPid && isProcessRunning(existingPid)) {
+    ui.warn(`Dashboard already running (pid ${existingPid}). Use 'bender stop' first if needed.\n`);
+    return;
+  }
+  if (existingPid && !isProcessRunning(existingPid)) {
+    await clearDashboardPid();
+  }
+
   ui.header("Bender Bend — Dashboard");
   ui.info("Starting local server...\n");
 
-  await startServer(initialProject);
+  const server = await startServer(initialProject);
+  await writeDashboardPid(process.pid);
 
   ui.success("Server running on http://localhost:3142");
   console.log();
@@ -20,7 +37,32 @@ export async function bendCommand(projectDir?: string): Promise<void> {
   console.log();
   ui.info("Press Ctrl+C to stop.\n");
 
-  await new Promise(() => {});
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    ui.info(`\nStopping server (${signal})...`);
+    await clearDashboardPid();
+    await new Promise<void>((resolveClose) => {
+      server.close(() => resolveClose());
+    });
+  };
+
+  const onSigInt = () => { void shutdown("SIGINT"); };
+  const onSigTerm = () => { void shutdown("SIGTERM"); };
+
+  process.once("SIGINT", onSigInt);
+  process.once("SIGTERM", onSigTerm);
+  process.once("exit", () => {
+    clearDashboardPidSync();
+  });
+
+  await new Promise<void>((resolveClose) => {
+    server.once("close", () => resolveClose());
+  });
+
+  process.off("SIGINT", onSigInt);
+  process.off("SIGTERM", onSigTerm);
 }
 
 // Backward-compatible alias for older scripts/workflows.

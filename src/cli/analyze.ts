@@ -1,4 +1,4 @@
-import { readConfig, writeConfig } from "../state/config.js";
+import { readEffectiveConfig, writeConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { createModelSet } from "../llm/provider.js";
 import { scanCodebase, analyzeCodebase, parseAnalysisOutput } from "../roles/analyzer.js";
@@ -23,7 +23,7 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
     }
   }
 
-  const config = await readConfig(projectRoot);
+  const config = await readEffectiveConfig(projectRoot);
 
   let models;
   try {

@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 export type ModelTier = "fast" | "default" | "strong";
@@ -102,6 +103,38 @@ export function getConfigPath(projectRoot: string): string {
 
 export async function readConfig(projectRoot: string): Promise<BenderConfig> {
   const configPath = getConfigPath(projectRoot);
+  return readConfigAtPath(configPath);
+}
+
+export async function writeConfig(projectRoot: string, config: BenderConfig): Promise<void> {
+  const configPath = getConfigPath(projectRoot);
+  await writeConfigAtPath(configPath, config);
+}
+
+export function getGlobalConfigPath(): string {
+  return join(homedir(), ".bender", "global-config.yaml");
+}
+
+export async function readGlobalConfig(): Promise<BenderConfig> {
+  return readConfigAtPath(getGlobalConfigPath());
+}
+
+export async function writeGlobalConfig(config: BenderConfig): Promise<void> {
+  await writeConfigAtPath(getGlobalConfigPath(), config);
+}
+
+export async function readEffectiveConfig(projectRoot?: string | null): Promise<BenderConfig> {
+  const globalConfig = await readGlobalConfig();
+  if (!projectRoot) return globalConfig;
+  const projectConfigPath = getConfigPath(projectRoot);
+  if (!existsSync(projectConfigPath)) {
+    return globalConfig;
+  }
+  const projectConfig = await readConfig(projectRoot);
+  return mergeConfig(globalConfig, projectConfig);
+}
+
+async function readConfigAtPath(configPath: string): Promise<BenderConfig> {
   if (!existsSync(configPath)) {
     return { ...DEFAULT_CONFIG };
   }
@@ -110,15 +143,32 @@ export async function readConfig(projectRoot: string): Promise<BenderConfig> {
   return mergeConfig(DEFAULT_CONFIG, parsed);
 }
 
-export async function writeConfig(projectRoot: string, config: BenderConfig): Promise<void> {
-  const benderDir = getBenderDir(projectRoot);
-  if (!existsSync(benderDir)) {
-    await mkdir(benderDir, { recursive: true });
+async function writeConfigAtPath(configPath: string, config: BenderConfig): Promise<void> {
+  const configDir = dirname(configPath);
+  if (!existsSync(configDir)) {
+    await mkdir(configDir, { recursive: true });
   }
-  await writeFile(getConfigPath(projectRoot), stringifyYaml(config), "utf-8");
+  await writeFile(configPath, stringifyYaml(config), "utf-8");
 }
 
 function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): BenderConfig {
+  const defaultProviders = defaults.providers ?? {};
+  const overrideProviders = overrides.providers ?? {};
+  const providerNames = new Set([
+    ...Object.keys(defaultProviders),
+    ...Object.keys(overrideProviders),
+  ]);
+  const mergedProviders = Object.fromEntries(
+    [...providerNames].map((name) => {
+      const defaultKey = defaultProviders[name]?.apiKey;
+      const overrideKey = overrideProviders[name]?.apiKey;
+      const resolved = typeof overrideKey === "string" && overrideKey.trim().length > 0
+        ? overrideKey
+        : defaultKey;
+      return [name, resolved ? { apiKey: resolved } : {}];
+    }),
+  ) as { [name: string]: { apiKey?: string } };
+
   return {
     llm: {
       ...defaults.llm,
@@ -128,7 +178,7 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
         ...overrides.llm?.models,
       },
     },
-    providers: overrides.providers ?? defaults.providers,
+    providers: mergedProviders,
     mcp: {
       ...defaults.mcp,
       ...overrides.mcp,

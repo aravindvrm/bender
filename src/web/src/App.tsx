@@ -6,14 +6,14 @@ import { OperationDrawer, type InitModalSubmission } from "./components/Operatio
 import { PlanView } from "./pages/PlanView";
 import { ArchitectureView } from "./pages/ArchitectureView";
 import { BriefView } from "./pages/BriefView";
-import { ChangesView } from "./pages/ChangesView";
+import { GitView } from "./pages/ChangesView";
 import { SettingsView } from "./pages/SettingsView";
 
 const VIEW_LABELS: Record<View, string> = {
   plan: "Tasks",
   architecture: "Architecture",
   brief: "Overview",
-  changes: "Changes",
+  git: "Git",
   settings: "Settings",
 };
 
@@ -109,14 +109,22 @@ export function App() {
               <div className="text-center max-w-sm space-y-4">
                 <p className="text-zinc-400 font-medium">Project not initialized</p>
                 <p className="text-sm text-zinc-500">
-                  Click <strong className="text-zinc-300">New Project</strong> in the left rail to initialize this directory with Bender.
+                  This looks like an existing codebase. Run <strong className="text-zinc-300">Analyze Project</strong> to generate the initial Bender brief and architecture.
                 </p>
-                <button
-                  onClick={() => handleGlobalAction("new-project")}
-                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
-                >
-                  New Project
-                </button>
+                <div className="flex items-center justify-center gap-2">
+                  <button
+                    onClick={() => handleGlobalAction("analyze")}
+                    className="px-4 py-2 bg-zinc-100 hover:bg-white border border-zinc-200 rounded-lg text-sm text-zinc-900 transition-colors"
+                  >
+                    Analyze Project
+                  </button>
+                  <button
+                    onClick={() => handleGlobalAction("new-project")}
+                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
+                  >
+                    New Project
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
@@ -134,7 +142,7 @@ export function App() {
                 />
               )}
               {activeView === "architecture" && state && <ArchitectureView state={state} />}
-              {activeView === "changes" && state && <ChangesView state={state} />}
+              {activeView === "git" && state && <GitView state={state} onStateChange={refresh} />}
               {activeView === "settings" && <SettingsView />}
             </div>
           )}

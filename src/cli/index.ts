@@ -8,6 +8,7 @@ import { implementCommand } from "./implement.js";
 import { statusCommand } from "./status.js";
 import { bendCommand } from "./review.js";
 import { analyzeCommand } from "./analyze.js";
+import { stopCommand } from "./stop.js";
 
 const program = new Command();
 
@@ -61,6 +62,13 @@ program
   .option("-d, --dir <path>", "Project directory (optional — can be set from the UI)")
   .action(async (opts) => {
     await bendCommand(opts.dir);
+  });
+
+program
+  .command("stop")
+  .description("Stop the local web dashboard server")
+  .action(async () => {
+    await stopCommand();
   });
 
 program
