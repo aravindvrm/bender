@@ -1940,6 +1940,31 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
     }
   });
 
+  // ── Structured log ────────────────────────────────────────────────────────
+
+  app.get("/api/logs", async (req, res) => {
+    try {
+      const projectRoot = getProject();
+      const logPath = join(projectRoot, ".bender", "bender.log");
+      if (!existsSync(logPath)) return res.json({ entries: [] });
+
+      const raw = await readFile(logPath, "utf-8");
+      const limit = Math.min(500, parseInt((req.query.limit as string) ?? "200", 10) || 200);
+      const entries = raw
+        .split("\n")
+        .filter(Boolean)
+        .slice(-limit)
+        .map((line) => {
+          try { return JSON.parse(line); } catch { return null; }
+        })
+        .filter(Boolean);
+
+      res.json({ entries });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Sessions ──────────────────────────────────────────────────────────────
 
   app.get("/api/sessions", async (_req, res) => {

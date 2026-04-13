@@ -12,6 +12,7 @@ import { analyzeCommand } from "./analyze.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getAllAgents, getEffectiveAgentForRole, type AgentConfig } from "../state/agents.js";
 import { readEffectiveConfig, type BenderConfig } from "../state/config.js";
+import { createLogger, makeAdapterSink } from "../logger.js";
 import type { ModelSet } from "../llm/provider.js";
 import type { ProjectContext } from "../state/manager.js";
 
@@ -222,6 +223,8 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
   }
 
   const config = await readEffectiveConfig(projectRoot);
+  const logger = createLogger("implement", projectRoot, makeAdapterSink(adapter));
+  logger.info("Starting task implementation", { taskId });
   const currentTasks = await state.readCurrentTasks();
 
   if (!currentTasks) {
@@ -365,6 +368,12 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
       `# Task ${task.id}: ${task.title}\n\nCompleted: ${new Date().toISOString()}\n\nFiles: ${fileOps.map((op) => op.path).join(", ")}`,
     );
 
+    logger.info("Task completed", {
+      taskId: task.id,
+      title: task.title,
+      filesWritten: fileOps.length,
+      files: fileOps.map((op) => op.path),
+    });
     adapter.success(`Task ${task.id} complete.`);
 
     // Auto re-analyze if threshold reached
@@ -387,6 +396,7 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
   }
 
   const config = await readEffectiveConfig(projectRoot);
+  const logger = createLogger("implement", projectRoot, makeAdapterSink(adapter));
   const currentTasks = await state.readCurrentTasks();
 
   if (!currentTasks) {
@@ -554,13 +564,20 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
       );
 
       completedTaskSummaries.push(`Task ${task.id}: ${task.title}`);
-
+      logger.info("Task completed", {
+        taskId: task.id,
+        title: task.title,
+        filesWritten: fileOps.length,
+        testsPassed: testResult.passed,
+      });
       // Auto re-analyze if threshold reached
       await maybeAutoReanalyze(projectRoot, config, task, adapter);
     } finally {
       await runtime.close();
     }
   }
+
+  logger.info("Implement session complete", { tasksCompleted: completedTaskSummaries.length });
 
   // Write session log
   await state.writeSession(

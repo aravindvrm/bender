@@ -7,6 +7,7 @@ import { generateFeaturePlan } from "../roles/planner.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getEffectiveAgentForRole } from "../state/agents.js";
+import { createLogger, makeAdapterSink } from "../logger.js";
 
 export async function planCommand(projectRoot: string, featureDescription: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header("Bender Plan — New Feature / Change");
@@ -19,6 +20,8 @@ export async function planCommand(projectRoot: string, featureDescription: strin
   }
 
   const config = await readEffectiveConfig(projectRoot);
+  const logger = createLogger("plan", projectRoot, makeAdapterSink(adapter));
+  logger.info("Starting plan", { feature: featureDescription.slice(0, 120) });
   const existingContext = await state.gatherContext();
 
   if (!existingContext.brief || !existingContext.architecture) {
@@ -190,6 +193,7 @@ export async function planCommand(projectRoot: string, featureDescription: strin
     // Write session log
     await state.writeSession("plan", `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nStatus: completed`);
 
+    logger.info("Plan complete");
     adapter.success("Task plan saved to .bender/tasks/current.md");
     adapter.info("Next step: run `bender implement` to execute the plan.");
     adapter.cleanup();
