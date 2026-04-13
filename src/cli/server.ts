@@ -2167,9 +2167,29 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
   });
 
   app.post("/api/run/plan", async (req, res) => {
-    const { feature } = req.body as { feature?: string };
+    const {
+      feature,
+      role,
+      agentId,
+      askClarifyingQuestions,
+      requireArchitectureApproval,
+      requirePlanApproval,
+    } = req.body as {
+      feature?: string;
+      role?: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
+      agentId?: string;
+      askClarifyingQuestions?: boolean;
+      requireArchitectureApproval?: boolean;
+      requirePlanApproval?: boolean;
+    };
     if (!feature) { res.status(400).json({ error: "feature is required" }); return; }
-    await runOperation(res, (adapter) => planCommand(getProject(), feature, adapter));
+    await runOperation(res, (adapter) => planCommand(getProject(), feature, adapter, {
+      role,
+      agentId,
+      askClarifyingQuestions,
+      requireArchitectureApproval,
+      requirePlanApproval,
+    }));
   });
 
   app.post("/api/run/implement", async (req, res) => {

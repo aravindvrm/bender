@@ -120,3 +120,10 @@ input[type="checkbox"]:disabled {
 .prose-bender table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
 .prose-bender th, .prose-bender td { border: 1px solid #27272a; padding: 0.5rem 0.75rem; text-align: left; }
 .prose-bender th { background: #18181b; color: #d4d4d8; font-weight: 600; }
+
+/* Sidebar progress bar animation */
+@keyframes progressSlide {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(150%); }
+  100% { transform: translateX(-100%); }
+}

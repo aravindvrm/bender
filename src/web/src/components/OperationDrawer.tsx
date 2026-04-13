@@ -16,6 +16,7 @@ import type { ProjectState } from "../hooks/useApi";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
 type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
+type BaseRole = "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
 
 interface DirEntry {
   name: string;
@@ -63,6 +64,15 @@ interface TerminalEntry {
   exitCode: number;
 }
 
+interface PlanModalSubmission {
+  feature: string;
+  role: BaseRole;
+  agentId?: string;
+  askClarifyingQuestions: boolean;
+  requireArchitectureApproval: boolean;
+  requirePlanApproval: boolean;
+}
+
 interface OperationDrawerProps {
   lines: OutputLine[];
   status: OperationStatus;
@@ -80,7 +90,7 @@ interface OperationDrawerProps {
   onClear: () => void;
   onAbort: () => void;
   onSubmitInit: (submission: InitModalSubmission) => void;
-  onSubmitPlan: (text: string) => void;
+  onSubmitPlan: (submission: PlanModalSubmission) => void;
 }
 
 // ── Terminal component ────────────────────────────────────────────────────────
@@ -452,19 +462,14 @@ export function OperationDrawer({
       )}
 
       {modal?.kind === "plan" && (
-        <InputModal
-          title="New Task"
-          placeholder="Describe the feature, fix, or change…"
-          value={inputText}
-          onChange={onSetInputText}
-          onSubmit={() => {
-            const text = inputText.trim();
-            if (!text) return;
+        <PlanTaskModal
+          initialDescription={inputText}
+          onCancel={() => { onSetModal(null); onSetInputText(""); }}
+          onSubmit={(submission) => {
             onSetInputText("");
             onSetModal(null);
-            onSubmitPlan(text);
+            onSubmitPlan(submission);
           }}
-          onCancel={() => { onSetModal(null); onSetInputText(""); }}
         />
       )}
 
@@ -1161,35 +1166,171 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
   }
 }
 
-interface InputModalProps {
-  title: string;
-  placeholder: string;
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: () => void;
+interface PlanTaskModalProps {
+  initialDescription: string;
+  onSubmit: (submission: PlanModalSubmission) => void;
   onCancel: () => void;
 }
 
-function InputModal({ title, placeholder, value, onChange, onSubmit, onCancel }: InputModalProps) {
+interface AgentOption {
+  id: string;
+  name: string;
+  baseRole: BaseRole;
+  modelTier: "fast" | "default" | "strong";
+  isBuiltin?: boolean;
+}
+
+const ROLE_OPTIONS: BaseRole[] = ["planner", "implementer", "architect", "analyzer", "reviewer"];
+
+function detectRoleFromDescription(text: string): BaseRole {
+  const normalized = text.toLowerCase();
+  const containsAny = (terms: string[]) => terms.some((t) => normalized.includes(t));
+
+  if (containsAny(["security", "threat model", "vulnerability", "audit"])) return "analyzer";
+  if (containsAny(["review", "qa", "test coverage", "regression"])) return "reviewer";
+  if (containsAny(["architecture", "design", "schema", "data model"])) return "architect";
+  if (containsAny(["implement", "build", "create", "fix", "refactor"])) return "implementer";
+  return "planner";
+}
+
+function PlanTaskModal({ initialDescription, onSubmit, onCancel }: PlanTaskModalProps) {
+  const [description, setDescription] = useState(initialDescription);
+  const [role, setRole] = useState<BaseRole>(detectRoleFromDescription(initialDescription));
+  const [roleManuallySet, setRoleManuallySet] = useState(false);
+  const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [agentId, setAgentId] = useState("");
+  const [askClarifyingQuestions, setAskClarifyingQuestions] = useState(false);
+  const [requireArchitectureApproval, setRequireArchitectureApproval] = useState(false);
+  const [requirePlanApproval, setRequirePlanApproval] = useState(false);
+
+  const detectedRole = detectRoleFromDescription(description);
+
+  useEffect(() => {
+    fetch("/api/agents")
+      .then((r) => r.json())
+      .then((data) => setAgents((data.agents ?? []) as AgentOption[]))
+      .catch(() => setAgents([]));
+  }, []);
+
+  useEffect(() => {
+    if (!roleManuallySet) {
+      setRole(detectedRole);
+    }
+  }, [detectedRole, roleManuallySet]);
+
+  const roleAgents = agents.filter((a) => a.baseRole === role);
+  const canSubmit = description.trim().length > 0;
+
+  useEffect(() => {
+    if (agentId && !roleAgents.some((a) => a.id === agentId)) {
+      setAgentId("");
+    }
+  }, [agentId, roleAgents]);
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-lg shadow-2xl">
+      <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-2xl shadow-2xl">
         <div className="px-5 py-4 border-b border-zinc-800">
-          <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
+          <h3 className="text-sm font-semibold text-zinc-100">New Task</h3>
         </div>
-        <div className="p-5 space-y-4">
-          <textarea
-            autoFocus
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
-            rows={5}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSubmit();
-              if (e.key === "Escape") onCancel();
-            }}
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 resize-none"
-          />
+        <div className="p-5 space-y-5">
+          <div className="space-y-1.5">
+            <label className="text-xs text-zinc-500 uppercase tracking-wide">Description</label>
+            <textarea
+              autoFocus
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Describe the feature, fix, or change…"
+              rows={5}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSubmit) {
+                  onSubmit({
+                    feature: description.trim(),
+                    role,
+                    agentId: agentId || undefined,
+                    askClarifyingQuestions,
+                    requireArchitectureApproval,
+                    requirePlanApproval,
+                  });
+                }
+                if (e.key === "Escape") onCancel();
+              }}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 resize-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-xs text-zinc-500 uppercase tracking-wide">Role</label>
+              <div className="relative">
+                <select
+                  value={role}
+                  onChange={(e) => {
+                    setRoleManuallySet(true);
+                    setRole(e.target.value as BaseRole);
+                  }}
+                  className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+                >
+                  {ROLE_OPTIONS.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+              </div>
+              <p className="text-[11px] text-zinc-600">Auto-detected from description: {detectedRole}</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs text-zinc-500 uppercase tracking-wide">Agent (Optional)</label>
+              <div className="relative">
+                <select
+                  value={agentId}
+                  onChange={(e) => setAgentId(e.target.value)}
+                  className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+                >
+                  <option value="">Use role default</option>
+                  {roleAgents.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} ({a.modelTier}){a.isBuiltin ? " [builtin]" : ""}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+              </div>
+              <p className="text-[11px] text-zinc-600">Matched to selected role.</p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-xs text-zinc-500 uppercase tracking-wide">Planning Flow</p>
+            <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={askClarifyingQuestions}
+                onChange={(e) => setAskClarifyingQuestions(e.target.checked)}
+              />
+              Ask clarifying questions before planning
+            </label>
+            <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={requireArchitectureApproval}
+                onChange={(e) => setRequireArchitectureApproval(e.target.checked)}
+              />
+              Require architecture approval step
+            </label>
+            <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={requirePlanApproval}
+                onChange={(e) => setRequirePlanApproval(e.target.checked)}
+              />
+              Require plan approval step
+            </label>
+          </div>
+
           <p className="text-xs text-zinc-600">⌘ Enter to start</p>
         </div>
         <div className="px-5 py-3 border-t border-zinc-800 flex justify-end gap-2">
@@ -1197,8 +1338,15 @@ function InputModal({ title, placeholder, value, onChange, onSubmit, onCancel }:
             Cancel
           </button>
           <button
-            onClick={onSubmit}
-            disabled={!value.trim()}
+            onClick={() => onSubmit({
+              feature: description.trim(),
+              role,
+              agentId: agentId || undefined,
+              askClarifyingQuestions,
+              requireArchitectureApproval,
+              requirePlanApproval,
+            })}
+            disabled={!canSubmit}
             className="px-4 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-900 rounded-md hover:bg-white disabled:opacity-40 transition-colors"
           >
             Start

@@ -1,4 +1,6 @@
+import { useState, useEffect } from "react";
 import type { ProjectState } from "../hooks/useApi";
+import type { OperationStatus } from "../hooks/useOperation";
 import { ProjectSelector } from "./ProjectSelector";
 import {
   FileText,
@@ -9,10 +11,22 @@ import {
   ScanEye,
   Settings,
   Bot,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 
 export type View = "plan" | "architecture" | "brief" | "git" | "agents" | "settings";
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+  return String(n);
+}
+
+interface TokenStats {
+  inputTokens: number;
+  outputTokens: number;
+}
 
 interface SidebarProps {
   activeView: View;
@@ -20,6 +34,8 @@ interface SidebarProps {
   state: ProjectState | null;
   onProjectChange: () => void;
   onGlobalAction: (action: "new-project" | "analyze") => void;
+  operationStatus?: OperationStatus;
+  operationLabel?: string | null;
 }
 
 const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
@@ -30,12 +46,39 @@ const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "git", label: "Git", icon: GitCompareArrows },
 ];
 
-export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGlobalAction }: SidebarProps) {
+export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGlobalAction, operationStatus, operationLabel }: SidebarProps) {
   const taskCount = state?.currentTasks?.match(/###\s*Task\s*\d+/g)?.length ?? 0;
   const completedCount = state?.completedTasks?.length ?? 0;
   const decisionCount = state?.decisions?.length ?? 0;
   const projectName = state?.projectRoot?.split(/[\\/]/).filter(Boolean).pop() ?? "No Project";
   const hasProject = !!state?.projectRoot;
+  const isRunning = operationStatus === "running";
+
+  const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
+
+  // Load token usage from logs periodically
+  useEffect(() => {
+    if (!hasProject) return;
+
+    function loadTokens() {
+      fetch("/api/logs?limit=500")
+        .then((r) => r.json())
+        .then((data: { entries?: Array<{ data?: { inputTokens?: number; outputTokens?: number } }> }) => {
+          let input = 0;
+          let output = 0;
+          for (const entry of data.entries ?? []) {
+            if (entry.data?.inputTokens) input += entry.data.inputTokens;
+            if (entry.data?.outputTokens) output += entry.data.outputTokens;
+          }
+          if (input + output > 0) setTokenStats({ inputTokens: input, outputTokens: output });
+        })
+        .catch(() => { /* ignore */ });
+    }
+
+    loadTokens();
+    const id = setInterval(loadTokens, 30000);
+    return () => clearInterval(id);
+  }, [hasProject, operationStatus]); // re-fetch after operations
 
   return (
     <aside className="w-[280px] shrink-0 border-r border-zinc-800 bg-zinc-950 flex overflow-visible">
@@ -132,29 +175,69 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
           })}
         </nav>
 
-        {/* Footer info */}
-        {state?.config && (
-          <div className="px-4 py-3 border-t border-zinc-800/60 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-zinc-600">Stack</span>
-              <span className="text-[11px] text-zinc-400">{state.config.stack.framework}</span>
+        {/* Running task notification */}
+        {isRunning && (
+          <div className="px-4 py-2 border-t border-zinc-800/60 bg-zinc-900/40">
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-pulse shrink-0" />
+              <span className="text-[11px] text-zinc-400 truncate">
+                {operationLabel ?? "Running…"}
+              </span>
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-zinc-600">LLM</span>
-              <span className="text-[11px] text-zinc-400">{state.config.llm.provider}</span>
+            {/* Indeterminate progress bar */}
+            <div className="h-0.5 w-full bg-zinc-800 rounded-full overflow-hidden">
+              <div className="h-full bg-zinc-500 rounded-full animate-[progress-slide_1.5s_ease-in-out_infinite]"
+                style={{ width: "40%", animation: "progressSlide 1.5s ease-in-out infinite" }}
+              />
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-zinc-600">Tasks done</span>
-              <span className="text-[11px] text-zinc-400">{completedCount}</span>
-            </div>
-            {state.git && (
-              <div className="flex items-center gap-1.5 pt-1 border-t border-zinc-800/60">
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.git.clean ? "bg-emerald-500" : "bg-amber-400"}`} />
-                <span className="text-[11px] text-zinc-600 truncate">{state.git.branch}</span>
-              </div>
-            )}
           </div>
         )}
+
+        {/* Footer info */}
+        <div className="px-4 py-3 border-t border-zinc-800/60 space-y-1.5">
+          {state?.config ? (
+            <>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-zinc-600">Stack</span>
+                <span className="text-[11px] text-zinc-400 truncate max-w-[120px] text-right">
+                  {state.config.stack.framework || "—"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-zinc-600">LLM</span>
+                <span className="text-[11px] text-zinc-400 capitalize">
+                  {state.config.llm.provider || "—"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-zinc-600">Tasks done</span>
+                <span className={`text-[11px] font-medium ${completedCount > 0 ? "text-emerald-400/80" : "text-zinc-500"}`}>
+                  {completedCount}
+                </span>
+              </div>
+            </>
+          ) : hasProject ? (
+            <p className="text-[11px] text-zinc-600 italic">Loading config…</p>
+          ) : null}
+
+          {tokenStats && (
+            <div className="flex items-center justify-between pt-1 border-t border-zinc-800/60">
+              <span className="text-[11px] text-zinc-600 flex items-center gap-1">
+                <Zap className="h-2.5 w-2.5" /> Tokens
+              </span>
+              <span className="text-[11px] text-zinc-500 tabular-nums">
+                {formatTokenCount(tokenStats.inputTokens + tokenStats.outputTokens)}
+              </span>
+            </div>
+          )}
+
+          {state?.git && (
+            <div className="flex items-center gap-1.5 pt-1 border-t border-zinc-800/60">
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.git.clean ? "bg-emerald-500" : "bg-amber-400"}`} />
+              <span className="text-[11px] text-zinc-600 truncate">{state.git.branch || "main"}</span>
+            </div>
+          )}
+        </div>
       </div>
     </aside>
   );

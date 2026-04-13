@@ -11,6 +11,15 @@ import { GitView } from "./pages/ChangesView";
 import { SettingsView } from "./pages/SettingsView";
 import { AgentsView } from "./pages/AgentsView";
 
+interface PlanRunSubmission {
+  feature: string;
+  role: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
+  agentId?: string;
+  askClarifyingQuestions: boolean;
+  requireArchitectureApproval: boolean;
+  requirePlanApproval: boolean;
+}
+
 const VIEW_LABELS: Record<View, string> = {
   plan: "Tasks",
   architecture: "Architecture",
@@ -24,6 +33,7 @@ export function App() {
   const [activeView, setActiveView] = useState<View>("brief");
   const { state, loading, error, refresh } = useProjectState();
   const op = useOperation(refresh);
+  const operationLabel = op.lines.find((line) => line.kind === "header")?.text ?? null;
 
   if (loading && !state) {
     return (
@@ -69,8 +79,8 @@ export function App() {
     op.startOperation("/api/run/init", submission);
   }
 
-  function handleSubmitPlan(text: string) {
-    op.startOperation("/api/run/plan", { feature: text });
+  function handleSubmitPlan(submission: PlanRunSubmission) {
+    op.startOperation("/api/run/plan", submission);
   }
 
   return (
@@ -81,6 +91,8 @@ export function App() {
         state={state}
         onProjectChange={refresh}
         onGlobalAction={handleGlobalAction}
+        operationStatus={op.status}
+        operationLabel={operationLabel}
       />
 
       <main className="flex-1 flex flex-col overflow-hidden">
