@@ -205,6 +205,22 @@ export class StateManager {
     await this.writeStateFile("flows.md", content);
   }
 
+  // --- Audits ---
+
+  async readAudit(type: "security" | "tests"): Promise<AuditResult | null> {
+    const raw = await this.readFileOrNull(`audits/${type}.json`);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as AuditResult;
+    } catch {
+      return null;
+    }
+  }
+
+  async writeAudit(type: "security" | "tests", result: AuditResult): Promise<void> {
+    await this.writeStateFile(`audits/${type}.json`, JSON.stringify(result, null, 2));
+  }
+
   // --- API Contracts ---
 
   async readApiContracts(): Promise<string | null> {
@@ -253,6 +269,24 @@ export class StateManager {
     if (!existsSync(dir)) await mkdir(dir, { recursive: true });
     await writeFile(fullPath, content, "utf-8");
   }
+}
+
+export interface AuditIssue {
+  id: string;
+  title: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  category: string;
+  description: string;
+  recommendation: string;
+  files?: string[];
+}
+
+export interface AuditResult {
+  type: "security" | "tests";
+  runAt: number;
+  summary: string;
+  coverageEstimate?: string; // tests audit only
+  issues: AuditIssue[];
 }
 
 export interface ProjectContext {

@@ -11,7 +11,7 @@ import { simpleGit } from "simple-git";
 import { readEffectiveConfig, readGlobalConfig, writeConfig, writeGlobalConfig, type BenderConfig } from "../state/config.js";
 import { createModelSet, getModelForTier } from "../llm/provider.js";
 import { createRoleRuntime } from "../llm/runtime.js";
-import { StateManager } from "../state/manager.js";
+import { StateManager, type AuditResult, type AuditIssue } from "../state/manager.js";
 import { GitOperations } from "../git/operations.js";
 import { readRegistry, addToRegistry, removeFromRegistry } from "../state/registry.js";
 import { fetchRegistry, readRegistry as readSkillsRegistry } from "../state/skills.js";
@@ -33,7 +33,7 @@ import { planCommand } from "./plan.js";
 import { implementCommand, implementSingleTask } from "./implement.js";
 import { analyzeCommand } from "./analyze.js";
 import { generateFlows } from "../roles/flowcharter.js";
-import { loadPrompt } from "../roles/base.js";
+import { loadPrompt, runRole } from "../roles/base.js";
 import type { UIAdapter, SpinnerAdapter } from "./adapter.js";
 
 const API_PORT = 3142;
@@ -2171,6 +2171,153 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
         await runtime?.close();
       }
     });
+  });
+
+  // ── Audits ────────────────────────────────────────────────────────────────
+
+  app.get("/api/audits", async (_req, res) => {
+    try {
+      const state = new StateManager(getProject());
+      const [security, tests] = await Promise.all([
+        state.readAudit("security"),
+        state.readAudit("tests"),
+      ]);
+      res.json({ security, tests });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  async function runAudit(
+    res: Response,
+    auditType: "security" | "tests",
+  ): Promise<void> {
+    await runOperation(res, async (adapter) => {
+      const projectRoot = getProject();
+      const state = new StateManager(projectRoot);
+      const context = await state.gatherContext();
+
+      if (!context.architecture) {
+        throw new Error("Project needs architecture to be analyzed before auditing. Run analyze first.");
+      }
+
+      let runtime;
+      try {
+        const config = await readEffectiveConfig(projectRoot);
+        const analyzerAgent = await getEffectiveAgentForRole("analyzer");
+        runtime = await createRoleRuntime(
+          projectRoot,
+          config,
+          {
+            role: "analyzer",
+            taskDescription: auditType === "security" ? "security audit vulnerability analysis" : "test harness coverage audit",
+            pinnedSkills: analyzerAgent.pinnedSkills,
+            mcpServerIds: analyzerAgent.mcpServerIds,
+            modelTier: analyzerAgent.modelTier,
+          },
+          context.architecture ?? undefined,
+          { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+        );
+      } catch (err: unknown) {
+        throw new Error(`Failed to initialize LLM provider: ${(err as Error).message}`);
+      }
+
+      const roleName = auditType === "security" ? "security-auditor" : "test-auditor";
+      const label = auditType === "security" ? "Security audit" : "Test harness audit";
+
+      try {
+        adapter.subheader(`Running ${label}...`);
+        const config = await readEffectiveConfig(projectRoot);
+        const models = createModelSet(config);
+        const analyzerAgent = await getEffectiveAgentForRole("analyzer");
+
+        const systemContext = [
+          context.architecture ? `## Architecture\n\n${context.architecture}` : "",
+          context.schema ? `## Database Schema\n\n${context.schema}` : "",
+          context.conventions ? `## Conventions\n\n${context.conventions}` : "",
+        ].filter(Boolean).join("\n\n---\n\n");
+
+        const userMessage = [
+          `Audit this project's ${auditType === "security" ? "security vulnerabilities" : "test coverage and quality"}.`,
+          "",
+          "## Project Context",
+          systemContext,
+        ].join("\n");
+
+        adapter.info(`Analyzing with ${analyzerAgent.name} (${analyzerAgent.modelTier})...`);
+
+        const model = getModelForTier(models, analyzerAgent.modelTier);
+        const rawOutput = await runRole(
+          model,
+          roleName,
+          systemContext,
+          userMessage,
+          runtime ?? undefined,
+        );
+
+        // Parse JSON from output (strip markdown fences if present)
+        let jsonStr = rawOutput.trim();
+        if (jsonStr.startsWith("```")) {
+          jsonStr = jsonStr.replace(/^```[a-z]*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+        }
+
+        let parsed: { summary?: string; coverageEstimate?: string; issues?: AuditIssue[] };
+        try {
+          parsed = JSON.parse(jsonStr) as typeof parsed;
+        } catch {
+          throw new Error("Audit returned invalid JSON. Try again.");
+        }
+
+        const result: AuditResult = {
+          type: auditType,
+          runAt: Date.now(),
+          summary: parsed.summary ?? "",
+          coverageEstimate: parsed.coverageEstimate,
+          issues: (parsed.issues ?? []).map((issue, i) => ({
+            id: issue.id ?? `${auditType.toUpperCase().slice(0, 3)}-${String(i + 1).padStart(3, "0")}`,
+            title: issue.title ?? "Untitled issue",
+            severity: issue.severity ?? "medium",
+            category: issue.category ?? "other",
+            description: issue.description ?? "",
+            recommendation: issue.recommendation ?? "",
+            files: issue.files ?? [],
+          })),
+        };
+
+        await state.writeAudit(auditType, result);
+        adapter.success(`${label} complete — ${result.issues.length} issue(s) found.`);
+      } finally {
+        await runtime?.close();
+      }
+    });
+  }
+
+  app.post("/api/run/audit/security", async (_req, res) => {
+    await runAudit(res, "security");
+  });
+
+  app.post("/api/run/audit/tests", async (_req, res) => {
+    await runAudit(res, "tests");
+  });
+
+  // ── Append task from audit issue ──────────────────────────────────────────
+
+  app.post("/api/tasks/append", async (req, res) => {
+    try {
+      const { title, description } = req.body as { title?: string; description?: string };
+      if (!title) {
+        return res.status(400).json({ error: "title is required" });
+      }
+      const state = new StateManager(getProject());
+      const existing = await state.readCurrentTasks();
+      const taskId = `task-${randomUUID().slice(0, 8)}`;
+      const newEntry = `\n## ${title}\n\nID: ${taskId}\nStatus: pending\n\n${description ?? ""}\n`;
+      const updated = (existing ?? "") + newEntry;
+      await state.writeCurrentTasks(updated.trim());
+      res.json({ ok: true, taskId });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // ── Skills registry ───────────────────────────────────────────────────────
