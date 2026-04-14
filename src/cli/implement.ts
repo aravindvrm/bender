@@ -82,9 +82,29 @@ export function parseTaskPlan(planMarkdown: string): TaskDescription[] {
     const files: string[] = [];
     const filesSection = body.match(/\*\*Files to create\/modify\*\*:\s*\n([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
     if (filesSection) {
-      const fileLines = filesSection[1].match(/`([^`]+)`/g);
+      const section = filesSection[1];
+      const fileLines = section.match(/`([^`]+)`/g);
       if (fileLines) {
         files.push(...fileLines.map((f) => f.replace(/`/g, "").split(" — ")[0].trim()));
+      } else {
+        // Fallback for plain bullet lists without backticks.
+        const bullets = section
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => /^-\s+/.test(line))
+          .map((line) => line.replace(/^-\s+/, "").trim())
+          .filter((line) => line.length > 0);
+        for (const bullet of bullets) {
+          const normalized = bullet.replace(/^[`'"]|[`'"]$/g, "").trim();
+          if (
+            normalized.toLowerCase() === "(to be determined)"
+            || normalized.toLowerCase() === "tbd"
+            || normalized.toLowerCase() === "none"
+          ) {
+            continue;
+          }
+          files.push(normalized.split(" — ")[0].trim());
+        }
       }
     }
 
@@ -130,7 +150,13 @@ function printReviewSummary(adapter: UIAdapter, review: ReviewResult): void {
       }
     }
   } else {
-    adapter.info("Reviewer provided no structured issues.");
+    if (review.status === "APPROVED") {
+      adapter.info("No structured issues found.");
+    } else if (review.observations.length > 0) {
+      adapter.info("No blocking structured issues were returned; reviewer shared advisory observations.");
+    } else {
+      adapter.info("No structured issues or observations were returned.");
+    }
   }
 
   if (review.observations.length > 0) {
@@ -139,6 +165,25 @@ function printReviewSummary(adapter: UIAdapter, review: ReviewResult): void {
       adapter.info(`- ${obs}`);
     }
   }
+}
+
+function reviewerDecisionPrompt(review: ReviewResult): { question: string; defaultYes: boolean } {
+  if (review.issues.length > 0) {
+    return {
+      question: `Reviewer requested changes on ${review.issues.length} issue(s). Apply current changes anyway?`,
+      defaultYes: false,
+    };
+  }
+  if (review.observations.length > 0) {
+    return {
+      question: "Reviewer suggested improvements (advisory). Apply current changes now and address suggestions later?",
+      defaultYes: true,
+    };
+  }
+  return {
+    question: `Reviewer returned ${review.status}. Apply current changes anyway?`,
+    defaultYes: false,
+  };
 }
 
 async function runReviewerGate(
@@ -152,7 +197,7 @@ async function runReviewerGate(
   reviewerAgent: AgentConfig,
   logger: Logger,
 ): Promise<boolean> {
-  adapter.subheader("Reviewer Gate");
+  adapter.subheader("Review Check");
   adapter.info(`Using reviewer agent: ${reviewerAgent.name} (${reviewerAgent.modelTier})`);
 
   const reviewerModel = getModelForTier(models, reviewerAgent.modelTier);
@@ -200,10 +245,8 @@ async function runReviewerGate(
       return true;
     }
 
-    const proceed = await adapter.confirm(
-      `Reviewer returned ${review.status}. Continue with these changes anyway?`,
-      false,
-    );
+    const prompt = reviewerDecisionPrompt(review);
+    const proceed = await adapter.confirm(prompt.question, prompt.defaultYes);
     if (!proceed) {
       adapter.info("Skipped based on reviewer feedback.");
       return false;
@@ -267,6 +310,9 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
 
   adapter.subheader(`Task ${task.id}: ${task.title}`);
   adapter.info(task.description);
+  if (task.files.length === 0) {
+    adapter.warn("Task has no explicit file targets. Add files in the task plan for more deterministic implementation output.");
+  }
 
   let models;
   try {
@@ -338,9 +384,8 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
     spin.succeed(`Generated ${fileOps.length} files`);
 
     if (fileOps.length === 0) {
-      adapter.warn("No file operations produced.");
-      adapter.cleanup();
-      return;
+      adapter.error("No file operations produced for this task. Treating this run as failed.");
+      throw new Error("Implementer returned no file operations for task.");
     }
 
     const reviewPassed = await runReviewerGate(

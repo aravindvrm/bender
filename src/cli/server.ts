@@ -920,6 +920,7 @@ async function runOperation(
     sendSSE(res, { type: "done", success: true });
   } catch (err) {
     sendSSE(res, { type: "error", message: (err as Error).message });
+    sendSSE(res, { type: "done", success: false });
   } finally {
     res.end();
     for (const [id] of pendingAnswers) pendingAnswers.delete(id);
@@ -1522,8 +1523,10 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
       const flows = await state.readFlows();
       const taskAgents = await state.readTaskAgents();
       const taskGitHubLinks = await state.readTaskGitHubLinks();
+      const currentTaskBlocks = parseTaskBlocks(context.currentTasks ?? "");
 
       let git = null;
+      let inferredRepoFullName: string | undefined;
       try {
         const gitOps = new GitOperations(projectRoot);
         if (await gitOps.isRepo()) {
@@ -1531,8 +1534,45 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
           const clean = !(await gitOps.hasChanges());
           const recentCommits = await gitOps.log(5);
           git = { branch, clean, recentCommits };
+          const remotes = await gitOps.getRemotes();
+          const origin = remotes.find((r) => r.name === "origin");
+          if (origin?.fetch) {
+            inferredRepoFullName = parseGitHubRepoFullName(origin.fetch) ?? undefined;
+          }
         }
       } catch { /* not a git repo */ }
+
+      const mergedTaskGitHubLinks: Record<string, TaskGitHubLink> = { ...taskGitHubLinks };
+      for (const task of currentTaskBlocks) {
+        const key = String(task.id);
+        if (!mergedTaskGitHubLinks[key]) {
+          const slug = task.title
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 48);
+          const inferredBranch = `task/${task.id}-${slug || "work"}`;
+          if (inferredRepoFullName || inferredBranch) {
+            mergedTaskGitHubLinks[key] = {
+              ...(inferredRepoFullName ? { repoFullName: inferredRepoFullName } : {}),
+              ...(inferredBranch ? { branchName: inferredBranch } : {}),
+            };
+          }
+        } else {
+          const existing = mergedTaskGitHubLinks[key];
+          const slug = task.title
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 48);
+          if (!existing.branchName) {
+            existing.branchName = `task/${task.id}-${slug || "work"}`;
+          }
+          if (!existing.repoFullName && inferredRepoFullName) {
+            existing.repoFullName = inferredRepoFullName;
+          }
+        }
+      }
 
       res.json({
         initialized: true,
@@ -1545,7 +1585,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
         currentTasks: context.currentTasks,
         completedTasks,
         taskAgents,
-        taskGitHubLinks,
+        taskGitHubLinks: mergedTaskGitHubLinks,
         apiContracts: context.apiContracts,
         flows,
         config: {
@@ -2955,7 +2995,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
 
   app.post("/api/tasks/append", async (req, res) => {
     try {
-      const { title, description } = req.body as { title?: string; description?: string };
+      const { title, description, files } = req.body as { title?: string; description?: string; files?: string[] };
       if (!title) {
         return res.status(400).json({ error: "title is required" });
       }
@@ -2964,6 +3004,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
       const next = appendTaskToPlan(existing, {
         title: title.trim(),
         description,
+        files,
       });
       await state.writeCurrentTasks(next.updatedMarkdown);
       res.json({ ok: true, taskId: next.taskId });

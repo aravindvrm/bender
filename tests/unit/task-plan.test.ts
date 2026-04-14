@@ -50,4 +50,19 @@ describe("state/task-plan", () => {
     expect(parsed[0]?.title).toBe("Fix test audit issue");
     expect(parsed[1]?.title).toBe("Harden CI step");
   });
+
+  it("preserves explicit file targets when appending", () => {
+    const appended = appendTaskToPlan(null, {
+      title: "Add API route tests",
+      description: "Cover ping and OpenAPI routes",
+      files: ["tests/api/test_routes.py", "sable/tool_server.py"],
+    });
+
+    const parsed = parseTaskPlan(appended.updatedMarkdown);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.files).toEqual([
+      "tests/api/test_routes.py",
+      "sable/tool_server.py",
+    ]);
+  });
 });

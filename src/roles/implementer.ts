@@ -21,6 +21,14 @@ export interface FileOperation {
   content: string;
 }
 
+function normalizePathCandidate(raw: string): string {
+  return raw
+    .replace(/\s*\n\s*/g, "")
+    .replace(/\s+/g, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim();
+}
+
 /**
  * Implement a single task: generate code for all files in the task.
  */
@@ -75,6 +83,28 @@ export function parseFileOperations(output: string): FileOperation[] {
       action: match[2].trim() as "create" | "modify",
       content: match[3].trimEnd(),
     });
+  }
+
+  // Recovery parser for malformed/token-fragmented headers seen in streamed runs.
+  // Examples:
+  // ###\n FILE\n:\n path\nACTION\n:\n modify\n```\n...
+  if (operations.length === 0) {
+    const repaired = output
+      .replace(/#\s*#\s*#/g, "###")
+      .replace(/FILE\s*\n\s*:/gi, "FILE:")
+      .replace(/ACTION\s*\n\s*:/gi, "ACTION:")
+      .replace(/`\s*\n\s*`\s*\n\s*`/g, "```");
+
+    const loosePattern = /###\s*FILE\s*:\s*([\s\S]*?)\s*ACTION\s*:\s*(create|modify)\s*```(?:[a-zA-Z0-9_-]+)?\s*\n?([\s\S]*?)```/gi;
+    while ((match = loosePattern.exec(repaired)) !== null) {
+      const path = normalizePathCandidate(match[1]);
+      if (!path) continue;
+      operations.push({
+        path,
+        action: match[2].trim().toLowerCase() as "create" | "modify",
+        content: match[3].trimEnd(),
+      });
+    }
   }
 
   // Fallback: try simpler pattern if the structured format wasn't followed exactly

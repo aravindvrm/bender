@@ -7,9 +7,11 @@ import {
   FolderOpen,
   X,
   Terminal as TerminalIcon,
+  GitCompare,
 } from "lucide-react";
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
 import { LoadingDots } from "./LoadingDots";
+import { GitDiffViewer } from "./GitDiffViewer";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
 type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
@@ -254,78 +256,20 @@ export function OperationDrawer({
   onSubmitInit,
   onSubmitPlan,
 }: OperationDrawerProps) {
-  const [activeTab, setActiveTab] = useState<"console" | "review" | "terminal">("console");
+  const [activeTab, setActiveTab] = useState<"console" | "diff" | "terminal">("console");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(288);
   const [isResizing, setIsResizing] = useState(false);
+  const [diffCommits, setDiffCommits] = useState(1);
+  const [diffRaw, setDiffRaw] = useState<string | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const resizeStartYRef = useRef(0);
   const resizeStartHeightRef = useRef(288);
   const isRunning = status === "running";
 
-  function lineText(line: OutputLine): string {
-    if (line.kind === "header" || line.kind === "subheader" || line.kind === "stream") return line.text;
-    if (line.kind === "output") return line.text;
-    if (line.kind === "spinner") return line.text;
-    if (line.kind === "error") return line.message;
-    if (line.kind === "confirm") return line.question;
-    if (line.kind === "prompt") return line.question;
-    if (line.kind === "done") return line.success ? "done" : "failed";
-    if (line.kind === "files") return line.ops.map((op) => `${op.action} ${op.path}`).join(" ");
-    return "";
-  }
-
-  function collectReviewLineIndexes(allLines: OutputLine[]): Set<number> {
-    const indexes = new Set<number>();
-    let inReviewSection = false;
-
-    for (let i = 0; i < allLines.length; i += 1) {
-      const line = allLines[i];
-
-      if (line.kind === "subheader") {
-        if (line.text.trim().toLowerCase() === "reviewer gate") {
-          inReviewSection = true;
-          indexes.add(i);
-          continue;
-        }
-        if (inReviewSection) {
-          inReviewSection = false;
-        }
-      }
-
-      if (line.kind === "header" && inReviewSection) {
-        inReviewSection = false;
-      }
-
-      const text = lineText(line).toLowerCase();
-      const looksReviewerSpecific =
-        text.includes("reviewer status")
-        || text.includes("using reviewer agent")
-        || text.includes("reviewer checks")
-        || text.includes("reviewer returned")
-        || text.includes("reviewer provided")
-        || text.includes("reviewer observations")
-        || text.includes("reviewer found");
-
-      if (inReviewSection || looksReviewerSpecific) {
-        indexes.add(i);
-      }
-    }
-
-    return indexes;
-  }
-
-  const reviewIndexes = collectReviewLineIndexes(lines);
-  const reviewCount = reviewIndexes.size;
-  const visibleLines = activeTab === "review"
-    ? lines.filter((_, i) => reviewIndexes.has(i))
-    : lines;
-
-  useEffect(() => {
-    if (activeTab === "review" && reviewCount === 0) {
-      setActiveTab("console");
-    }
-  }, [activeTab, reviewCount]);
+  const visibleLines = lines;
 
   function clampDrawerHeight(height: number): number {
     const minHeight = 160;
@@ -345,9 +289,11 @@ export function OperationDrawer({
 
   useEffect(() => {
     if (!collapsed) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      if (activeTab === "console") {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
     }
-  }, [visibleLines, collapsed]);
+  }, [visibleLines, collapsed, activeTab]);
 
   useEffect(() => {
     if (status === "running") {
@@ -355,6 +301,30 @@ export function OperationDrawer({
       setActiveTab("console");
     }
   }, [status]);
+
+  useEffect(() => {
+    if (activeTab !== "diff") return;
+    if (!currentProjectPath) return;
+    let cancelled = false;
+    setDiffLoading(true);
+    setDiffError(null);
+    fetch(`/api/git/diff?commits=${diffCommits}`)
+      .then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error ?? "Failed to load diff");
+        if (cancelled) return;
+        setDiffRaw(data.diff ?? null);
+        setDiffLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setDiffError((err as Error).message);
+        setDiffLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, diffCommits, currentProjectPath, status]);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -453,18 +423,17 @@ export function OperationDrawer({
             >
               Console
             </button>
-            {reviewCount > 0 && (
-              <button
-                onClick={() => setActiveTab("review")}
-                className={`px-3 h-full rounded-none text-[11px] transition-colors ${
-                  activeTab === "review"
-                    ? "text-zinc-100 bg-zinc-900"
-                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
-                }`}
-              >
-                Review ({reviewCount})
-              </button>
-            )}
+            <button
+              onClick={() => setActiveTab("diff")}
+              className={`px-3 h-full rounded-none text-[11px] transition-colors flex items-center gap-1 ${
+                activeTab === "diff"
+                  ? "text-zinc-100 bg-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
+              }`}
+            >
+              <GitCompare className="h-3 w-3" />
+              Diff
+            </button>
             <button
               onClick={() => setActiveTab("terminal")}
               className={`px-3 h-full rounded-none text-[11px] transition-colors flex items-center gap-1 ${
@@ -520,7 +489,7 @@ export function OperationDrawer({
           <TerminalPanel projectPath={currentProjectPath} />
         )}
 
-        {!collapsed && activeTab !== "terminal" && (
+        {!collapsed && activeTab === "console" && (
           <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-0.5">
             {visibleLines.length === 0 && (
               <p className="text-zinc-600 italic">Starting…</p>
@@ -536,6 +505,38 @@ export function OperationDrawer({
               />
             ))}
             <div ref={bottomRef} />
+          </div>
+        )}
+
+        {!collapsed && activeTab === "diff" && (
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {!currentProjectPath && (
+              <p className="text-sm text-zinc-600">No project selected.</p>
+            )}
+            {currentProjectPath && (
+              <>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-zinc-500">Show latest diff for</span>
+                  {[1, 2, 3, 5].map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => setDiffCommits(n)}
+                      className={`px-2.5 py-1 rounded text-xs border transition-colors ${
+                        diffCommits === n
+                          ? "bg-zinc-700 border-zinc-500 text-zinc-100"
+                          : "bg-transparent border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      {n} commit{n > 1 ? "s" : ""}
+                    </button>
+                  ))}
+                </div>
+                {diffLoading && <LoadingDots size={20} label="Loading diff…" textClassName="text-sm text-zinc-500" />}
+                {diffError && <p className="text-sm text-red-400/80">{diffError}</p>}
+                {!diffLoading && !diffError && !diffRaw && <p className="text-sm text-zinc-500">No diff available.</p>}
+                {!diffLoading && diffRaw && <GitDiffViewer raw={diffRaw} />}
+              </>
+            )}
           </div>
         )}
       </div>

@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect } from "react";
 import type { ProjectState } from "../hooks/useApi";
 import { MarkdownView } from "../components/MarkdownView";
 import { MermaidView } from "../components/MermaidView";
-import { LoadingDots } from "../components/LoadingDots";
 import { sqlToErDiagram } from "../utils/sqlToErDiagram";
 import { RefreshCw, ShieldAlert, TestTube2, AlertTriangle, Info, AlertCircle, CheckCircle2, Plus } from "lucide-react";
 
@@ -288,7 +287,7 @@ function FlowsContent({ content, onRegenerate, generating }: {
           disabled={generating}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 border border-zinc-700 rounded-lg hover:text-zinc-200 hover:border-zinc-500 transition-colors disabled:opacity-50"
         >
-          {generating ? <LoadingDots size={16} /> : <RefreshCw className="h-3.5 w-3.5" />}
+          <RefreshCw className="h-3.5 w-3.5" />
           Regenerate
         </button>
       </div>
@@ -312,6 +311,15 @@ function FlowsContent({ content, onRegenerate, generating }: {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function CenterLoadingState({ label }: { label: string }) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-6 py-16 text-center">
+      <div className="bender-center-loader mx-auto mb-5" aria-hidden="true" />
+      <p className="text-sm text-zinc-500">{label}</p>
     </div>
   );
 }
@@ -370,6 +378,7 @@ function AuditIssueCard({ issue, onAddAsTask }: { issue: AuditIssue; onAddAsTask
         body: JSON.stringify({
           title: `Fix: ${issue.title}`,
           description: `**Issue:** ${issue.description}\n\n**Recommendation:** ${issue.recommendation}${issue.files?.length ? `\n\n**Files:** ${issue.files.join(", ")}` : ""}`,
+          files: issue.files ?? [],
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -480,7 +489,7 @@ function AuditTabContent({
           disabled={running}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 border border-zinc-700 rounded-lg hover:text-zinc-200 hover:border-zinc-500 transition-colors disabled:opacity-50"
         >
-          {running ? <LoadingDots size={16} /> : <RefreshCw className="h-3.5 w-3.5" />}
+          <RefreshCw className="h-3.5 w-3.5" />
           {running ? "Analyzing…" : audit ? "Re-run" : "Run audit"}
         </button>
       </div>
@@ -490,10 +499,7 @@ function AuditTabContent({
       )}
 
       {running && (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-6 text-center text-sm text-zinc-500">
-          <LoadingDots className="justify-center mb-2" size={22} />
-          Running {label.toLowerCase()}…
-        </div>
+        <CenterLoadingState label={`Running ${label.toLowerCase()}…`} />
       )}
 
       {!running && audit && (
@@ -813,7 +819,9 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
 
         {activeTab === "flows" && (
           <div>
-            {state.flows ? (
+            {generating ? (
+              <CenterLoadingState label="Generating flow diagrams…" />
+            ) : state.flows ? (
               <FlowsContent
                 content={state.flows}
                 onRegenerate={generateFlows}
@@ -827,8 +835,8 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
                   disabled={generating}
                   className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
-                  {generating ? <LoadingDots size={18} /> : <RefreshCw className="h-4 w-4" />}
-                  {generating ? "Generating…" : "Generate Flow Diagrams"}
+                  <RefreshCw className="h-4 w-4" />
+                  Generate Flow Diagrams
                 </button>
                 {genError && <p className="text-sm text-red-400/80">{genError}</p>}
               </div>

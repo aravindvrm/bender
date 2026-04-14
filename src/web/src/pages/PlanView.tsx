@@ -291,13 +291,13 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
     }
   }
 
-  async function createTaskPR(taskId: number, repoFullName?: string) {
+  async function createTaskPR(taskId: number, repoFullName?: string, head?: string) {
     setGithubError(null);
     try {
       const res = await fetch(`/api/tasks/${taskId}/github/pr`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repoFullName }),
+        body: JSON.stringify({ repoFullName, head }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Failed to open linked PR");
@@ -401,7 +401,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
               onSaveGitHubLink={(link) => saveTaskGitHubLink(task.id, link)}
               onCreateIssue={(repoFullName) => createTaskIssue(task.id, repoFullName)}
               onCreateBranch={(branchName) => createTaskBranch(task.id, branchName)}
-              onCreatePR={(repoFullName) => createTaskPR(task.id, repoFullName)}
+              onCreatePR={(repoFullName, head) => createTaskPR(task.id, repoFullName, head)}
             />
           ))
         )}
@@ -443,7 +443,7 @@ interface TaskRowProps {
   onSaveGitHubLink: (link: Partial<TaskGitHubLink>) => Promise<void>;
   onCreateIssue: (repoFullName?: string) => Promise<void>;
   onCreateBranch: (branchName?: string) => Promise<void>;
-  onCreatePR: (repoFullName?: string) => Promise<void>;
+  onCreatePR: (repoFullName?: string, head?: string) => Promise<void>;
 }
 
 function TaskRow({
@@ -734,7 +734,7 @@ function TaskRow({
                 onClick={async () => {
                   setCreatingPR(true);
                   try {
-                    await onCreatePR(draftRepoFullName.trim() || undefined);
+                    await onCreatePR(draftRepoFullName.trim() || undefined, draftBranchName.trim() || undefined);
                   } finally {
                     setCreatingPR(false);
                   }
