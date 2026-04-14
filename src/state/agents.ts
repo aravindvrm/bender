@@ -38,7 +38,7 @@ export const MAX_MCP_SERVERS_PER_AGENT = 6;
 export const BUILTIN_AGENTS: AgentConfig[] = [
   {
     id: "default-analyzer",
-    name: "Analyzer",
+    name: "Discovery",
     baseRole: "analyzer",
     modelTier: "strong",
     pinnedSkills: ["security-best-practices", "security-threat-model"],
@@ -56,7 +56,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
   },
   {
     id: "default-architect",
-    name: "Architect",
+    name: "Eng Review",
     baseRole: "architect",
     modelTier: "strong",
     pinnedSkills: ["security-best-practices"],
@@ -76,7 +76,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
   },
   {
     id: "default-planner",
-    name: "Planner",
+    name: "Execution Plan",
     baseRole: "planner",
     modelTier: "default",
     pinnedSkills: [],
@@ -87,8 +87,26 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     isBuiltin: true,
   },
   {
+    id: "default-office-hours",
+    name: "Office Hours",
+    baseRole: "planner",
+    modelTier: "strong",
+    pinnedSkills: [],
+    mcpServerIds: ["github"],
+    capabilityPolicy: {
+      allow: ["connector.github.use", "github.repo.read", "github.issue.read", "github.pr.read"],
+    },
+    systemPromptAddition: [
+      "Act in office-hours mode for upstream feature pressure-testing.",
+      "Force specificity on target user, status-quo workaround, and why this matters now.",
+      "Prioritize MVP scope discipline; explicitly call out what to cut and hidden complexity traps.",
+      "End recommendations with a clear verdict: ship now, simplify first, validate first, defer, or kill.",
+    ].join("\n"),
+    isBuiltin: true,
+  },
+  {
     id: "default-implementer",
-    name: "Implementer",
+    name: "Implement",
     baseRole: "implementer",
     modelTier: "default",
     pinnedSkills: [],
@@ -108,7 +126,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
   },
   {
     id: "default-reviewer",
-    name: "Reviewer",
+    name: "Review",
     baseRole: "reviewer",
     modelTier: "default",
     pinnedSkills: ["security-best-practices", "security-ownership-map"],

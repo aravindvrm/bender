@@ -37,6 +37,9 @@ import {
 } from "../state/agents.js";
 import { getConnectorCapabilities, normalizeCapabilityPolicy } from "../state/capabilities.js";
 import { appendTaskToPlan } from "../state/task-plan.js";
+import { EvalsStore } from "../state/evals.js";
+import { runSuiteCompare, runTaskCompare } from "../evals/runner.js";
+import type { EvalConfig, EvalSuite, EvalTask } from "../evals/types.js";
 import { initCommand } from "./init.js";
 import { planCommand } from "./plan.js";
 import { implementCommand, implementSingleTask } from "./implement.js";
@@ -52,6 +55,8 @@ const BASE_ROLES: BaseRole[] = ["analyzer", "architect", "planner", "implementer
 const MODEL_TIERS = ["fast", "default", "strong"] as const;
 const MAX_AGENT_NAME_CHARS = 80;
 const MAX_SYSTEM_PROMPT_ADDITION_CHARS = 4000;
+const MAX_EVAL_NAME_CHARS = 120;
+const MAX_EVAL_PROMPT_CHARS = 20_000;
 const MASKED_VALUE = "••••••••";
 const SERVER_SESSION_STARTED_AT = Date.now();
 
@@ -395,6 +400,84 @@ function normalizeAgentPatchPayload(
   }
 
   return { value: next };
+}
+
+function normalizeEvalTaskPayload(
+  input: Partial<EvalTask>,
+): { value?: EvalTask; error?: string } {
+  const name = input.name?.trim();
+  const prompt = input.prompt?.trim();
+  if (!name) return { error: "name is required" };
+  if (!prompt) return { error: "prompt is required" };
+  if (name.length > MAX_EVAL_NAME_CHARS) return { error: `name cannot exceed ${MAX_EVAL_NAME_CHARS} characters` };
+  if (prompt.length > MAX_EVAL_PROMPT_CHARS) return { error: `prompt cannot exceed ${MAX_EVAL_PROMPT_CHARS} characters` };
+  const now = Date.now();
+  return {
+    value: {
+      id: input.id?.trim() || randomUUID(),
+      name,
+      prompt,
+      createdAt: typeof input.createdAt === "number" ? input.createdAt : now,
+      updatedAt: now,
+    },
+  };
+}
+
+function normalizeEvalConfigPayload(
+  input: Partial<EvalConfig>,
+): { value?: EvalConfig; error?: string } {
+  const name = input.name?.trim();
+  if (!name) return { error: "name is required" };
+  if (name.length > MAX_EVAL_NAME_CHARS) return { error: `name cannot exceed ${MAX_EVAL_NAME_CHARS} characters` };
+  const roleRaw = input.role;
+  if (!roleRaw || !isBaseRole(roleRaw)) return { error: "role must be one of analyzer/architect/planner/implementer/reviewer" };
+  const modelTierRaw = input.modelTier;
+  if (modelTierRaw !== undefined && !isModelTier(modelTierRaw)) {
+    return { error: `Invalid modelTier: ${String(modelTierRaw)}` };
+  }
+  const pinnedSkills = normalizePinnedSkills(input.pinnedSkills ?? []);
+  if (pinnedSkills.error) return { error: pinnedSkills.error };
+  const mcpServerIds = normalizeMcpServerIds(input.mcpServerIds ?? []);
+  if (mcpServerIds.error) return { error: mcpServerIds.error };
+  const capabilityPolicy = normalizeCapabilityPolicy(input.capabilityPolicy);
+  const now = Date.now();
+  return {
+    value: {
+      id: input.id?.trim() || randomUUID(),
+      name,
+      role: roleRaw,
+      enabled: input.enabled !== false,
+      ...(modelTierRaw ? { modelTier: modelTierRaw } : {}),
+      ...(input.provider?.trim() ? { provider: input.provider.trim() } : {}),
+      ...(input.model?.trim() ? { model: input.model.trim() } : {}),
+      ...(input.agentId?.trim() ? { agentId: input.agentId.trim() } : {}),
+      pinnedSkills: pinnedSkills.value ?? [],
+      mcpServerIds: mcpServerIds.value ?? [],
+      ...(capabilityPolicy ? { capabilityPolicy } : {}),
+      createdAt: typeof input.createdAt === "number" ? input.createdAt : now,
+      updatedAt: now,
+    },
+  };
+}
+
+function normalizeEvalSuitePayload(
+  input: Partial<EvalSuite>,
+): { value?: EvalSuite; error?: string } {
+  const name = input.name?.trim();
+  if (!name) return { error: "name is required" };
+  if (name.length > MAX_EVAL_NAME_CHARS) return { error: `name cannot exceed ${MAX_EVAL_NAME_CHARS} characters` };
+  if (!Array.isArray(input.taskIds)) return { error: "taskIds must be an array" };
+  const taskIds = [...new Set(input.taskIds.filter((id): id is string => typeof id === "string").map((id) => id.trim()).filter(Boolean))];
+  const now = Date.now();
+  return {
+    value: {
+      id: input.id?.trim() || randomUUID(),
+      name,
+      taskIds,
+      createdAt: typeof input.createdAt === "number" ? input.createdAt : now,
+      updatedAt: now,
+    },
+  };
 }
 
 function resolveProviderApiKey(provider: LlmProvider, config: BenderConfig | null): string | undefined {
@@ -2723,6 +2806,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
       feature,
       role,
       agentId,
+      officeHoursMode,
       askClarifyingQuestions,
       requireArchitectureApproval,
       requirePlanApproval,
@@ -2730,6 +2814,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
       feature?: string;
       role?: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
       agentId?: string;
+      officeHoursMode?: "pressure-test" | "execution-plan";
       askClarifyingQuestions?: boolean;
       requireArchitectureApproval?: boolean;
       requirePlanApproval?: boolean;
@@ -2738,6 +2823,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
     await runOperation(res, (adapter) => planCommand(getProject(), feature, adapter, {
       role,
       agentId,
+      officeHoursMode,
       askClarifyingQuestions,
       requireArchitectureApproval,
       requirePlanApproval,
@@ -2770,7 +2856,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
       let models;
       let runtime;
       let architectTier: "fast" | "default" | "strong" = "default";
-      let architectAgentName = "Architect";
+      let architectAgentName = "Eng Review";
       try {
         const config = await readEffectiveConfig(projectRoot);
         const logger = createLogger(
@@ -2792,6 +2878,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
             mcpServerIds: architectAgent.mcpServerIds,
             capabilityPolicy: architectAgent.capabilityPolicy,
             modelTier: architectAgent.modelTier,
+            systemPromptAddition: architectAgent.systemPromptAddition,
           },
           context.architecture ?? undefined,
           logger,
@@ -2871,6 +2958,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
             mcpServerIds: analyzerAgent.mcpServerIds,
             capabilityPolicy: analyzerAgent.capabilityPolicy,
             modelTier: analyzerAgent.modelTier,
+            systemPromptAddition: analyzerAgent.systemPromptAddition,
           },
           context.architecture ?? undefined,
           logger,
@@ -3175,6 +3263,352 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
+  });
+
+  // ── Evals ────────────────────────────────────────────────────────────────
+
+  app.get("/api/evals/tasks", async (_req, res) => {
+    try {
+      const store = new EvalsStore(getProject());
+      await store.init();
+      const tasks = await store.listTasks();
+      res.json({ tasks });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/evals/tasks", async (req, res) => {
+    try {
+      const normalized = normalizeEvalTaskPayload(req.body as Partial<EvalTask>);
+      if (normalized.error || !normalized.value) {
+        return res.status(400).json({ error: normalized.error ?? "Invalid eval task payload" });
+      }
+      const store = new EvalsStore(getProject());
+      await store.init();
+      await store.upsertTask(normalized.value);
+      res.json({ task: normalized.value });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/evals/tasks/:id", async (req, res) => {
+    try {
+      const id = decodeURIComponent(req.params.id ?? "").trim();
+      if (!id) return res.status(400).json({ error: "id is required" });
+      const store = new EvalsStore(getProject());
+      await store.init();
+      const current = await store.getTask(id);
+      if (!current) return res.status(404).json({ error: "Task not found" });
+      const normalized = normalizeEvalTaskPayload({
+        ...current,
+        ...(req.body as Partial<EvalTask>),
+        id,
+        createdAt: current.createdAt,
+      });
+      if (normalized.error || !normalized.value) {
+        return res.status(400).json({ error: normalized.error ?? "Invalid eval task payload" });
+      }
+      await store.upsertTask(normalized.value);
+      res.json({ task: normalized.value });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/evals/tasks/:id", async (req, res) => {
+    try {
+      const id = decodeURIComponent(req.params.id ?? "").trim();
+      if (!id) return res.status(400).json({ error: "id is required" });
+      const store = new EvalsStore(getProject());
+      await store.init();
+      await store.deleteTask(id);
+      await store.ensureConsistentTaskReferences();
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/evals/configs", async (_req, res) => {
+    try {
+      const store = new EvalsStore(getProject());
+      await store.init();
+      const configs = await store.listConfigs();
+      res.json({ configs });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/evals/configs", async (req, res) => {
+    try {
+      const normalized = normalizeEvalConfigPayload(req.body as Partial<EvalConfig>);
+      if (normalized.error || !normalized.value) {
+        return res.status(400).json({ error: normalized.error ?? "Invalid eval config payload" });
+      }
+      const store = new EvalsStore(getProject());
+      await store.init();
+      await store.upsertConfig(normalized.value);
+      res.json({ config: normalized.value });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/evals/configs/:id", async (req, res) => {
+    try {
+      const id = decodeURIComponent(req.params.id ?? "").trim();
+      if (!id) return res.status(400).json({ error: "id is required" });
+      const store = new EvalsStore(getProject());
+      await store.init();
+      const current = await store.getConfig(id);
+      if (!current) return res.status(404).json({ error: "Config not found" });
+      const normalized = normalizeEvalConfigPayload({
+        ...current,
+        ...(req.body as Partial<EvalConfig>),
+        id,
+        createdAt: current.createdAt,
+      });
+      if (normalized.error || !normalized.value) {
+        return res.status(400).json({ error: normalized.error ?? "Invalid eval config payload" });
+      }
+      await store.upsertConfig(normalized.value);
+      res.json({ config: normalized.value });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/evals/configs/:id", async (req, res) => {
+    try {
+      const id = decodeURIComponent(req.params.id ?? "").trim();
+      if (!id) return res.status(400).json({ error: "id is required" });
+      const store = new EvalsStore(getProject());
+      await store.init();
+      await store.deleteConfig(id);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/evals/suites", async (_req, res) => {
+    try {
+      const store = new EvalsStore(getProject());
+      await store.init();
+      const suites = await store.listSuites();
+      res.json({ suites });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/evals/suites", async (req, res) => {
+    try {
+      const normalized = normalizeEvalSuitePayload(req.body as Partial<EvalSuite>);
+      if (normalized.error || !normalized.value) {
+        return res.status(400).json({ error: normalized.error ?? "Invalid eval suite payload" });
+      }
+      const store = new EvalsStore(getProject());
+      await store.init();
+      await store.upsertSuite(normalized.value);
+      res.json({ suite: normalized.value });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/evals/suites/:id", async (req, res) => {
+    try {
+      const id = decodeURIComponent(req.params.id ?? "").trim();
+      if (!id) return res.status(400).json({ error: "id is required" });
+      const store = new EvalsStore(getProject());
+      await store.init();
+      const current = await store.getSuite(id);
+      if (!current) return res.status(404).json({ error: "Suite not found" });
+      const normalized = normalizeEvalSuitePayload({
+        ...current,
+        ...(req.body as Partial<EvalSuite>),
+        id,
+        createdAt: current.createdAt,
+      });
+      if (normalized.error || !normalized.value) {
+        return res.status(400).json({ error: normalized.error ?? "Invalid eval suite payload" });
+      }
+      await store.upsertSuite(normalized.value);
+      res.json({ suite: normalized.value });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/evals/suites/:id", async (req, res) => {
+    try {
+      const id = decodeURIComponent(req.params.id ?? "").trim();
+      if (!id) return res.status(400).json({ error: "id is required" });
+      const store = new EvalsStore(getProject());
+      await store.init();
+      await store.deleteSuite(id);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/evals/runs/compare", async (req, res) => {
+    try {
+      const limit = Math.max(1, Math.min(200, Number.parseInt(String(req.query.limit ?? "30"), 10) || 30));
+      const store = new EvalsStore(getProject());
+      await store.init();
+      const runs = await store.listCompareRuns(limit);
+      res.json({ runs });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/evals/runs/compare/:id", async (req, res) => {
+    try {
+      const id = decodeURIComponent(req.params.id ?? "").trim();
+      if (!id) return res.status(400).json({ error: "id is required" });
+      const store = new EvalsStore(getProject());
+      await store.init();
+      const summary = await store.getCompareRunSummary(id);
+      if (!summary) return res.status(404).json({ error: "Compare run not found" });
+      const runs = await store.getTaskRuns(summary.runIds);
+      res.json({ summary, runs });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/evals/runs/suites", async (req, res) => {
+    try {
+      const limit = Math.max(1, Math.min(200, Number.parseInt(String(req.query.limit ?? "30"), 10) || 30));
+      const store = new EvalsStore(getProject());
+      await store.init();
+      const runs = await store.listSuiteRuns(limit);
+      res.json({ runs });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/evals/runs/suites/:id", async (req, res) => {
+    try {
+      const id = decodeURIComponent(req.params.id ?? "").trim();
+      if (!id) return res.status(400).json({ error: "id is required" });
+      const store = new EvalsStore(getProject());
+      await store.init();
+      const suiteRun = await store.getSuiteRun(id);
+      if (!suiteRun) return res.status(404).json({ error: "Suite run not found" });
+      const taskRuns = await store.getTaskRuns(suiteRun.taskRunIds);
+      res.json({ suiteRun, taskRuns });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/run/evals/compare", async (req, res) => {
+    const body = (req.body ?? {}) as { taskId?: string; configIds?: string[]; concurrency?: number };
+    await runOperation(res, async (adapter) => {
+      const taskId = (body.taskId ?? "").trim();
+      if (!taskId) throw new Error("taskId is required");
+      const requestedConfigIds = Array.isArray(body.configIds)
+        ? body.configIds.filter((id): id is string => typeof id === "string").map((id) => id.trim()).filter(Boolean)
+        : [];
+      if (requestedConfigIds.length === 0) throw new Error("At least one configId is required");
+
+      const projectRoot = getProject();
+      const store = new EvalsStore(projectRoot);
+      await store.init();
+      const task = await store.getTask(taskId);
+      if (!task) throw new Error(`Eval task not found: ${taskId}`);
+      const configs = (await store.listConfigs()).filter((c) => requestedConfigIds.includes(c.id));
+      if (configs.length === 0) throw new Error("No valid eval configs selected.");
+      const requestedConcurrency = typeof body.concurrency === "number" ? Math.floor(body.concurrency) : undefined;
+      const concurrency = requestedConcurrency === undefined
+        ? undefined
+        : Math.max(1, Math.min(8, requestedConcurrency));
+
+      const result = await runTaskCompare({
+        projectRoot,
+        task,
+        configs,
+        adapter,
+        concurrency,
+      });
+      const successCount = result.runs.filter((r) => r.success).length;
+      const failCount = result.runs.length - successCount;
+      const configNameById = new Map(configs.map((c) => [c.id, c.name]));
+      if (successCount === 0) {
+        for (const run of result.runs) {
+          const label = configNameById.get(run.configId) ?? run.configId;
+          adapter.warn(`[${label}] ${run.error ?? "Run failed without a reported error."}`);
+        }
+        throw new Error(`Eval compare failed: 0/${result.runs.length} succeeded.`);
+      }
+      if (failCount > 0) {
+        adapter.warn(`Eval compare partial success: ${successCount}/${result.runs.length} succeeded.`);
+        for (const run of result.runs.filter((r) => !r.success)) {
+          const label = configNameById.get(run.configId) ?? run.configId;
+          adapter.warn(`[${label}] ${run.error ?? "Run failed without a reported error."}`);
+        }
+      } else {
+        adapter.success(`Eval compare complete: ${successCount}/${result.runs.length} succeeded.`);
+      }
+    });
+  });
+
+  app.post("/api/run/evals/suites/:suiteId", async (req, res) => {
+    const suiteId = decodeURIComponent(req.params.suiteId ?? "").trim();
+    const body = (req.body ?? {}) as { configIds?: string[]; concurrency?: number };
+    await runOperation(res, async (adapter) => {
+      if (!suiteId) throw new Error("suiteId is required");
+      const projectRoot = getProject();
+      const store = new EvalsStore(projectRoot);
+      await store.init();
+
+      const suite = await store.getSuite(suiteId);
+      if (!suite) throw new Error(`Eval suite not found: ${suiteId}`);
+      const allTasks = await store.listTasks();
+      const tasks = suite.taskIds.map((id) => allTasks.find((t) => t.id === id)).filter((t): t is EvalTask => !!t);
+      if (tasks.length === 0) throw new Error("Suite has no valid tasks.");
+
+      const requestedConfigIds = Array.isArray(body.configIds)
+        ? body.configIds.filter((id): id is string => typeof id === "string").map((id) => id.trim()).filter(Boolean)
+        : [];
+      const allConfigs = await store.listConfigs();
+      const configs = requestedConfigIds.length > 0
+        ? allConfigs.filter((c) => requestedConfigIds.includes(c.id))
+        : allConfigs.filter((c) => c.enabled);
+      if (configs.length === 0) throw new Error("No eval configs available for suite run.");
+      const requestedConcurrency = typeof body.concurrency === "number" ? Math.floor(body.concurrency) : undefined;
+      const concurrency = requestedConcurrency === undefined
+        ? undefined
+        : Math.max(1, Math.min(8, requestedConcurrency));
+
+      const result = await runSuiteCompare({
+        projectRoot,
+        suite,
+        tasks,
+        configs,
+        adapter,
+        concurrency,
+      });
+      const taskRuns = result.taskRuns;
+      const successCount = taskRuns.filter((r) => r.success).length;
+      if (taskRuns.length > 0 && successCount === 0) {
+        throw new Error(`Suite run failed: 0/${taskRuns.length} task-config runs succeeded.`);
+      }
+      if (taskRuns.length > 0 && successCount < taskRuns.length) {
+        adapter.warn(`Suite run partial success: ${successCount}/${taskRuns.length} task-config runs succeeded.`);
+      } else {
+        adapter.success(`Suite run complete: ${result.suiteRun.perConfig.length} config summary entries generated.`);
+      }
+    });
   });
 
   // ── Skills registry ───────────────────────────────────────────────────────

@@ -2,17 +2,24 @@ import chalk from "chalk";
 import ora, { type Ora } from "ora";
 import { createInterface } from "node:readline";
 
-const rl = createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
+let rl: ReturnType<typeof createInterface> | null = null;
+
+function getReadline() {
+  if (rl) return rl;
+  rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return rl;
+}
 
 /**
  * Prompt the user for text input.
  */
 export function prompt(question: string): Promise<string> {
+  const lineReader = getReadline();
   return new Promise((resolve) => {
-    rl.question(chalk.cyan(`${question} `), (answer: string) => {
+    lineReader.question(chalk.cyan(`${question} `), (answer: string) => {
       resolve(answer.trim());
     });
   });
@@ -23,6 +30,7 @@ export function prompt(question: string): Promise<string> {
  */
 export async function promptMultiline(question: string): Promise<string> {
   console.log(chalk.cyan(`${question} (press Enter twice to finish)`));
+  const lineReader = getReadline();
   const lines: string[] = [];
   let emptyCount = 0;
 
@@ -31,7 +39,7 @@ export async function promptMultiline(question: string): Promise<string> {
       if (line === "") {
         emptyCount++;
         if (emptyCount >= 1 && lines.length > 0) {
-          rl.removeListener("line", lineHandler);
+          lineReader.removeListener("line", lineHandler);
           resolve(lines.join("\n"));
           return;
         }
@@ -40,7 +48,7 @@ export async function promptMultiline(question: string): Promise<string> {
       }
       lines.push(line);
     };
-    rl.on("line", lineHandler);
+    lineReader.on("line", lineHandler);
   });
 }
 
@@ -126,5 +134,7 @@ export function showFileOperations(operations: { path: string; action: string }[
  * Clean up readline interface.
  */
 export function cleanup(): void {
+  if (!rl) return;
   rl.close();
+  rl = null;
 }

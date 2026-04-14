@@ -86,4 +86,3 @@ describe("state/manager", () => {
     expect(prompt).toContain("## Current Task Plan");
   });
 });
-

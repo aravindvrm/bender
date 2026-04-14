@@ -8,14 +8,15 @@ import {
   X,
   Terminal as TerminalIcon,
   GitCompare,
+  Info,
 } from "lucide-react";
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
 import { LoadingDots } from "./LoadingDots";
 import { GitDiffViewer } from "./GitDiffViewer";
+import { roleLabel, roleSummary, type BaseRole } from "../lib/roleLabels";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
 type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
-type BaseRole = "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
 
 interface DirEntry {
   name: string;
@@ -67,6 +68,7 @@ interface PlanModalSubmission {
   feature: string;
   role: BaseRole;
   agentId?: string;
+  officeHoursMode?: "pressure-test" | "execution-plan";
   askClarifyingQuestions: boolean;
   requireArchitectureApproval: boolean;
   requirePlanApproval: boolean;
@@ -1117,6 +1119,15 @@ interface AgentOption {
   isBuiltin?: boolean;
 }
 
+function formatAgentOptionLabel(agent: AgentOption, roleOption: BaseRole): string {
+  const builtinSuffix = agent.isBuiltin ? " [builtin]" : "";
+  const isRoleDefaultBuiltin = agent.id === `default-${roleOption}`;
+  if (isRoleDefaultBuiltin || agent.modelTier === "default") {
+    return `${agent.name}${builtinSuffix}`;
+  }
+  return `${agent.name} (${agent.modelTier})${builtinSuffix}`;
+}
+
 const ROLE_OPTIONS: BaseRole[] = ["planner", "implementer", "architect", "analyzer", "reviewer"];
 
 function detectRoleFromDescription(text: string): BaseRole {
@@ -1140,13 +1151,13 @@ function PlanTaskModal({
   onCancel,
 }: PlanTaskModalProps) {
   const [description, setDescription] = useState(initialDescription);
-  const [role, setRole] = useState<BaseRole>(detectRoleFromDescription(initialDescription));
-  const [roleManuallySet, setRoleManuallySet] = useState(false);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [agentId, setAgentId] = useState("");
-  const [askClarifyingQuestions, setAskClarifyingQuestions] = useState(false);
-  const [requireArchitectureApproval, setRequireArchitectureApproval] = useState(false);
-  const [requirePlanApproval, setRequirePlanApproval] = useState(false);
+  const [planningMode, setPlanningMode] = useState<"office-hours" | "execution-only">("office-hours");
+  const [askClarifyingQuestions, setAskClarifyingQuestions] = useState(true);
+  const [requireArchitectureApproval, setRequireArchitectureApproval] = useState(true);
+  const [requirePlanApproval, setRequirePlanApproval] = useState(true);
+  const [submittedFromThisModal, setSubmittedFromThisModal] = useState(false);
 
   const detectedRole = detectRoleFromDescription(description);
 
@@ -1157,22 +1168,22 @@ function PlanTaskModal({
       .catch(() => setAgents([]));
   }, []);
 
-  useEffect(() => {
-    if (!roleManuallySet) {
-      setRole(detectedRole);
-    }
-  }, [detectedRole, roleManuallySet]);
-
-  const roleAgents = agents.filter((a) => a.baseRole === role);
+  const selectedAgent = agents.find((a) => a.id === agentId);
+  const effectiveRole: BaseRole = selectedAgent?.baseRole ?? detectedRole;
+  const sortedAgents = [...agents].sort((a, b) => {
+    const roleDelta = ROLE_OPTIONS.indexOf(a.baseRole) - ROLE_OPTIONS.indexOf(b.baseRole);
+    if (roleDelta !== 0) return roleDelta;
+    if (a.isBuiltin !== b.isBuiltin) return a.isBuiltin ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  const plannerModeSelected = effectiveRole === "planner";
+  const officeHoursModeActive = plannerModeSelected && planningMode === "office-hours";
   const canSubmit = description.trim().length > 0;
   const started = status === "running" || status === "done" || status === "error";
-  const showOperationLog = started || lines.length > 0;
-
-  useEffect(() => {
-    if (agentId && !roleAgents.some((a) => a.id === agentId)) {
-      setAgentId("");
-    }
-  }, [agentId, roleAgents]);
+  const showOperationLog = submittedFromThisModal && started;
+  const submitAskClarifyingQuestions = officeHoursModeActive ? askClarifyingQuestions : false;
+  const submitRequireArchitectureApproval = officeHoursModeActive ? requireArchitectureApproval : false;
+  const submitRequirePlanApproval = officeHoursModeActive ? requirePlanApproval : false;
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -1191,13 +1202,17 @@ function PlanTaskModal({
               rows={5}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSubmit && status !== "running") {
+                  setSubmittedFromThisModal(true);
                   onSubmit({
                     feature: description.trim(),
-                    role,
+                    role: effectiveRole,
                     agentId: agentId || undefined,
-                    askClarifyingQuestions,
-                    requireArchitectureApproval,
-                    requirePlanApproval,
+                    officeHoursMode: plannerModeSelected
+                      ? (officeHoursModeActive ? "pressure-test" : "execution-plan")
+                      : undefined,
+                    askClarifyingQuestions: submitAskClarifyingQuestions,
+                    requireArchitectureApproval: submitRequireArchitectureApproval,
+                    requirePlanApproval: submitRequirePlanApproval,
                   });
                 }
                 if (e.key === "Escape") onCancel();
@@ -1206,76 +1221,93 @@ function PlanTaskModal({
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-xs text-zinc-500 uppercase tracking-wide">Role</label>
-              <div className="relative">
-                <select
-                  value={role}
-                  onChange={(e) => {
-                    setRoleManuallySet(true);
-                    setRole(e.target.value as BaseRole);
-                  }}
-                  className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+          <div className="space-y-1.5">
+            <label className="text-xs text-zinc-500 uppercase tracking-wide">Agent</label>
+            <div className="relative">
+              <select
+                value={agentId}
+                onChange={(e) => setAgentId(e.target.value)}
+                className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+              >
+                <option
+                  value=""
+                  title={roleSummary(detectedRole)}
                 >
-                  {ROLE_OPTIONS.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
-              </div>
-              <p className="text-[11px] text-zinc-600">Auto-detected from description: {detectedRole}</p>
+                  Use auto default
+                </option>
+                {sortedAgents.filter((a) => a.id !== "default-planner").map((a) => (
+                  <option
+                    key={a.id}
+                    value={a.id}
+                    title={roleSummary(a.baseRole)}
+                  >
+                    {formatAgentOptionLabel(a, a.baseRole)}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
             </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs text-zinc-500 uppercase tracking-wide">Agent (Optional)</label>
-              <div className="relative">
-                <select
-                  value={agentId}
-                  onChange={(e) => setAgentId(e.target.value)}
-                  className="select-flat w-full pl-3 pr-8 py-2 text-sm"
-                >
-                  <option value="">Use role default</option>
-                  {roleAgents.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name} ({a.modelTier}){a.isBuiltin ? " [builtin]" : ""}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
-              </div>
-              <p className="text-[11px] text-zinc-600">Matched to selected role.</p>
-            </div>
+            <p
+              className="text-[11px] text-zinc-600 flex items-center gap-1.5"
+              title={roleSummary(effectiveRole)}
+            >
+              Effective role: {roleLabel(effectiveRole)}{selectedAgent ? ` (from ${selectedAgent.name})` : " (auto-detected)"}
+              <Info className="h-3 w-3 text-zinc-500" />
+            </p>
           </div>
 
           <div className="space-y-2">
             <p className="text-xs text-zinc-500 uppercase tracking-wide">Planning Flow</p>
-            <label className="flex items-center gap-2 text-xs text-zinc-400">
-              <input
-                type="checkbox"
-                checked={askClarifyingQuestions}
-                onChange={(e) => setAskClarifyingQuestions(e.target.checked)}
-              />
-              Ask clarifying questions before planning
-            </label>
-            <label className="flex items-center gap-2 text-xs text-zinc-400">
-              <input
-                type="checkbox"
-                checked={requireArchitectureApproval}
-                onChange={(e) => setRequireArchitectureApproval(e.target.checked)}
-              />
-              Require architecture approval step
-            </label>
-            <label className="flex items-center gap-2 text-xs text-zinc-400">
-              <input
-                type="checkbox"
-                checked={requirePlanApproval}
-                onChange={(e) => setRequirePlanApproval(e.target.checked)}
-              />
-              Require plan approval step
-            </label>
+            {plannerModeSelected && (
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-2 text-xs text-zinc-400">
+                  <input
+                    type="radio"
+                    name="planner-flow-mode"
+                    checked={planningMode === "office-hours"}
+                    onChange={() => setPlanningMode("office-hours")}
+                  />
+                  Office Hours mode (pressure test + approvals)
+                </label>
+                <label className="flex items-center gap-2 text-xs text-zinc-400">
+                  <input
+                    type="radio"
+                    name="planner-flow-mode"
+                    checked={planningMode === "execution-only"}
+                    onChange={() => setPlanningMode("execution-only")}
+                  />
+                  Execution only (skip Office Hours pressure test)
+                </label>
+              </div>
+            )}
+            {officeHoursModeActive && (
+              <>
+                <label className="flex items-center gap-2 text-xs text-zinc-400">
+                  <input
+                    type="checkbox"
+                    checked={askClarifyingQuestions}
+                    onChange={(e) => setAskClarifyingQuestions(e.target.checked)}
+                  />
+                  Ask clarifying questions before planning
+                </label>
+                <label className="flex items-center gap-2 text-xs text-zinc-400">
+                  <input
+                    type="checkbox"
+                    checked={requireArchitectureApproval}
+                    onChange={(e) => setRequireArchitectureApproval(e.target.checked)}
+                  />
+                  Require architecture approval step
+                </label>
+                <label className="flex items-center gap-2 text-xs text-zinc-400">
+                  <input
+                    type="checkbox"
+                    checked={requirePlanApproval}
+                    onChange={(e) => setRequirePlanApproval(e.target.checked)}
+                  />
+                  Require plan approval step
+                </label>
+              </>
+            )}
           </div>
 
           {showOperationLog && (
@@ -1309,14 +1341,20 @@ function PlanTaskModal({
             Cancel
           </button>
           <button
-            onClick={() => onSubmit({
-              feature: description.trim(),
-              role,
-              agentId: agentId || undefined,
-              askClarifyingQuestions,
-              requireArchitectureApproval,
-              requirePlanApproval,
-            })}
+            onClick={() => {
+              setSubmittedFromThisModal(true);
+              onSubmit({
+                feature: description.trim(),
+                role: effectiveRole,
+                agentId: agentId || undefined,
+                officeHoursMode: plannerModeSelected
+                  ? (officeHoursModeActive ? "pressure-test" : "execution-plan")
+                  : undefined,
+                askClarifyingQuestions: submitAskClarifyingQuestions,
+                requireArchitectureApproval: submitRequireArchitectureApproval,
+                requirePlanApproval: submitRequirePlanApproval,
+              });
+            }}
             disabled={!canSubmit || status === "running"}
             className="px-4 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-900 rounded-md hover:bg-white disabled:opacity-40 transition-colors"
           >

@@ -124,6 +124,8 @@ export interface RuntimeOptions {
   capabilityPolicy?: CapabilityPolicy;
   /** Override model tier (from agent config). */
   modelTier?: string;
+  /** Agent-level prompt augmentation injected above project context. */
+  systemPromptAddition?: string;
 }
 
 // ── Provider helpers ──────────────────────────────────────────────────────────
@@ -420,7 +422,12 @@ export async function createRoleRuntime(
   const runtime: RoleRuntime = {
     tools: undefined,
     providerOptions: undefined,
-    additionalSystemContext: skills.text ?? undefined,
+    additionalSystemContext: [
+      roleOpts.systemPromptAddition?.trim()
+        ? `## Agent-Specific Guidance\n${roleOpts.systemPromptAddition.trim()}`
+        : null,
+      skills.text ?? null,
+    ].filter(Boolean).join("\n\n---\n\n") || undefined,
     logger: isRoleLogger(logger) ? logger : undefined,
     close: async () => {},
     summary: {

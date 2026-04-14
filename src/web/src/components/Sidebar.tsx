@@ -13,10 +13,11 @@ import {
   Settings,
   Bot,
   Zap,
+  Beaker,
   type LucideIcon,
 } from "lucide-react";
 
-export type View = "plan" | "architecture" | "brief" | "git" | "agents" | "settings";
+export type View = "plan" | "architecture" | "brief" | "evals" | "git" | "agents" | "settings";
 
 function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -148,6 +149,20 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
           className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed"
         >
           <ScanEye className="h-4 w-4" />
+        </button>
+
+        {/* Evals */}
+        <button
+          onClick={() => onViewChange("evals")}
+          disabled={!hasProject}
+          title="Evals"
+          className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+            activeView === "evals"
+              ? "bg-zinc-800 text-zinc-100"
+              : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
+          }`}
+        >
+          <Beaker className="h-4 w-4" />
         </button>
 
         {/* Spacer */}

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { LoadingDots } from "../components/LoadingDots";
+import { roleLabel, type BaseRole } from "../lib/roleLabels";
 
-type BaseRole = "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
 type ModelTier = "fast" | "default" | "strong";
 type CapabilityId =
   | "github.repo.read"
@@ -325,7 +325,7 @@ export function AgentsView() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Failed to update role selection");
       setSelectedByRole(body.selectedByRole ?? {});
-      setNotice(`Updated default agent for ${role}.`);
+      setNotice(`Updated default agent for ${roleLabel(role)}.`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -503,7 +503,7 @@ export function AgentsView() {
             const roleAgents = agents.filter((a) => a.baseRole === role);
             return (
               <label key={role} className="space-y-1">
-                <span className="text-xs text-zinc-500 capitalize">{role}</span>
+                <span className="text-xs text-zinc-500">{roleLabel(role)}</span>
                 <div className="relative">
                   <select
                     value={selectedByRole[role] ?? ""}
@@ -546,7 +546,7 @@ export function AgentsView() {
                 onChange={(e) => setDraft((d) => ({ ...d, baseRole: e.target.value as BaseRole }))}
                 className="select-flat w-full pl-3 pr-8 py-2 text-sm"
               >
-                {BASE_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+                {BASE_ROLES.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
               </select>
               <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
             </div>
@@ -667,7 +667,7 @@ export function AgentsView() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 text-xs">
                   <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
                     <p className="text-zinc-600">Role</p>
-                    <p className="text-zinc-300 mt-0.5">{agent.baseRole}</p>
+                    <p className="text-zinc-300 mt-0.5">{roleLabel(agent.baseRole)}</p>
                   </div>
                   <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
                     <p className="text-zinc-600">Model tier</p>
@@ -743,7 +743,7 @@ export function AgentsView() {
                         onChange={(e) => setCustomEdits((prev) => ({ ...prev, [agent.id]: { ...edit, baseRole: e.target.value as BaseRole } }))}
                         className="select-flat w-full pl-3 pr-8 py-2 text-sm"
                       >
-                        {BASE_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+                        {BASE_ROLES.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
                       </select>
                       <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
                     </div>
