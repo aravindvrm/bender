@@ -192,48 +192,6 @@ input[type="radio"]:disabled {
   100% { background-size: 63.64% 27.27%, 27.27% 27.27%, 27.27% 63.64%, 63.64% 63.64%; }
 }
 
-/* Center-stage loader used in Architecture tabs (Flows/Security/Tests) */
-.bender-center-loader {
-  width: 4px;
-  aspect-ratio: 1;
-  color: #fff;
-  border-radius: 50%;
-  box-shadow:
-    19px -19px 0 0, 38px -19px 0 0, 57px -19px 0 0,
-    19px 0 0 5px, 38px 0 0 5px, 57px 0 0 5px,
-    19px 19px 0 0, 38px 19px 0 0, 57px 19px 0 0;
-  transform: translateX(-38px) scale(1.6);
-  transform-origin: left center;
-  animation: bender-center-loader-frames 2s infinite linear;
-}
-
-@keyframes bender-center-loader-frames {
-  12.5% { box-shadow:
-    19px -19px 0 0, 38px -19px 0 0, 57px -19px 0 5px,
-    19px 0 0 5px, 38px 0 0 0, 57px 0 0 5px,
-    19px 19px 0 0, 38px 19px 0 0, 57px 19px 0 0; }
-  25%   { box-shadow:
-    19px -19px 0 5px, 38px -19px 0 0, 57px -19px 0 5px,
-    19px 0 0 0, 38px 0 0 0, 57px 0 0 0,
-    19px 19px 0 0, 38px 19px 0 5px, 57px 19px 0 0; }
-  50%   { box-shadow:
-    19px -19px 0 5px, 38px -19px 0 5px, 57px -19px 0 0,
-    19px 0 0 0, 38px 0 0 0, 57px 0 0 0,
-    19px 19px 0 0, 38px 19px 0 0, 57px 19px 0 5px; }
-  62.5% { box-shadow:
-    19px -19px 0 0, 38px -19px 0 0, 57px -19px 0 0,
-    19px 0 0 5px, 38px 0 0 0, 57px 0 0 0,
-    19px 19px 0 0, 38px 19px 0 5px, 57px 19px 0 5px; }
-  75%   { box-shadow:
-    19px -19px 0 0, 38px -19px 0 5px, 57px -19px 0 0,
-    19px 0 0 0, 38px 0 0 0, 57px 0 0 5px,
-    19px 19px 0 0, 38px 19px 0 0, 57px 19px 0 5px; }
-  87.5% { box-shadow:
-    19px -19px 0 0, 38px -19px 0 5px, 57px -19px 0 0,
-    19px 0 0 0, 38px 0 0 5px, 57px 0 0 0,
-    19px 19px 0 5px, 38px 19px 0 0, 57px 19px 0 0; }
-}
-
 /* Sidebar progress bar animation */
 @keyframes progressSlide {
   0%   { transform: translateX(-100%); }

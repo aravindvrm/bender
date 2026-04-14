@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import type { ProjectState } from "../hooks/useApi";
 import { MarkdownView } from "../components/MarkdownView";
 import { MermaidView } from "../components/MermaidView";
+import { LoadingDots } from "../components/LoadingDots";
 import { sqlToErDiagram } from "../utils/sqlToErDiagram";
 import { RefreshCw, ShieldAlert, TestTube2, AlertTriangle, Info, AlertCircle, CheckCircle2, Plus } from "lucide-react";
 
@@ -317,8 +318,8 @@ function FlowsContent({ content, onRegenerate, generating }: {
 
 function CenterLoadingState({ label }: { label: string }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-6 py-16 text-center">
-      <div className="bender-center-loader mx-auto mb-5" aria-hidden="true" />
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-6 py-12 min-h-[240px] overflow-hidden flex flex-col items-center justify-center text-center">
+      <LoadingDots size={28} className="justify-center mb-4" />
       <p className="text-sm text-zinc-500">{label}</p>
     </div>
   );
