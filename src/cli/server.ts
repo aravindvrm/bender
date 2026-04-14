@@ -1688,30 +1688,10 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
     try {
       const projectRoot = currentProject;
       const config = await readGlobalConfig();
-      const MASK = "••••••••";
-      const maskSensitive = (value?: string) => (value ? MASK : "");
       res.json({
         scope: "global",
         projectRoot,
         ...config,
-        llm: { ...config.llm, apiKey: config.llm.apiKey ? MASK : undefined },
-        providers: config.providers
-          ? Object.fromEntries(
-              Object.entries(config.providers).map(([name, p]) => [name, { apiKey: maskSensitive(p.apiKey) }]),
-            )
-          : {},
-        mcp: {
-          enabled: config.mcp?.enabled ?? false,
-          servers: (config.mcp?.servers ?? []).map((server) => ({
-            ...server,
-            authorizationToken: maskSensitive(server.authorizationToken),
-            headers: server.headers
-              ? Object.fromEntries(
-                  Object.entries(server.headers).map(([k, v]) => [k, maskSensitive(v)]),
-                )
-              : undefined,
-          })),
-        },
       });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -1812,7 +1792,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
           ...def,
           enabled: existing?.enabled ?? false,
           configured: !!token,
-          authorizationToken: token ? MASKED_VALUE : "",
+          authorizationToken: token ?? "",
         };
       });
       res.json({ connectors });
@@ -1898,7 +1878,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
           ...def,
           enabled: nextEnabled,
           configured: !!nextToken,
-          authorizationToken: nextToken ? MASKED_VALUE : "",
+          authorizationToken: nextToken ?? "",
         },
       });
     } catch (err) {

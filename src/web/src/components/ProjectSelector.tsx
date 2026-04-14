@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { fetchProjects, selectProject, openProject, removeProject, type ProjectEntry } from "../hooks/useApi";
 import { LoadingDots } from "./LoadingDots";
+import { SecretInput } from "./SecretInput";
 
 interface ProjectSelectorProps {
   currentPath: string | null;
@@ -675,12 +676,11 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                       placeholder="GitHub App Client ID"
                       className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-1.5 text-xs text-zinc-200 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
                     />
-                    <input
-                      type="password"
+                    <SecretInput
                       value={githubClientSecretInput}
-                      onChange={(e) => setGithubClientSecretInput(e.target.value)}
+                      onChange={setGithubClientSecretInput}
                       placeholder="Client Secret (optional for device flow)"
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-1.5 text-xs text-zinc-200 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+                      inputClassName="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-1.5 pr-9 text-xs text-zinc-200 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
                     />
                     <input
                       type="text"

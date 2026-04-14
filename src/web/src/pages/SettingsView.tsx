@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { ChevronDown } from "lucide-react";
 import { LoadingDots } from "../components/LoadingDots";
+import { SecretInput } from "../components/SecretInput";
 
 type ConfigScope = "global" | "project";
 
@@ -210,26 +211,27 @@ function TextInput({ value, onChange, placeholder, password, mono }: {
   password?: boolean;
   mono?: boolean;
 }) {
-  const [show, setShow] = useState(false);
-  return (
-    <div className="relative">
-      <input
-        type={password && !show ? "password" : "text"}
+  const baseClass = `w-full bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 ${mono ? "font-mono" : ""}`;
+
+  if (password) {
+    return (
+      <SecretInput
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={onChange}
         placeholder={placeholder}
-        className={`w-full bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 ${mono ? "font-mono" : ""} ${password ? "pr-14" : ""}`}
+        inputClassName={`${baseClass} pr-10`}
       />
-      {password && (
-        <button
-          type="button"
-          onClick={() => setShow((v) => !v)}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-zinc-500 hover:text-zinc-300 px-1"
-        >
-          {show ? "hide" : "show"}
-        </button>
-      )}
-    </div>
+    );
+  }
+
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className={baseClass}
+    />
   );
 }
 

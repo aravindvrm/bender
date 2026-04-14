@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { ProjectState } from "../hooks/useApi";
 import { LoadingDots } from "../components/LoadingDots";
+import { SecretInput } from "../components/SecretInput";
 
 interface GitViewProps {
   state: ProjectState;
@@ -563,12 +564,11 @@ export function GitView({ state, onStateChange }: GitViewProps) {
               placeholder="GitHub username"
               className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-xs text-zinc-300"
             />
-            <input
-              type="password"
+            <SecretInput
               value={githubToken}
-              onChange={(e) => setGithubToken(e.target.value)}
+              onChange={setGithubToken}
               placeholder="GitHub personal access token"
-              className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-xs text-zinc-300"
+              inputClassName="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 pr-9 text-xs text-zinc-300 w-full"
             />
             <button
               onClick={() => void saveGitHubToken()}

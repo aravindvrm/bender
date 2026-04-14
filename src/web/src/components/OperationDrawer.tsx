@@ -13,6 +13,7 @@ import {
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
 import { LoadingDots } from "./LoadingDots";
 import { GitDiffViewer } from "./GitDiffViewer";
+import { SecretInput } from "./SecretInput";
 import { roleLabel, roleSummary, type BaseRole } from "../lib/roleLabels";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
@@ -846,12 +847,11 @@ function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewProjectM
               </div>
 
               {providerNeedsApiKey && (
-                <input
-                  type="password"
+                <SecretInput
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={setApiKey}
                   placeholder={`${selectedProvider.toUpperCase()} API key`}
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 font-mono"
+                  inputClassName="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 pr-9 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 font-mono"
                 />
               )}
 
