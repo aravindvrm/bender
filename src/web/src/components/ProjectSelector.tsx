@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronDown, ChevronRight, Folder, FolderOpen, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { fetchProjects, selectProject, openProject, removeProject, type ProjectEntry } from "../hooks/useApi";
+import { LoadingDots } from "./LoadingDots";
 
 interface ProjectSelectorProps {
   currentPath: string | null;
@@ -578,14 +579,13 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                     >
                       Refresh
                     </button>
-                    <span className="text-[11px] text-zinc-500 font-mono truncate">{browserRoot?.path ?? "Loading..."}</span>
+                    <span className="text-[11px] text-zinc-500 font-mono truncate">{browserRoot?.path ?? "Loading…"}</span>
                   </div>
 
                   <div className="max-h-72 overflow-y-auto px-2 py-2">
                     {browserLoading && (
                       <div className="flex items-center gap-2 text-xs text-zinc-500 px-2 py-2">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        <span>Loading directories...</span>
+                        <LoadingDots size={18} label="Loading directories…" />
                       </div>
                     )}
                     {browserError && (
@@ -649,7 +649,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                 >
                   Refresh
                 </button>
-                {githubLoading && <span className="text-xs text-zinc-500">Loading...</span>}
+                {githubLoading && <LoadingDots size={18} label="Loading…" />}
               </div>
 
               {githubConfig && (
@@ -802,13 +802,15 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                           Refresh
                         </button>
                         <span className="text-[11px] text-zinc-500 font-mono truncate">
-                          {cloneBrowserRoot?.path ?? "Loading..."}
+                          {cloneBrowserRoot?.path ?? "Loading…"}
                         </span>
                       </div>
 
                       <div className="max-h-40 overflow-y-auto px-1 py-1 space-y-0.5 border border-zinc-800 rounded-md">
                         {cloneBrowserLoading && (
-                          <p className="text-xs text-zinc-500 px-2 py-2">Loading directories...</p>
+                          <div className="px-2 py-2">
+                            <LoadingDots size={18} label="Loading directories…" />
+                          </div>
                         )}
                         {cloneBrowserError && (
                           <p className="text-xs text-red-400 px-2 py-2">{cloneBrowserError}</p>
@@ -970,8 +972,7 @@ function DirectoryTreeNode({ entry, depth, selectedPath, onSelect }: DirectoryTr
               className="flex items-center gap-1.5 text-[11px] text-zinc-500 py-1"
               style={{ paddingLeft: `${8 + (depth + 1) * 14}px` }}
             >
-              <Loader2 className="h-3 w-3 animate-spin" />
-              <span>Loading...</span>
+              <LoadingDots size={16} label="Loading…" />
             </div>
           )}
 

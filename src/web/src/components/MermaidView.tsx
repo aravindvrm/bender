@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import mermaid from "mermaid";
+import { LoadingDots } from "./LoadingDots";
 
 mermaid.initialize({
   startOnLoad: false,
@@ -58,7 +59,7 @@ export function MermaidView({ chart, className = "" }: MermaidViewProps) {
   if (!svg) {
     return (
       <div className={`flex items-center justify-center p-8 ${className}`}>
-        <div className="w-4 h-4 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
+        <LoadingDots size={22} />
       </div>
     );
   }

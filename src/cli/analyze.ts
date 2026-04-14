@@ -7,7 +7,7 @@ import { GitOperations } from "../git/operations.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getEffectiveAgentForRole } from "../state/agents.js";
-import { createLogger, makeAdapterSink } from "../logger.js";
+import { createLogger, makeAdapterSink, toLoggerOptions } from "../logger.js";
 
 export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header("Bender Analyze — Existing Project");
@@ -27,7 +27,12 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
   }
 
   const config = await readEffectiveConfig(projectRoot);
-  const logger = createLogger("analyze", projectRoot, makeAdapterSink(adapter));
+  const logger = createLogger(
+    "analyze",
+    projectRoot,
+    makeAdapterSink(adapter),
+    toLoggerOptions(config.logging),
+  );
   const startTime = Date.now();
   logger.info("Starting analysis");
 
@@ -75,7 +80,7 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
         modelTier: analyzerAgent.modelTier,
       },
       undefined,
-      { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+      logger,
     );
   } catch (err: unknown) {
     adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);

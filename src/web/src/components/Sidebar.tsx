@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import type { ProjectState } from "../hooks/useApi";
 import type { OperationStatus } from "../hooks/useOperation";
 import { ProjectSelector } from "./ProjectSelector";
+import { LoadingDots } from "./LoadingDots";
 import {
   FileText,
   CirclePlus,
@@ -23,9 +24,39 @@ function formatTokenCount(n: number): string {
   return String(n);
 }
 
+function displayProviderName(provider?: string): string {
+  const p = (provider ?? "").trim().toLowerCase();
+  if (!p) return "—";
+  if (p === "openai") return "OpenAI";
+  if (p === "anthropic") return "Anthropic";
+  if (p === "google") return "Google";
+  if (p === "groq") return "Groq";
+  if (p === "ollama") return "Ollama";
+  return provider ?? "—";
+}
+
+function deriveFrameworkFromArchitecture(architecture: string | null | undefined): string | null {
+  if (!architecture) return null;
+  // Accept "Framework: X" and markdown variants like "- **Framework**: X"
+  const match = architecture.match(/^\s*(?:[-*]\s*)?(?:\*\*)?\s*framework\s*(?:\*\*)?\s*:\s*(.+)$/im);
+  const value = match?.[1]?.trim();
+  return value ? value.replace(/\*\*/g, "").replace(/`/g, "") : null;
+}
+
+function countCompletedInCurrentTasks(currentTasks: string | null | undefined): number {
+  if (!currentTasks) return 0;
+  const matches = currentTasks.match(/^\s*[-*]\s*\[(?:x|X)\]\s+/gm);
+  return matches?.length ?? 0;
+}
+
 interface TokenStats {
   inputTokens: number;
   outputTokens: number;
+}
+
+interface SessionUsageResponse {
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 interface SidebarProps {
@@ -48,36 +79,43 @@ const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
 
 export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGlobalAction, operationStatus, operationLabel }: SidebarProps) {
   const taskCount = state?.currentTasks?.match(/###\s*Task\s*\d+/g)?.length ?? 0;
-  const completedCount = state?.completedTasks?.length ?? 0;
+  const completedFromFiles = state?.completedTasks?.length ?? 0;
+  const completedFromCurrent = countCompletedInCurrentTasks(state?.currentTasks);
+  const completedCount = Math.max(completedFromFiles, completedFromCurrent);
   const decisionCount = state?.decisions?.length ?? 0;
+  const framework = deriveFrameworkFromArchitecture(state?.architecture) ?? state?.config?.stack?.framework ?? "—";
+  const llmProvider = displayProviderName(state?.config?.llm?.provider);
   const projectName = state?.projectRoot?.split(/[\\/]/).filter(Boolean).pop() ?? "No Project";
   const hasProject = !!state?.projectRoot;
   const isRunning = operationStatus === "running";
 
-  const [tokenStats, setTokenStats] = useState<TokenStats | null>(null);
+  const [tokenStats, setTokenStats] = useState<TokenStats>({ inputTokens: 0, outputTokens: 0 });
 
   // Load token usage from logs periodically
   useEffect(() => {
     if (!hasProject) return;
 
     function loadTokens() {
-      fetch("/api/logs?limit=500")
+      fetch("/api/usage/session")
         .then((r) => r.json())
-        .then((data: { entries?: Array<{ data?: { inputTokens?: number; outputTokens?: number } }> }) => {
-          let input = 0;
-          let output = 0;
-          for (const entry of data.entries ?? []) {
-            if (entry.data?.inputTokens) input += entry.data.inputTokens;
-            if (entry.data?.outputTokens) output += entry.data.outputTokens;
-          }
-          if (input + output > 0) setTokenStats({ inputTokens: input, outputTokens: output });
+        .then((data: SessionUsageResponse) => {
+          setTokenStats({
+            inputTokens: typeof data.inputTokens === "number" ? data.inputTokens : 0,
+            outputTokens: typeof data.outputTokens === "number" ? data.outputTokens : 0,
+          });
         })
-        .catch(() => { /* ignore */ });
+        .catch(() => setTokenStats({ inputTokens: 0, outputTokens: 0 }));
     }
 
     loadTokens();
-    const id = setInterval(loadTokens, 30000);
-    return () => clearInterval(id);
+    const id = setInterval(loadTokens, 5000);
+    const settleId = operationStatus && operationStatus !== "running"
+      ? window.setTimeout(loadTokens, 1200)
+      : null;
+    return () => {
+      clearInterval(id);
+      if (settleId !== null) window.clearTimeout(settleId);
+    };
   }, [hasProject, operationStatus]); // re-fetch after operations
 
   return (
@@ -200,13 +238,13 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-zinc-600">Stack</span>
                 <span className="text-[11px] text-zinc-400 truncate max-w-[120px] text-right">
-                  {state.config.stack.framework || "—"}
+                  {framework}
                 </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-zinc-600">LLM</span>
-                <span className="text-[11px] text-zinc-400 capitalize">
-                  {state.config.llm.provider || "—"}
+                <span className="text-[11px] text-zinc-400">
+                  {llmProvider}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -217,19 +255,17 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
               </div>
             </>
           ) : hasProject ? (
-            <p className="text-[11px] text-zinc-600 italic">Loading config…</p>
+            <LoadingDots size={16} label="Loading config…" className="py-0.5" textClassName="text-[11px] text-zinc-600 italic" />
           ) : null}
 
-          {tokenStats && (
-            <div className="flex items-center justify-between pt-1 border-t border-zinc-800/60">
-              <span className="text-[11px] text-zinc-600 flex items-center gap-1">
-                <Zap className="h-2.5 w-2.5" /> Tokens
-              </span>
-              <span className="text-[11px] text-zinc-500 tabular-nums">
-                {formatTokenCount(tokenStats.inputTokens + tokenStats.outputTokens)}
-              </span>
-            </div>
-          )}
+          <div className="flex items-center justify-between pt-1 border-t border-zinc-800/60">
+            <span className="text-[11px] text-zinc-600 flex items-center gap-1">
+              <Zap className="h-2.5 w-2.5" /> Session tokens
+            </span>
+            <span className="text-[11px] text-zinc-500 tabular-nums">
+              {formatTokenCount(tokenStats.inputTokens + tokenStats.outputTokens)}
+            </span>
+          </div>
 
           {state?.git && (
             <div className="flex items-center gap-1.5 pt-1 border-t border-zinc-800/60">

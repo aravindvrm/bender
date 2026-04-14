@@ -12,7 +12,7 @@ import { analyzeCommand } from "./analyze.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getAllAgents, getEffectiveAgentForRole, type AgentConfig } from "../state/agents.js";
 import { readEffectiveConfig, type BenderConfig } from "../state/config.js";
-import { createLogger, makeAdapterSink } from "../logger.js";
+import { createLogger, makeAdapterSink, toLoggerOptions, type Logger } from "../logger.js";
 import type { ModelSet } from "../llm/provider.js";
 import type { ProjectContext } from "../state/manager.js";
 
@@ -150,6 +150,7 @@ async function runReviewerGate(
   context: ProjectContext,
   adapter: UIAdapter,
   reviewerAgent: AgentConfig,
+  logger: Logger,
 ): Promise<boolean> {
   adapter.subheader("Reviewer Gate");
   adapter.info(`Using reviewer agent: ${reviewerAgent.name} (${reviewerAgent.modelTier})`);
@@ -168,7 +169,7 @@ async function runReviewerGate(
         modelTier: reviewerAgent.modelTier,
       },
       context.architecture ?? undefined,
-      { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+      logger,
     );
   } catch (err: unknown) {
     adapter.error(`Failed to initialize reviewer runtime: ${(err as Error).message}`);
@@ -223,7 +224,12 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
   }
 
   const config = await readEffectiveConfig(projectRoot);
-  const logger = createLogger("implement", projectRoot, makeAdapterSink(adapter));
+  const logger = createLogger(
+    "implement",
+    projectRoot,
+    makeAdapterSink(adapter),
+    toLoggerOptions(config.logging),
+  );
   logger.info("Starting task implementation", { taskId });
   const currentTasks = await state.readCurrentTasks();
 
@@ -282,7 +288,7 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
         modelTier: agent.modelTier,
       },
       undefined,
-      { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+      logger,
     );
   } catch (err: unknown) {
     adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
@@ -324,6 +330,7 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
       context,
       adapter,
       reviewerAgent,
+      logger.child("reviewer"),
     );
     if (!reviewPassed) {
       adapter.cleanup();
@@ -396,7 +403,12 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
   }
 
   const config = await readEffectiveConfig(projectRoot);
-  const logger = createLogger("implement", projectRoot, makeAdapterSink(adapter));
+  const logger = createLogger(
+    "implement",
+    projectRoot,
+    makeAdapterSink(adapter),
+    toLoggerOptions(config.logging),
+  );
   const currentTasks = await state.readCurrentTasks();
 
   if (!currentTasks) {
@@ -464,7 +476,7 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
           modelTier: agent.modelTier,
         },
         undefined,
-        { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+        logger,
       );
     } catch (err: unknown) {
       adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
@@ -512,6 +524,7 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
         context,
         adapter,
         reviewerAgent,
+        logger.child("reviewer"),
       );
       if (!reviewPassed) {
         const shouldContinue = await adapter.confirm("Continue with next task?", false);

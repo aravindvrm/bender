@@ -34,6 +34,7 @@ import { implementCommand, implementSingleTask } from "./implement.js";
 import { analyzeCommand } from "./analyze.js";
 import { generateFlows } from "../roles/flowcharter.js";
 import { loadPrompt, runRole } from "../roles/base.js";
+import { createLogger, makeAdapterSink, toLoggerOptions, type LogEntry } from "../logger.js";
 import type { UIAdapter, SpinnerAdapter } from "./adapter.js";
 
 const API_PORT = 3142;
@@ -43,6 +44,7 @@ const MODEL_TIERS = ["fast", "default", "strong"] as const;
 const MAX_AGENT_NAME_CHARS = 80;
 const MAX_SYSTEM_PROMPT_ADDITION_CHARS = 4000;
 const MASKED_VALUE = "••••••••";
+const SERVER_SESSION_STARTED_AT = Date.now();
 
 interface CuratedMcpServerDefinition {
   id: string;
@@ -745,6 +747,47 @@ function createWebAdapter(res: Response): UIAdapter {
     showFileOperations(ops) { send({ type: "files", ops }); },
     cleanup() { /* no-op */ },
   };
+}
+
+function parseLogEntries(raw: string, limit?: number): LogEntry[] {
+  const lines = raw.split("\n").filter(Boolean);
+  const sliced = typeof limit === "number" ? lines.slice(-Math.max(0, limit)) : lines;
+  return sliced
+    .map((line) => {
+      try {
+        return JSON.parse(line) as LogEntry;
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is LogEntry => entry !== null);
+}
+
+function aggregateTokenUsage(
+  entries: LogEntry[],
+  sinceMs?: number,
+): { inputTokens: number; outputTokens: number; events: number; lastTimestamp: string | null } {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let events = 0;
+  let lastTimestamp: string | null = null;
+
+  for (const entry of entries) {
+    const ts = Date.parse(entry.timestamp);
+    if (Number.isNaN(ts)) continue;
+    if (typeof sinceMs === "number" && ts < sinceMs) continue;
+
+    const input = typeof entry.data?.inputTokens === "number" ? entry.data.inputTokens : 0;
+    const output = typeof entry.data?.outputTokens === "number" ? entry.data.outputTokens : 0;
+    if (input <= 0 && output <= 0) continue;
+
+    inputTokens += input;
+    outputTokens += output;
+    events += 1;
+    lastTimestamp = entry.timestamp;
+  }
+
+  return { inputTokens, outputTokens, events, lastTimestamp };
 }
 
 // ── SSE operation runner ──────────────────────────────────────────────────────
@@ -1509,6 +1552,8 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
         stack: { ...current.stack, ...updates.stack },
         deploy: { ...current.deploy, ...updates.deploy },
         test: { ...current.test, ...updates.test },
+        reanalyze: { ...current.reanalyze, ...updates.reanalyze },
+        logging: { ...current.logging, ...updates.logging },
       };
 
       await writeGlobalConfig(nextConfig);
@@ -1950,16 +1995,51 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
 
       const raw = await readFile(logPath, "utf-8");
       const limit = Math.min(500, parseInt((req.query.limit as string) ?? "200", 10) || 200);
-      const entries = raw
-        .split("\n")
-        .filter(Boolean)
-        .slice(-limit)
-        .map((line) => {
-          try { return JSON.parse(line); } catch { return null; }
-        })
-        .filter(Boolean);
+      const entries = parseLogEntries(raw, limit);
 
       res.json({ entries });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/usage/session", async (_req, res) => {
+    try {
+      if (!currentProject) {
+        return res.json({
+          startedAt: new Date(SERVER_SESSION_STARTED_AT).toISOString(),
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          events: 0,
+          lastUpdatedAt: null,
+        });
+      }
+
+      const projectRoot = getProject();
+      const logPath = join(projectRoot, ".bender", "bender.log");
+      if (!existsSync(logPath)) {
+        return res.json({
+          startedAt: new Date(SERVER_SESSION_STARTED_AT).toISOString(),
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          events: 0,
+          lastUpdatedAt: null,
+        });
+      }
+
+      const raw = await readFile(logPath, "utf-8");
+      const entries = parseLogEntries(raw);
+      const usage = aggregateTokenUsage(entries, SERVER_SESSION_STARTED_AT);
+      return res.json({
+        startedAt: new Date(SERVER_SESSION_STARTED_AT).toISOString(),
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.inputTokens + usage.outputTokens,
+        events: usage.events,
+        lastUpdatedAt: usage.lastTimestamp,
+      });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -2221,6 +2301,12 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
       let architectAgentName = "Architect";
       try {
         const config = await readEffectiveConfig(projectRoot);
+        const logger = createLogger(
+          "flows",
+          projectRoot,
+          makeAdapterSink(adapter),
+          toLoggerOptions(config.logging),
+        );
         models = createModelSet(config);
         const architectAgent = await getEffectiveAgentForRole("architect");
         architectTier = architectAgent.modelTier;
@@ -2235,7 +2321,7 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
             modelTier: architectAgent.modelTier,
           },
           context.architecture ?? undefined,
-          { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+          logger,
         );
       } catch (err: unknown) {
         throw new Error(`Failed to initialize LLM provider: ${(err as Error).message}`);
@@ -2295,6 +2381,12 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
       let runtime;
       try {
         const config = await readEffectiveConfig(projectRoot);
+        const logger = createLogger(
+          `audit:${auditType}`,
+          projectRoot,
+          makeAdapterSink(adapter),
+          toLoggerOptions(config.logging),
+        );
         const analyzerAgent = await getEffectiveAgentForRole("analyzer");
         runtime = await createRoleRuntime(
           projectRoot,
@@ -2307,7 +2399,7 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
             modelTier: analyzerAgent.modelTier,
           },
           context.architecture ?? undefined,
-          { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+          logger,
         );
       } catch (err: unknown) {
         throw new Error(`Failed to initialize LLM provider: ${(err as Error).message}`);

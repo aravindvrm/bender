@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { ProjectState } from "../hooks/useApi";
+import { LoadingDots } from "../components/LoadingDots";
 
 interface ConsoleViewProps {
   state: ProjectState | null;
@@ -39,8 +40,12 @@ type OutputLine =
 
 // ── SSE streaming hook ────────────────────────────────────────────────────────
 
-function parseSSEChunk(chunk: string, onEvent: (e: SSEEvent) => void) {
-  for (const line of chunk.split("\n")) {
+function parseSSEChunk(chunk: string, onEvent: (e: SSEEvent) => void, bufferRef: { current: string }) {
+  const combined = bufferRef.current + chunk;
+  const lines = combined.split("\n");
+  bufferRef.current = lines.pop() ?? "";
+
+  for (const line of lines) {
     if (line.startsWith("data: ")) {
       try {
         onEvent(JSON.parse(line.slice(6)));
@@ -70,11 +75,16 @@ async function streamOperation(
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  const bufferRef = { current: "" };
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    parseSSEChunk(decoder.decode(value, { stream: true }), onEvent);
+    parseSSEChunk(decoder.decode(value, { stream: true }), onEvent, bufferRef);
+  }
+
+  if (bufferRef.current.trim().length > 0) {
+    parseSSEChunk("\n", onEvent, bufferRef);
   }
 }
 
@@ -388,7 +398,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
           {line.done ? (
             <span className={line.success ? "text-emerald-400" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
           ) : (
-            <span className="animate-spin inline-block">⟳</span>
+            <LoadingDots size={14} />
           )}
           <span>{line.text}</span>
         </div>

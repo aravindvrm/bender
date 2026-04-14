@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
+import { LoadingDots } from "../components/LoadingDots";
 
 type BaseRole = "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
 type ModelTier = "fast" | "default" | "strong";
@@ -463,7 +464,7 @@ export function AgentsView() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24">
-        <div className="w-5 h-5 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
+        <LoadingDots size={28} />
       </div>
     );
   }
@@ -642,9 +643,9 @@ export function AgentsView() {
                   <button
                     onClick={() => void refreshSkillsRegistry()}
                     disabled={skillsRefreshing}
-                    className="px-2.5 py-1 rounded-md text-[11px] border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="px-2.5 py-1 rounded-md text-[11px] border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                   >
-                    {skillsRefreshing ? "Loading..." : "Load skills"}
+                    {skillsRefreshing ? <LoadingDots size={14} label="Loading…" textClassName="text-[11px] text-zinc-400" /> : "Load skills"}
                   </button>
                 </div>
               ) : createFilteredSkills.length === 0 ? (
@@ -847,9 +848,9 @@ export function AgentsView() {
                           <button
                             onClick={() => void refreshSkillsRegistry()}
                             disabled={skillsRefreshing}
-                            className="px-2.5 py-1 rounded-md text-[11px] border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="px-2.5 py-1 rounded-md text-[11px] border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                           >
-                            {skillsRefreshing ? "Loading..." : "Load skills"}
+                            {skillsRefreshing ? <LoadingDots size={14} label="Loading…" textClassName="text-[11px] text-zinc-400" /> : "Load skills"}
                           </button>
                         </div>
                       ) : filteredSkills.length === 0 ? (

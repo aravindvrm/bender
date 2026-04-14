@@ -33,8 +33,12 @@ export type OperationModal = { kind: "init" } | { kind: "plan" } | null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function parseSSEChunk(chunk: string, onEvent: (e: SSEEvent) => void) {
-  for (const line of chunk.split("\n")) {
+function parseSSEChunk(chunk: string, onEvent: (e: SSEEvent) => void, bufferRef: { current: string }) {
+  const combined = bufferRef.current + chunk;
+  const lines = combined.split("\n");
+  bufferRef.current = lines.pop() ?? "";
+
+  for (const line of lines) {
     if (line.startsWith("data: ")) {
       try { onEvent(JSON.parse(line.slice(6))); } catch { /* ignore */ }
     }
@@ -62,10 +66,16 @@ async function streamOperation(
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  const bufferRef = { current: "" };
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    parseSSEChunk(decoder.decode(value, { stream: true }), onEvent);
+    parseSSEChunk(decoder.decode(value, { stream: true }), onEvent, bufferRef);
+  }
+
+  // Flush any final buffered line after stream closes.
+  if (bufferRef.current.trim().length > 0) {
+    parseSSEChunk("\n", onEvent, bufferRef);
   }
 }
 
@@ -166,7 +176,7 @@ export function useOperation(onStateChange?: () => void) {
   const startOperation = useCallback(async (
     url: string,
     body: Record<string, unknown>,
-    options?: { onSuccess?: () => void },
+    options?: { onSuccess?: () => void; onFinish?: (success: boolean) => void },
   ) => {
     abortRef.current?.abort();
     const ctrl = new AbortController();
@@ -182,10 +192,12 @@ export function useOperation(onStateChange?: () => void) {
     try {
       await streamOperation(url, body, wrappedHandleEvent, ctrl.signal);
       if (succeeded) options?.onSuccess?.();
+      options?.onFinish?.(succeeded);
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         addLine({ kind: "error", message: (err as Error).message });
         setStatus("error");
+        options?.onFinish?.(false);
       }
     }
   }, [handleEvent, addLine]);

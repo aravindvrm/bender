@@ -1,8 +1,9 @@
-import { appendFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { appendFile } from "node:fs/promises";
+import { existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
+export type SinkLevel = LogLevel | "none";
 
 export interface LogEntry {
   timestamp: string;
@@ -13,6 +14,18 @@ export interface LogEntry {
 }
 
 export type LogSink = (entry: LogEntry) => void;
+
+export interface LoggerOptions {
+  enabled?: boolean;
+  level?: LogLevel;
+  sinkMinLevel?: SinkLevel;
+}
+
+export interface LoggingSettingsLike {
+  enabled?: boolean;
+  level?: LogLevel;
+  consoleLevel?: SinkLevel;
+}
 
 const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
   debug: 0,
@@ -34,13 +47,18 @@ function getMinLevel(): LogLevel {
  */
 export class Logger {
   private minLevel: LogLevel;
+  private enabled: boolean;
+  private sinkMinLevel: SinkLevel;
 
   constructor(
     private component: string,
     private logFile: string | null = null,
     private sink: LogSink | null = null,
+    opts?: LoggerOptions,
   ) {
-    this.minLevel = getMinLevel();
+    this.enabled = opts?.enabled ?? true;
+    this.minLevel = opts?.level ?? getMinLevel();
+    this.sinkMinLevel = opts?.sinkMinLevel ?? "warn";
   }
 
   private shouldEmit(level: LogLevel): boolean {
@@ -48,7 +66,11 @@ export class Logger {
   }
 
   private async emit(level: LogLevel, message: string, data?: Record<string, unknown>): Promise<void> {
-    if (!this.shouldEmit(level)) return;
+    const hasTokenUsage =
+      typeof data?.inputTokens === "number"
+      || typeof data?.outputTokens === "number";
+    if (!hasTokenUsage && !this.enabled) return;
+    if (!hasTokenUsage && !this.shouldEmit(level)) return;
 
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
@@ -59,7 +81,13 @@ export class Logger {
     };
 
     // Call UI sink synchronously
-    this.sink?.(entry);
+    if (
+      this.sink
+      && this.sinkMinLevel !== "none"
+      && LOG_LEVEL_ORDER[level] >= LOG_LEVEL_ORDER[this.sinkMinLevel]
+    ) {
+      this.sink(entry);
+    }
 
     // Write to log file asynchronously (fire and forget with error suppression)
     if (this.logFile) {
@@ -86,7 +114,11 @@ export class Logger {
 
   /** Return a child logger with a sub-component name. */
   child(subComponent: string): Logger {
-    return new Logger(`${this.component}:${subComponent}`, this.logFile, this.sink);
+    return new Logger(`${this.component}:${subComponent}`, this.logFile, this.sink, {
+      enabled: this.enabled,
+      level: this.minLevel,
+      sinkMinLevel: this.sinkMinLevel,
+    });
   }
 }
 
@@ -97,6 +129,7 @@ export function createLogger(
   component: string,
   projectRoot?: string | null,
   sink?: LogSink | null,
+  opts?: LoggerOptions,
 ): Logger {
   let logFile: string | null = null;
   if (projectRoot) {
@@ -104,15 +137,27 @@ export function createLogger(
     logFile = join(benderDir, "bender.log");
     // Ensure directory exists (sync check is fine at startup)
     if (!existsSync(benderDir)) {
-      mkdir(benderDir, { recursive: true }).catch(() => { /* ignore */ });
+      try {
+        mkdirSync(benderDir, { recursive: true });
+      } catch {
+        // ignore; appendFile fallback is also best-effort
+      }
     }
   }
-  return new Logger(component, logFile, sink ?? null);
+  return new Logger(component, logFile, sink ?? null, opts);
+}
+
+export function toLoggerOptions(settings?: LoggingSettingsLike): LoggerOptions {
+  return {
+    enabled: settings?.enabled ?? true,
+    level: settings?.level ?? getMinLevel(),
+    sinkMinLevel: settings?.consoleLevel ?? "warn",
+  };
 }
 
 /** Create a no-op logger (for tests or contexts where logging is unwanted). */
 export function createNullLogger(component = "test"): Logger {
-  return new Logger(component, null, null);
+  return new Logger(component, null, null, { enabled: false, sinkMinLevel: "none" });
 }
 
 /** Build a UIAdapter-compatible sink that forwards log entries as adapter messages. */
@@ -122,13 +167,13 @@ export function makeAdapterSink(adapter: {
   error?: (msg: string) => void;
 }): LogSink {
   return (entry: LogEntry) => {
-    // Only forward warn/error to the adapter (info/debug is too noisy for the console)
-    if (entry.level === "warn") {
+    if (entry.level === "debug" || entry.level === "info") {
+      adapter.info(`[${entry.component}] ${entry.message}`);
+    } else if (entry.level === "warn") {
       adapter.warn(`[${entry.component}] ${entry.message}`);
     } else if (entry.level === "error") {
       (adapter.error ?? adapter.warn)(`[${entry.component}] ${entry.message}`);
     }
-    // debug/info go to the log file only
   };
 }
 

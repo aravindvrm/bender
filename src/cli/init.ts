@@ -11,6 +11,7 @@ import { GitOperations } from "../git/operations.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getEffectiveAgentForRole } from "../state/agents.js";
+import { createLogger, makeAdapterSink, toLoggerOptions } from "../logger.js";
 
 export async function initCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header("Bender Init — New Project Setup");
@@ -44,6 +45,13 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
 
   // Initialize state and config
   const config = await readEffectiveConfig(projectRoot);
+  const logger = createLogger(
+    "init",
+    projectRoot,
+    makeAdapterSink(adapter),
+    toLoggerOptions(config.logging),
+  );
+  logger.info("Starting initialization");
   await state.init();
   await writeConfig(projectRoot, config);
 
@@ -75,7 +83,7 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
         modelTier: plannerAgent.modelTier,
       },
       undefined,
-      { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+      logger,
     );
   } catch (err: unknown) {
     adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
@@ -144,7 +152,7 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
           modelTier: architectAgent.modelTier,
         },
         undefined,
-        { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+        logger,
       );
     } catch (err: unknown) {
       adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
@@ -224,6 +232,7 @@ export async function initCommand(projectRoot: string, adapter: UIAdapter = term
     adapter.success("Task plan:         .bender/tasks/current.md");
     adapter.success("Config:            .bender/config.yaml");
     adapter.info("Next step: run `bender implement` to start executing the task plan.");
+    logger.info("Initialization complete");
     adapter.cleanup();
   } finally {
     await plannerRuntime.close();

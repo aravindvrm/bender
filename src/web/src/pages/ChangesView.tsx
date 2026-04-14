@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { ProjectState } from "../hooks/useApi";
+import { LoadingDots } from "../components/LoadingDots";
 
 interface GitViewProps {
   state: ProjectState;
@@ -478,7 +479,7 @@ export function GitView({ state, onStateChange }: GitViewProps) {
           </button>
         </div>
 
-        {githubLoading && <p className="text-sm text-zinc-500">Checking GitHub status...</p>}
+        {githubLoading && <LoadingDots size={20} label="Checking GitHub status…" textClassName="text-sm text-zinc-500" />}
         {githubError && <p className="text-sm text-red-400/80">{githubError}</p>}
         {deviceFlowNotice && <p className="text-xs text-emerald-400">{deviceFlowNotice}</p>}
 
@@ -537,7 +538,7 @@ export function GitView({ state, onStateChange }: GitViewProps) {
 
       <section className="border border-zinc-800 rounded-lg p-4 bg-zinc-900/40 space-y-4">
         <h3 className="text-sm font-medium text-zinc-200">Identity & Credentials</h3>
-        {identityLoading && <p className="text-sm text-zinc-500">Loading git identity...</p>}
+        {identityLoading && <LoadingDots size={20} label="Loading git identity…" textClassName="text-sm text-zinc-500" />}
         {identityError && <p className="text-sm text-red-400/80">{identityError}</p>}
 
         <div className="grid sm:grid-cols-[1fr_1fr_auto_auto] gap-2">
@@ -638,7 +639,7 @@ export function GitView({ state, onStateChange }: GitViewProps) {
           </button>
         </div>
 
-        {repoLoading && <p className="text-sm text-zinc-500">Loading git status...</p>}
+        {repoLoading && <LoadingDots size={20} label="Loading git status…" textClassName="text-sm text-zinc-500" />}
         {repoError && <p className="text-sm text-red-400/80">{repoError}</p>}
 
         {!repoLoading && repo && !repo.isRepo && (
@@ -823,7 +824,7 @@ export function GitView({ state, onStateChange }: GitViewProps) {
 
           <div className="h-px bg-zinc-800" />
 
-          {diffLoading && <p className="text-sm text-zinc-500">Loading diff...</p>}
+          {diffLoading && <LoadingDots size={20} label="Loading diff…" textClassName="text-sm text-zinc-500" />}
           {diffError && <p className="text-sm text-red-400/80">{diffError}</p>}
           {!diffLoading && !diffError && !diff && <p className="text-sm text-zinc-500">No diff available.</p>}
           {!diffLoading && diff && <DiffViewer raw={diff} />}

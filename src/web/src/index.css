@@ -121,6 +121,30 @@ input[type="checkbox"]:disabled {
 .prose-bender th, .prose-bender td { border: 1px solid #27272a; padding: 0.5rem 0.75rem; text-align: left; }
 .prose-bender th { background: #18181b; color: #d4d4d8; font-weight: 600; }
 
+/* Shared white loader */
+.bender-loader {
+  width: var(--loader-size, 14px);
+  aspect-ratio: 1;
+  --loader-color: #fff;
+  --g1: conic-gradient(from 90deg at top 5.45% left 5.45%, #0000 90deg, var(--loader-color) 0);
+  --g2: conic-gradient(from -90deg at bottom 5.45% right 5.45%, #0000 90deg, var(--loader-color) 0);
+  background:
+    var(--g1), var(--g1), var(--g1), var(--g1),
+    var(--g2), var(--g2), var(--g2), var(--g2);
+  background-position: 0 0, 100% 0, 100% 100%, 0 100%;
+  background-size: 45.45% 45.45%;
+  background-repeat: no-repeat;
+  animation: bender-loader-frames 1.5s infinite;
+}
+
+@keyframes bender-loader-frames {
+  0%   { background-size: 63.64% 27.27%, 27.27% 27.27%, 27.27% 63.64%, 63.64% 63.64%; }
+  25%  { background-size: 63.64% 63.64%, 27.27% 63.64%, 27.27% 27.27%, 63.64% 27.27%; }
+  50%  { background-size: 27.27% 63.64%, 63.64% 63.64%, 63.64% 27.27%, 27.27% 27.27%; }
+  75%  { background-size: 27.27% 27.27%, 63.64% 27.27%, 63.64% 63.64%, 27.27% 63.64%; }
+  100% { background-size: 63.64% 27.27%, 27.27% 27.27%, 27.27% 63.64%, 63.64% 63.64%; }
+}
+
 /* Sidebar progress bar animation */
 @keyframes progressSlide {
   0%   { transform: translateX(-100%); }

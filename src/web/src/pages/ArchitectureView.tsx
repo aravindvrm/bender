@@ -2,11 +2,17 @@ import { useState, useCallback, useEffect } from "react";
 import type { ProjectState } from "../hooks/useApi";
 import { MarkdownView } from "../components/MarkdownView";
 import { MermaidView } from "../components/MermaidView";
+import { LoadingDots } from "../components/LoadingDots";
 import { sqlToErDiagram } from "../utils/sqlToErDiagram";
 import { RefreshCw, ShieldAlert, TestTube2, AlertTriangle, Info, AlertCircle, CheckCircle2, Plus } from "lucide-react";
 
 interface ArchitectureViewProps {
   state: ProjectState;
+  runOperation?: (
+    url: string,
+    body: Record<string, unknown>,
+    options?: { onSuccess?: () => void; onFinish?: (success: boolean) => void },
+  ) => void;
 }
 
 type Tab = "overview" | "schema" | "api" | "flows" | "decisions" | "conventions" | "security" | "tests";
@@ -282,7 +288,7 @@ function FlowsContent({ content, onRegenerate, generating }: {
           disabled={generating}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 border border-zinc-700 rounded-lg hover:text-zinc-200 hover:border-zinc-500 transition-colors disabled:opacity-50"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${generating ? "animate-spin" : ""}`} />
+          {generating ? <LoadingDots size={16} /> : <RefreshCw className="h-3.5 w-3.5" />}
           Regenerate
         </button>
       </div>
@@ -465,8 +471,8 @@ function AuditTabContent({
           disabled={running}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 border border-zinc-700 rounded-lg hover:text-zinc-200 hover:border-zinc-500 transition-colors disabled:opacity-50"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${running ? "animate-spin" : ""}`} />
-          {running ? "Analyzing..." : audit ? "Re-run" : "Run audit"}
+          {running ? <LoadingDots size={16} /> : <RefreshCw className="h-3.5 w-3.5" />}
+          {running ? "Analyzing…" : audit ? "Re-run" : "Run audit"}
         </button>
       </div>
 
@@ -476,8 +482,8 @@ function AuditTabContent({
 
       {running && (
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-6 text-center text-sm text-zinc-500">
-          <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-zinc-600" />
-          Running {label.toLowerCase()}...
+          <LoadingDots className="justify-center mb-2" size={22} />
+          Running {label.toLowerCase()}…
         </div>
       )}
 
@@ -530,7 +536,7 @@ function AuditTabContent({
   );
 }
 
-export function ArchitectureView({ state }: ArchitectureViewProps) {
+export function ArchitectureView({ state, runOperation }: ArchitectureViewProps) {
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
@@ -561,6 +567,25 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
 
     setRunning(true);
     setError(null);
+
+    if (runOperation) {
+      runOperation(`/api/run/audit/${auditType}`, {}, {
+        onSuccess: () => {
+          fetch("/api/audits")
+            .then((r) => r.json())
+            .then((audits: { security?: AuditResult; tests?: AuditResult }) => {
+              if (audits[auditType]) setAudit(audits[auditType] ?? null);
+            })
+            .catch((err) => setError((err as Error).message));
+        },
+        onFinish: (success) => {
+          if (!success) setError(`Failed to run ${auditType} audit.`);
+          setRunning(false);
+        },
+      });
+      return;
+    }
+
     try {
       const res = await fetch(`/api/run/audit/${auditType}`, { method: "POST" });
       if (!res.ok || !res.body) throw new Error("Request failed");
@@ -594,7 +619,7 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
     } finally {
       setRunning(false);
     }
-  }, []);
+  }, [runOperation]);
 
   const erDiagram = state.schema ? sqlToErDiagram(state.schema) : null;
   const parsedStack = extractStackFromArchitecture(state.architecture ?? "");
@@ -641,6 +666,18 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
   const generateFlows = useCallback(async () => {
     setGenerating(true);
     setGenError(null);
+
+    if (runOperation) {
+      runOperation("/api/run/flows", {}, {
+        onSuccess: () => window.location.reload(),
+        onFinish: (success) => {
+          if (!success) setGenError("Failed to generate flows.");
+          setGenerating(false);
+        },
+      });
+      return;
+    }
+
     try {
       const res = await fetch("/api/run/flows", { method: "POST" });
       if (!res.ok || !res.body) throw new Error("Request failed");
@@ -670,7 +707,7 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
     } finally {
       setGenerating(false);
     }
-  }, []);
+  }, [runOperation]);
 
   if (!state.architecture) {
     return (
@@ -781,8 +818,8 @@ export function ArchitectureView({ state }: ArchitectureViewProps) {
                   disabled={generating}
                   className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
-                  <RefreshCw className={`h-4 w-4 ${generating ? "animate-spin" : ""}`} />
-                  {generating ? "Generating..." : "Generate Flow Diagrams"}
+                  {generating ? <LoadingDots size={18} /> : <RefreshCw className="h-4 w-4" />}
+                  {generating ? "Generating…" : "Generate Flow Diagrams"}
                 </button>
                 {genError && <p className="text-sm text-red-400/80">{genError}</p>}
               </div>

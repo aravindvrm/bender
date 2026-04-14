@@ -86,6 +86,17 @@ export interface RuntimeLogAdapter {
   warn?: (message: string) => void;
 }
 
+function isRoleLogger(value: unknown): value is NonNullable<RoleExecutionOptions["logger"]> {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.debug === "function"
+    && typeof v.info === "function"
+    && typeof v.warn === "function"
+    && typeof v.error === "function"
+  );
+}
+
 export interface RoleRuntime extends RoleExecutionOptions {
   close: () => Promise<void>;
   summary: {
@@ -401,6 +412,7 @@ export async function createRoleRuntime(
     tools: undefined,
     providerOptions: undefined,
     additionalSystemContext: skills.text ?? undefined,
+    logger: isRoleLogger(logger) ? logger : undefined,
     close: async () => {},
     summary: {
       mcpEnabled: false,

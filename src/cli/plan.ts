@@ -7,7 +7,7 @@ import { generateFeaturePlan } from "../roles/planner.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getEffectiveAgentForRole } from "../state/agents.js";
-import { createLogger, makeAdapterSink } from "../logger.js";
+import { createLogger, makeAdapterSink, toLoggerOptions } from "../logger.js";
 
 export interface PlanCommandOptions {
   role?: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
@@ -38,7 +38,12 @@ export async function planCommand(
   }
 
   const config = await readEffectiveConfig(projectRoot);
-  const logger = createLogger("plan", projectRoot, makeAdapterSink(adapter));
+  const logger = createLogger(
+    "plan",
+    projectRoot,
+    makeAdapterSink(adapter),
+    toLoggerOptions(config.logging),
+  );
   const requestedRole = options.role ?? "planner";
   const askClarifyingQuestions = options.askClarifyingQuestions ?? false;
   const requireArchitectureApproval = options.requireArchitectureApproval ?? false;
@@ -95,7 +100,7 @@ export async function planCommand(
         modelTier: plannerAgent.modelTier,
       },
       existingContext.architecture ?? undefined,
-      { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+      logger,
     );
   } catch (err: unknown) {
     adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
@@ -162,7 +167,7 @@ export async function planCommand(
           modelTier: architectAgent.modelTier,
         },
         existingContext.architecture ?? undefined,
-        { info: (msg) => adapter.info(msg), warn: (msg) => adapter.warn(msg) },
+        logger,
       );
     } catch (err: unknown) {
       adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);

@@ -4,6 +4,7 @@ import { useProjectState } from "./hooks/useApi";
 import { useOperation } from "./hooks/useOperation";
 import { Sidebar, type View } from "./components/Sidebar";
 import { OperationDrawer, type InitModalSubmission } from "./components/OperationDrawer";
+import { LoadingDots } from "./components/LoadingDots";
 import { PlanView } from "./pages/PlanView";
 import { ArchitectureView } from "./pages/ArchitectureView";
 import { BriefView } from "./pages/BriefView";
@@ -39,8 +40,7 @@ export function App() {
     return (
       <div className="h-screen flex items-center justify-center bg-zinc-950">
         <div className="text-center">
-          <div className="w-6 h-6 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin mx-auto" />
-          <p className="text-sm text-zinc-500 mt-3">Connecting…</p>
+          <LoadingDots className="justify-center" size={34} label="Connecting…" textClassName="text-sm text-zinc-500" />
         </div>
       </div>
     );
@@ -166,7 +166,12 @@ export function App() {
                   onTasksChanged={refresh}
                 />
               )}
-              {activeView === "architecture" && state && <ArchitectureView state={state} />}
+              {activeView === "architecture" && state && (
+                <ArchitectureView
+                  state={state}
+                  runOperation={(url, body, options) => op.startOperation(url, body, options)}
+                />
+              )}
               {activeView === "git" && state && <GitView state={state} onStateChange={refresh} />}
               {activeView === "agents" && <AgentsView />}
               {activeView === "settings" && <SettingsView />}

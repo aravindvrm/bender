@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { ChevronDown } from "lucide-react";
+import { LoadingDots } from "../components/LoadingDots";
 
 type ConfigScope = "global" | "project";
 
@@ -31,6 +32,7 @@ interface FullConfig {
   deploy: { target?: string };
   test: { command?: string };
   reanalyze?: { enabled?: boolean; threshold?: number };
+  logging?: { enabled?: boolean; level?: "debug" | "info" | "warn" | "error"; consoleLevel?: "none" | "debug" | "info" | "warn" | "error" };
 }
 
 interface ConfigResponse extends FullConfig {
@@ -320,6 +322,15 @@ export function SettingsView() {
           stack: data.stack,
           deploy: data.deploy,
           test: data.test,
+          reanalyze: {
+            enabled: data.reanalyze?.enabled ?? true,
+            threshold: data.reanalyze?.threshold ?? 3,
+          },
+          logging: {
+            enabled: data.logging?.enabled ?? true,
+            level: data.logging?.level ?? "info",
+            consoleLevel: data.logging?.consoleLevel ?? "warn",
+          },
         });
         setLoading(false);
       })
@@ -671,7 +682,7 @@ export function SettingsView() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24">
-        <div className="w-5 h-5 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
+        <LoadingDots size={28} />
       </div>
     );
   }
@@ -933,6 +944,67 @@ export function SettingsView() {
               className="w-24 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-zinc-500"
             />
             <span className="text-xs text-zinc-500 ml-2">major tasks between analyses</span>
+          </Field>
+        </div>
+      </section>
+
+      <div className="h-px bg-zinc-800" />
+
+      {/* Logging */}
+      <section>
+        <h3 className="text-sm font-semibold text-zinc-300 mb-1">Logging</h3>
+        <p className="text-xs text-zinc-500 mb-4">
+          Configure structured logs and console mirroring. Token usage metrics are always recorded for session counters.
+        </p>
+        <div className="space-y-3">
+          <Field label="Enabled">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="logging-enabled"
+                checked={config.logging?.enabled ?? true}
+                onChange={(e) => setConfig((c) => c ? { ...c, logging: { ...c.logging, enabled: e.target.checked } } : c)}
+                className="h-4 w-4 rounded border-zinc-600 bg-zinc-800 text-zinc-100 focus:ring-zinc-500"
+              />
+              <label htmlFor="logging-enabled" className="text-sm text-zinc-400 cursor-pointer">
+                Write structured logs to <span className="font-mono text-zinc-500">.bender/bender.log</span>
+              </label>
+            </div>
+          </Field>
+          <Field label="File level">
+            <div className="relative max-w-[220px]">
+              <select
+                value={config.logging?.level ?? "info"}
+                onChange={(e) => setConfig((c) => c ? { ...c, logging: { ...c.logging, level: e.target.value as "debug" | "info" | "warn" | "error" } } : c)}
+                className="select-flat w-full pl-3 pr-8 py-2 text-[13px] transition-colors"
+              >
+                <option value="debug" className="bg-zinc-900 text-zinc-200">debug</option>
+                <option value="info" className="bg-zinc-900 text-zinc-200">info</option>
+                <option value="warn" className="bg-zinc-900 text-zinc-200">warn</option>
+                <option value="error" className="bg-zinc-900 text-zinc-200">error</option>
+              </select>
+              <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-600">
+                <ChevronDown className="h-3.5 w-3.5" />
+              </span>
+            </div>
+          </Field>
+          <Field label="Console level">
+            <div className="relative max-w-[220px]">
+              <select
+                value={config.logging?.consoleLevel ?? "warn"}
+                onChange={(e) => setConfig((c) => c ? { ...c, logging: { ...c.logging, consoleLevel: e.target.value as "none" | "debug" | "info" | "warn" | "error" } } : c)}
+                className="select-flat w-full pl-3 pr-8 py-2 text-[13px] transition-colors"
+              >
+                <option value="none" className="bg-zinc-900 text-zinc-200">none</option>
+                <option value="error" className="bg-zinc-900 text-zinc-200">error</option>
+                <option value="warn" className="bg-zinc-900 text-zinc-200">warn</option>
+                <option value="info" className="bg-zinc-900 text-zinc-200">info</option>
+                <option value="debug" className="bg-zinc-900 text-zinc-200">debug</option>
+              </select>
+              <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-600">
+                <ChevronDown className="h-3.5 w-3.5" />
+              </span>
+            </div>
           </Field>
         </div>
       </section>

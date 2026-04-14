@@ -5,11 +5,11 @@ import {
   ChevronRight,
   Folder,
   FolderOpen,
-  Loader2,
   X,
   Terminal as TerminalIcon,
 } from "lucide-react";
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
+import { LoadingDots } from "./LoadingDots";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
 type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
@@ -350,7 +350,10 @@ export function OperationDrawer({
   }, [visibleLines, collapsed]);
 
   useEffect(() => {
-    if (status === "running") setCollapsed(false);
+    if (status === "running") {
+      setCollapsed(false);
+      setActiveTab("console");
+    }
   }, [status]);
 
   useEffect(() => {
@@ -433,7 +436,7 @@ export function OperationDrawer({
         )}
         <div className="flex items-center gap-2 px-4 h-10 shrink-0 border-b border-zinc-800/60">
           {isRunning && (
-            <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-pulse shrink-0" />
+            <LoadingDots size={12} />
           )}
           {statusLabel && (
             <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
@@ -534,8 +537,7 @@ export function OperationDrawer({
             ))}
             {isRunning && (
               <div className="flex items-center gap-1.5 text-zinc-500 pt-1">
-                <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-pulse" />
-                <span>running</span>
+                <LoadingDots size={16} label="Running…" />
               </div>
             )}
             <div ref={bottomRef} />
@@ -741,8 +743,7 @@ function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewProjectM
                 <div className="max-h-56 overflow-y-auto px-2 py-2">
                   {browserLoading && (
                     <div className="flex items-center gap-2 text-xs text-zinc-500 px-2 py-2">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      <span>Loading directories…</span>
+                      <LoadingDots size={18} label="Loading directories…" />
                     </div>
                   )}
                   {browserError && <p className="text-xs text-red-400 px-2 py-2">{browserError}</p>}
@@ -949,9 +950,9 @@ function DirectoryTreeNode({ entry, depth, selectedPath, onChoose }: DirectoryTr
       {expanded && (
         <div>
           {loading && (
-            <p className="text-[11px] text-zinc-500 px-2 py-1" style={{ paddingLeft: `${28 + depth * 14}px` }}>
-              Loading…
-            </p>
+            <div className="px-2 py-1" style={{ paddingLeft: `${28 + depth * 14}px` }}>
+              <LoadingDots size={16} label="Loading…" />
+            </div>
           )}
           {error && (
             <p className="text-[11px] text-red-400 px-2 py-1" style={{ paddingLeft: `${28 + depth * 14}px` }}>
@@ -1015,7 +1016,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
           {line.done ? (
             <span className={line.success ? "text-emerald-400" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
           ) : (
-            <span className="animate-spin inline-block">⟳</span>
+            <LoadingDots size={14} />
           )}
           <span>{line.text}</span>
         </div>

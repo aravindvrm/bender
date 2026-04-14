@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import type { LogLevel, SinkLevel } from "../logger.js";
 
 export type ModelTier = "fast" | "default" | "strong";
 
@@ -71,6 +72,14 @@ export interface BenderConfig {
     /** Number of major tasks to complete before triggering re-analysis. Default: 3 */
     threshold?: number;
   };
+  logging?: {
+    /** Enable structured logging to .bender/bender.log. Token usage is always recorded. */
+    enabled?: boolean;
+    /** Minimum level persisted in log file (debug|info|warn|error). */
+    level?: LogLevel;
+    /** Minimum level mirrored into the live console stream, or "none". */
+    consoleLevel?: SinkLevel;
+  };
 }
 
 export const DEFAULT_CONFIG: BenderConfig = {
@@ -106,6 +115,11 @@ export const DEFAULT_CONFIG: BenderConfig = {
   reanalyze: {
     enabled: true,
     threshold: 3,
+  },
+  logging: {
+    enabled: true,
+    level: "info",
+    consoleLevel: "warn",
   },
 };
 
@@ -211,5 +225,6 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
     deploy: { ...defaults.deploy, ...overrides.deploy },
     test: { ...defaults.test, ...overrides.test },
     reanalyze: { ...defaults.reanalyze, ...overrides.reanalyze },
+    logging: { ...defaults.logging, ...overrides.logging },
   };
 }
