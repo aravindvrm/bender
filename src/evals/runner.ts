@@ -71,6 +71,7 @@ interface ResolvedExecution {
   pinnedSkills: string[];
   mcpServerIds: string[];
   capabilityPolicy?: CapabilityPolicy;
+  systemPromptAddition?: string;
   agentId: string;
   agentName: string;
   runConfig: BenderConfig;
@@ -141,6 +142,7 @@ async function resolveExecution(
     pinnedSkills: dedupe(evalConfig.pinnedSkills?.length ? evalConfig.pinnedSkills : agent.pinnedSkills),
     mcpServerIds: dedupe(evalConfig.mcpServerIds?.length ? evalConfig.mcpServerIds : agent.mcpServerIds),
     capabilityPolicy: evalConfig.capabilityPolicy ?? agent.capabilityPolicy,
+    systemPromptAddition: agent.systemPromptAddition,
     agentId: agent.id,
     agentName: agent.name,
     runConfig,
@@ -182,6 +184,7 @@ async function executeTaskForConfig(params: ExecuteTaskParams): Promise<EvalTask
         mcpServerIds: execution.mcpServerIds,
         capabilityPolicy: execution.capabilityPolicy,
         modelTier: execution.modelTier,
+        systemPromptAddition: execution.systemPromptAddition,
       },
       (await state.readArchitecture()) ?? undefined,
     );

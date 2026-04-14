@@ -87,6 +87,24 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     isBuiltin: true,
   },
   {
+    id: "default-office-hours",
+    name: "Office Hours",
+    baseRole: "planner",
+    modelTier: "strong",
+    pinnedSkills: [],
+    mcpServerIds: ["github"],
+    capabilityPolicy: {
+      allow: ["connector.github.use", "github.repo.read", "github.issue.read", "github.pr.read"],
+    },
+    systemPromptAddition: [
+      "Act in office-hours mode for upstream feature pressure-testing.",
+      "Force specificity on target user, status-quo workaround, and why this matters now.",
+      "Prioritize MVP scope discipline; explicitly call out what to cut and hidden complexity traps.",
+      "End recommendations with a clear verdict: ship now, simplify first, validate first, defer, or kill.",
+    ].join("\n"),
+    isBuiltin: true,
+  },
+  {
     id: "default-implementer",
     name: "Implementer",
     baseRole: "implementer",

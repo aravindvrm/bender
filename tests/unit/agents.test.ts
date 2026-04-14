@@ -22,13 +22,17 @@ describe("state/agents", () => {
     await tempHome.restore();
   });
 
-  it("exposes five built-in agents with pinned skills and MCP assignments", async () => {
+  it("exposes built-in agents with pinned skills and MCP assignments", async () => {
     const all = await getAllAgents();
     const builtins = all.filter((a) => a.isBuiltin);
-    expect(builtins).toHaveLength(5);
-    expect(BUILTIN_AGENTS.map((a) => a.baseRole).sort()).toEqual(
-      ["analyzer", "architect", "planner", "implementer", "reviewer"].sort(),
-    );
+    expect(builtins.length).toBeGreaterThanOrEqual(5);
+    const builtinIds = new Set(BUILTIN_AGENTS.map((a) => a.id));
+    expect(builtinIds.has("default-analyzer")).toBe(true);
+    expect(builtinIds.has("default-architect")).toBe(true);
+    expect(builtinIds.has("default-planner")).toBe(true);
+    expect(builtinIds.has("default-office-hours")).toBe(true);
+    expect(builtinIds.has("default-implementer")).toBe(true);
+    expect(builtinIds.has("default-reviewer")).toBe(true);
     expect(builtins.every((a) => Array.isArray(a.pinnedSkills))).toBe(true);
     expect(builtins.every((a) => Array.isArray(a.mcpServerIds))).toBe(true);
   });

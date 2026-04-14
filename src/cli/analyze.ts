@@ -79,6 +79,7 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
         mcpServerIds: analyzerAgent.mcpServerIds,
         capabilityPolicy: analyzerAgent.capabilityPolicy,
         modelTier: analyzerAgent.modelTier,
+        systemPromptAddition: analyzerAgent.systemPromptAddition,
       },
       undefined,
       logger,
