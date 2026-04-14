@@ -13,6 +13,15 @@ export interface ProjectState {
   currentTasks: string | null;
   completedTasks: { name: string; content: string }[];
   taskAgents?: Record<string, string>;
+  taskGitHubLinks?: Record<string, {
+    repoFullName?: string;
+    issueNumber?: number;
+    issueUrl?: string;
+    branchName?: string;
+    prNumber?: number;
+    prUrl?: string;
+    lastSyncedAt?: number;
+  }>;
   apiContracts: string | null;
   flows: string | null;
   config: {

@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { ModelTier } from "./config.js";
+import type { CapabilityPolicy } from "./capabilities.js";
+import { normalizeCapabilityPolicy } from "./capabilities.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -15,7 +17,10 @@ export interface AgentConfig {
   baseRole: BaseRole;
   modelTier: ModelTier;
   pinnedSkills: string[];
+  /** Legacy connector assignment. Kept for backward compatibility. */
   mcpServerIds: string[];
+  /** Capability policy used by runtime resolution and connector access controls. */
+  capabilityPolicy?: CapabilityPolicy;
   systemPromptAddition?: string;
   isBuiltin?: boolean;
 }
@@ -38,6 +43,15 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     modelTier: "strong",
     pinnedSkills: ["security-best-practices", "security-threat-model"],
     mcpServerIds: ["github", "neon"],
+    capabilityPolicy: {
+      allow: [
+        "connector.github.use",
+        "connector.neon.use",
+        "github.repo.read",
+        "github.issue.read",
+        "github.pr.read",
+      ],
+    },
     isBuiltin: true,
   },
   {
@@ -47,6 +61,17 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     modelTier: "strong",
     pinnedSkills: ["security-best-practices"],
     mcpServerIds: ["github", "figma", "neon", "vercel"],
+    capabilityPolicy: {
+      allow: [
+        "connector.github.use",
+        "connector.figma.use",
+        "connector.neon.use",
+        "connector.vercel.use",
+        "github.repo.read",
+        "github.issue.read",
+        "github.pr.read",
+      ],
+    },
     isBuiltin: true,
   },
   {
@@ -56,6 +81,9 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     modelTier: "default",
     pinnedSkills: [],
     mcpServerIds: ["github"],
+    capabilityPolicy: {
+      allow: ["connector.github.use", "github.repo.read", "github.issue.read", "github.pr.read"],
+    },
     isBuiltin: true,
   },
   {
@@ -65,6 +93,17 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     modelTier: "default",
     pinnedSkills: [],
     mcpServerIds: ["github", "neon", "vercel"],
+    capabilityPolicy: {
+      allow: [
+        "connector.github.use",
+        "connector.neon.use",
+        "connector.vercel.use",
+        "github.repo.read",
+        "github.repo.write",
+        "github.branch.manage",
+        "github.clone",
+      ],
+    },
     isBuiltin: true,
   },
   {
@@ -74,6 +113,15 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     modelTier: "default",
     pinnedSkills: ["security-best-practices", "security-ownership-map"],
     mcpServerIds: ["github"],
+    capabilityPolicy: {
+      allow: [
+        "connector.github.use",
+        "github.repo.read",
+        "github.issue.read",
+        "github.pr.read",
+        "github.pr.comment",
+      ],
+    },
     isBuiltin: true,
   },
 ];
@@ -133,6 +181,7 @@ export async function readCustomAgents(): Promise<AgentConfig[]> {
       ...a,
       pinnedSkills: Array.isArray(a.pinnedSkills) ? a.pinnedSkills : [],
       mcpServerIds: Array.isArray(a.mcpServerIds) ? a.mcpServerIds : [],
+      capabilityPolicy: normalizeCapabilityPolicy(a.capabilityPolicy),
       isBuiltin: false,
     }));
 }

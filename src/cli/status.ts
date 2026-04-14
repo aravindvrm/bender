@@ -52,9 +52,21 @@ export async function statusCommand(projectRoot: string): Promise<void> {
   if (context.currentTasks) {
     const taskLines = context.currentTasks.match(/###\s*Task\s*\d+:.+/g);
     if (taskLines) {
+      const taskLinks = await state.readTaskGitHubLinks();
       console.log(chalk.bold(`  Tasks: ${taskLines.length} in current plan`));
       for (const line of taskLines) {
-        console.log(`    ${line.replace(/^###\s*/, "")}`);
+        const taskLabel = line.replace(/^###\s*/, "");
+        const idMatch = taskLabel.match(/^Task\s*(\d+):/i);
+        const link = idMatch ? taskLinks[idMatch[1]] : undefined;
+        const githubInfo = link
+          ? [
+              link.repoFullName ? `repo ${link.repoFullName}` : "",
+              link.issueNumber ? `issue #${link.issueNumber}` : "",
+              link.branchName ? `branch ${link.branchName}` : "",
+              link.prNumber ? `pr #${link.prNumber}` : "",
+            ].filter(Boolean).join(", ")
+          : "";
+        console.log(`    ${taskLabel}${githubInfo ? chalk.gray(`  [${githubInfo}]`) : ""}`);
       }
     }
   } else {

@@ -535,11 +535,6 @@ export function OperationDrawer({
                 interactivePrompts={modal?.kind !== "plan"}
               />
             ))}
-            {isRunning && (
-              <div className="flex items-center gap-1.5 text-zinc-500 pt-1">
-                <LoadingDots size={16} label="Running…" />
-              </div>
-            )}
             <div ref={bottomRef} />
           </div>
         )}
@@ -1011,13 +1006,10 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
       return <div className="text-zinc-300 whitespace-pre-wrap">{line.text}</div>;
 
     case "spinner":
+      if (!line.done) return null;
       return (
         <div className="flex items-center gap-2 text-zinc-400">
-          {line.done ? (
-            <span className={line.success ? "text-emerald-400" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
-          ) : (
-            <LoadingDots size={14} />
-          )}
+          <span className={line.success ? "text-emerald-400" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
           <span>{line.text}</span>
         </div>
       );
