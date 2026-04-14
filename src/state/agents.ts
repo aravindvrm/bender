@@ -38,7 +38,7 @@ export const MAX_MCP_SERVERS_PER_AGENT = 6;
 export const BUILTIN_AGENTS: AgentConfig[] = [
   {
     id: "default-analyzer",
-    name: "Analyzer",
+    name: "Discovery",
     baseRole: "analyzer",
     modelTier: "strong",
     pinnedSkills: ["security-best-practices", "security-threat-model"],
@@ -56,7 +56,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
   },
   {
     id: "default-architect",
-    name: "Architect",
+    name: "Eng Review",
     baseRole: "architect",
     modelTier: "strong",
     pinnedSkills: ["security-best-practices"],
@@ -76,7 +76,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
   },
   {
     id: "default-planner",
-    name: "Planner",
+    name: "Execution Plan",
     baseRole: "planner",
     modelTier: "default",
     pinnedSkills: [],
@@ -106,7 +106,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
   },
   {
     id: "default-implementer",
-    name: "Implementer",
+    name: "Implement",
     baseRole: "implementer",
     modelTier: "default",
     pinnedSkills: [],
@@ -126,7 +126,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
   },
   {
     id: "default-reviewer",
-    name: "Reviewer",
+    name: "Review",
     baseRole: "reviewer",
     modelTier: "default",
     pinnedSkills: ["security-best-practices", "security-ownership-map"],

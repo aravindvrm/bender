@@ -13,6 +13,7 @@ import { createLogger, makeAdapterSink, toLoggerOptions } from "../logger.js";
 export interface PlanCommandOptions {
   role?: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
   agentId?: string;
+  officeHoursMode?: "pressure-test" | "execution-plan";
   askClarifyingQuestions?: boolean;
   requireArchitectureApproval?: boolean;
   requirePlanApproval?: boolean;
@@ -64,12 +65,14 @@ export async function planCommand(
     toLoggerOptions(config.logging),
   );
   const requestedRole = options.role ?? "planner";
+  const officeHoursMode = options.officeHoursMode ?? "pressure-test";
   const askClarifyingQuestions = options.askClarifyingQuestions ?? false;
   const requireArchitectureApproval = options.requireArchitectureApproval ?? false;
   const requirePlanApproval = options.requirePlanApproval ?? false;
   logger.info("Starting plan", {
     feature: featureDescription.slice(0, 120),
     requestedRole,
+    officeHoursMode,
     agentId: options.agentId ?? null,
     askClarifyingQuestions,
     requireArchitectureApproval,
@@ -104,7 +107,8 @@ export async function planCommand(
     ? `\n\nRole perspective: prioritize outcomes and risks from the ${requestedRole} role.`
     : "";
   const roleGuidedFeatureDescription = `${featureDescription}${roleGuidance}`.trim();
-  const officeHoursEnabled = isOfficeHoursPlannerAgent(plannerAgent);
+  const officeHoursEnabled = isOfficeHoursPlannerAgent(plannerAgent)
+    && officeHoursMode === "pressure-test";
 
   // Step 1 + 3 use planner runtime
   let plannerRuntime: RoleRuntime;
@@ -344,7 +348,7 @@ export async function planCommand(
     // Write session log
     await state.writeSession(
       "plan",
-      `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nRole: ${requestedRole}\n\nOffice Hours mode: ${officeHoursEnabled ? "enabled" : "disabled"}\n${officeHoursEnabled ? `Office Hours verdict: ${officeHoursVerdict ?? "unknown"}\n\n` : ""}${officeHoursOutput ? `## Office Hours\n\n${officeHoursOutput}\n\n` : ""}Status: completed`,
+      `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nRole: ${requestedRole}\n\nOffice Hours mode: ${isOfficeHoursPlannerAgent(plannerAgent) ? officeHoursMode : "n/a"}\n${officeHoursEnabled ? `Office Hours verdict: ${officeHoursVerdict ?? "unknown"}\n\n` : ""}${officeHoursOutput ? `## Office Hours\n\n${officeHoursOutput}\n\n` : ""}Status: completed`,
     );
 
     logger.info("Plan complete");

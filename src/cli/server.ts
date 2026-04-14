@@ -2806,6 +2806,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
       feature,
       role,
       agentId,
+      officeHoursMode,
       askClarifyingQuestions,
       requireArchitectureApproval,
       requirePlanApproval,
@@ -2813,6 +2814,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
       feature?: string;
       role?: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
       agentId?: string;
+      officeHoursMode?: "pressure-test" | "execution-plan";
       askClarifyingQuestions?: boolean;
       requireArchitectureApproval?: boolean;
       requirePlanApproval?: boolean;
@@ -2821,6 +2823,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
     await runOperation(res, (adapter) => planCommand(getProject(), feature, adapter, {
       role,
       agentId,
+      officeHoursMode,
       askClarifyingQuestions,
       requireArchitectureApproval,
       requirePlanApproval,
@@ -2853,7 +2856,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
       let models;
       let runtime;
       let architectTier: "fast" | "default" | "strong" = "default";
-      let architectAgentName = "Architect";
+      let architectAgentName = "Eng Review";
       try {
         const config = await readEffectiveConfig(projectRoot);
         const logger = createLogger(

@@ -12,10 +12,10 @@ import {
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
 import { LoadingDots } from "./LoadingDots";
 import { GitDiffViewer } from "./GitDiffViewer";
+import { roleLabel, type BaseRole } from "../lib/roleLabels";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
 type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
-type BaseRole = "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
 
 interface DirEntry {
   name: string;
@@ -67,6 +67,7 @@ interface PlanModalSubmission {
   feature: string;
   role: BaseRole;
   agentId?: string;
+  officeHoursMode?: "pressure-test" | "execution-plan";
   askClarifyingQuestions: boolean;
   requireArchitectureApproval: boolean;
   requirePlanApproval: boolean;
@@ -1117,6 +1118,10 @@ interface AgentOption {
   isBuiltin?: boolean;
 }
 
+interface RoleSelectionResponse {
+  selectedByRole?: Partial<Record<BaseRole, string>>;
+}
+
 const ROLE_OPTIONS: BaseRole[] = ["planner", "implementer", "architect", "analyzer", "reviewer"];
 
 function detectRoleFromDescription(text: string): BaseRole {
@@ -1142,6 +1147,8 @@ function PlanTaskModal({
   const [description, setDescription] = useState(initialDescription);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [agentId, setAgentId] = useState("");
+  const [selectedByRole, setSelectedByRole] = useState<Partial<Record<BaseRole, string>>>({});
+  const [officeHoursMode, setOfficeHoursMode] = useState<"pressure-test" | "execution-plan">("pressure-test");
   const [askClarifyingQuestions, setAskClarifyingQuestions] = useState(false);
   const [requireArchitectureApproval, setRequireArchitectureApproval] = useState(false);
   const [requirePlanApproval, setRequirePlanApproval] = useState(false);
@@ -1154,10 +1161,23 @@ function PlanTaskModal({
       .then((r) => r.json())
       .then((data) => setAgents((data.agents ?? []) as AgentOption[]))
       .catch(() => setAgents([]));
+
+    fetch("/api/agents/selection")
+      .then((r) => r.json())
+      .then((data: RoleSelectionResponse) => setSelectedByRole(data.selectedByRole ?? {}))
+      .catch(() => setSelectedByRole({}));
   }, []);
 
   const selectedAgent = agents.find((a) => a.id === agentId);
   const effectiveRole: BaseRole = selectedAgent?.baseRole ?? detectedRole;
+  const autoRoleDefaultAgentId = selectedByRole[effectiveRole];
+  const autoRoleDefaultAgent = autoRoleDefaultAgentId
+    ? agents.find((a) => a.id === autoRoleDefaultAgentId)
+    : undefined;
+  const officeHoursSelected = (
+    selectedAgent?.id === "default-office-hours"
+    || (!selectedAgent && effectiveRole === "planner" && autoRoleDefaultAgent?.id === "default-office-hours")
+  );
   const canSubmit = description.trim().length > 0;
   const started = status === "running" || status === "done" || status === "error";
   const showOperationLog = submittedFromThisModal && started;
@@ -1184,6 +1204,7 @@ function PlanTaskModal({
                     feature: description.trim(),
                     role: effectiveRole,
                     agentId: agentId || undefined,
+                    officeHoursMode: officeHoursSelected ? officeHoursMode : undefined,
                     askClarifyingQuestions,
                     requireArchitectureApproval,
                     requirePlanApproval,
@@ -1203,12 +1224,12 @@ function PlanTaskModal({
                 onChange={(e) => setAgentId(e.target.value)}
                 className="select-flat w-full pl-3 pr-8 py-2 text-sm"
               >
-                <option value="">Use auto role default ({detectedRole})</option>
+                <option value="">Use auto role default ({roleLabel(detectedRole)})</option>
                 {ROLE_OPTIONS.map((roleOption) => {
                   const scoped = agents.filter((a) => a.baseRole === roleOption);
                   if (scoped.length === 0) return null;
                   return (
-                    <optgroup key={roleOption} label={roleOption}>
+                    <optgroup key={roleOption} label={roleLabel(roleOption)}>
                       {scoped.map((a) => (
                         <option key={a.id} value={a.id}>
                           {a.name} ({a.modelTier}){a.isBuiltin ? " [builtin]" : ""}
@@ -1221,12 +1242,31 @@ function PlanTaskModal({
               <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
             </div>
             <p className="text-[11px] text-zinc-600">
-              Effective role: {effectiveRole}{selectedAgent ? ` (from ${selectedAgent.name})` : " (auto-detected)"}
+              Effective role: {roleLabel(effectiveRole)}{selectedAgent ? ` (from ${selectedAgent.name})` : " (auto-detected)"}
             </p>
           </div>
 
           <div className="space-y-2">
             <p className="text-xs text-zinc-500 uppercase tracking-wide">Planning Flow</p>
+            {officeHoursSelected && (
+              <div className="space-y-1.5">
+                <label className="text-xs text-zinc-500 uppercase tracking-wide">Office Hours Mode</label>
+                <div className="relative">
+                  <select
+                    value={officeHoursMode}
+                    onChange={(e) => setOfficeHoursMode(e.target.value as "pressure-test" | "execution-plan")}
+                    className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+                  >
+                    <option value="pressure-test">Pressure Test</option>
+                    <option value="execution-plan">Execution Plan</option>
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+                </div>
+                <p className="text-[11px] text-zinc-600">
+                  Pressure Test challenges scope/value before architecture. Execution Plan skips that gate.
+                </p>
+              </div>
+            )}
             <label className="flex items-center gap-2 text-xs text-zinc-400">
               <input
                 type="checkbox"
@@ -1290,6 +1330,7 @@ function PlanTaskModal({
                 feature: description.trim(),
                 role: effectiveRole,
                 agentId: agentId || undefined,
+                officeHoursMode: officeHoursSelected ? officeHoursMode : undefined,
                 askClarifyingQuestions,
                 requireArchitectureApproval,
                 requirePlanApproval,

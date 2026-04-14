@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { LoadingDots } from "../components/LoadingDots";
 import type { ProjectState } from "../hooks/useApi";
+import { roleLabel, type BaseRole } from "../lib/roleLabels";
 
-type BaseRole = "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
 type ModelTier = "fast" | "default" | "strong";
 type EvalRunStatus = "queued" | "running" | "succeeded" | "failed";
 
@@ -729,7 +729,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                           });
                         }}
                       />
-                      <span className="leading-5">{config.name} · {config.role} · {config.modelTier ?? "default"}</span>
+                      <span className="leading-5">{config.name} · {roleLabel(config.role)} · {config.modelTier ?? "default"}</span>
                     </label>
                   ))}
                 </div>
@@ -918,11 +918,11 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                     onChange={(e) => setConfigRole(e.target.value as BaseRole)}
                     className="select-flat w-full pl-3 pr-8 py-2 text-sm"
                   >
-                    <option value="analyzer">analyzer</option>
-                    <option value="architect">architect</option>
-                    <option value="planner">planner</option>
-                    <option value="implementer">implementer</option>
-                    <option value="reviewer">reviewer</option>
+                    <option value="analyzer">{roleLabel("analyzer")}</option>
+                    <option value="architect">{roleLabel("architect")}</option>
+                    <option value="planner">{roleLabel("planner")}</option>
+                    <option value="implementer">{roleLabel("implementer")}</option>
+                    <option value="reviewer">{roleLabel("reviewer")}</option>
                   </select>
                 </div>
                 <div className="space-y-1">
@@ -1102,7 +1102,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                       <button onClick={() => void deleteConfig(config.id)} className="text-[11px] text-zinc-500 hover:text-red-400">Delete</button>
                     </div>
                   </div>
-                  <p className="text-[11px] text-zinc-500">{config.role} · {config.modelTier ?? "default"}</p>
+                  <p className="text-[11px] text-zinc-500">{roleLabel(config.role)} · {config.modelTier ?? "default"}</p>
                   <p className="text-[11px] text-zinc-600">{config.provider || "default provider"} / {config.model || "tier model"}</p>
                   {!!config.pinnedSkills?.length && (
                     <p className="text-[11px] text-zinc-600">Skills: {config.pinnedSkills.join(", ")}</p>

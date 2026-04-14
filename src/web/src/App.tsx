@@ -17,6 +17,7 @@ interface PlanRunSubmission {
   feature: string;
   role: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
   agentId?: string;
+  officeHoursMode?: "pressure-test" | "execution-plan";
   askClarifyingQuestions: boolean;
   requireArchitectureApproval: boolean;
   requirePlanApproval: boolean;
