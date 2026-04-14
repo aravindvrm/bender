@@ -166,6 +166,7 @@ async function runReviewerGate(
         taskDescription: `${task.title}\n${task.description}`,
         pinnedSkills: reviewerAgent.pinnedSkills,
         mcpServerIds: reviewerAgent.mcpServerIds,
+        capabilityPolicy: reviewerAgent.capabilityPolicy,
         modelTier: reviewerAgent.modelTier,
       },
       context.architecture ?? undefined,
@@ -211,6 +212,23 @@ async function runReviewerGate(
   } finally {
     await reviewerRuntime.close();
   }
+}
+
+async function ensureTaskBranch(
+  state: StateManager,
+  git: GitOperations,
+  task: TaskDescription,
+  adapter: UIAdapter,
+): Promise<void> {
+  if (!(await git.isRepo())) return;
+  const link = await state.getTaskGitHubLink(String(task.id));
+  const branchName = link?.branchName?.trim();
+  if (!branchName) return;
+
+  const branches = await git.getBranches();
+  const exists = branches.all.includes(branchName);
+  await git.checkoutBranch(branchName, !exists);
+  adapter.info(`${exists ? "Switched to" : "Created and switched to"} branch: ${branchName}`);
 }
 
 export async function implementSingleTask(projectRoot: string, taskId: number, adapter: UIAdapter = terminalAdapter): Promise<void> {
@@ -274,6 +292,9 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
   const implementerModel = getModelForTier(models, agent.modelTier);
   const git = new GitOperations(projectRoot);
   const gitEnabled = await git.isRepo();
+  if (gitEnabled) {
+    await ensureTaskBranch(state, git, task, adapter);
+  }
 
   let runtime: RoleRuntime;
   try {
@@ -285,6 +306,7 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
         taskDescription: task.description,
         pinnedSkills: agent.pinnedSkills,
         mcpServerIds: agent.mcpServerIds,
+        capabilityPolicy: agent.capabilityPolicy,
         modelTier: agent.modelTier,
       },
       undefined,
@@ -454,6 +476,9 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
   const reviewerAgent = await getEffectiveAgentForRole("reviewer");
   const completedTaskSummaries: string[] = [];
   for (const task of tasks) {
+    if (gitEnabled) {
+      await ensureTaskBranch(state, git, task, adapter);
+    }
     const assignedAgentId = taskAgents[String(task.id)];
     const assignedAgent = assignedAgentId
       ? allAgents.find((a) => a.id === assignedAgentId && a.baseRole === "implementer")
@@ -473,6 +498,7 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
           taskDescription: task.description,
           pinnedSkills: agent.pinnedSkills,
           mcpServerIds: agent.mcpServerIds,
+          capabilityPolicy: agent.capabilityPolicy,
           modelTier: agent.modelTier,
         },
         undefined,

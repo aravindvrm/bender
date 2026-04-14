@@ -139,6 +139,18 @@ interface SkillMeta {
   size: number;
 }
 
+interface ConnectorStatus {
+  id: string;
+  name: string;
+  enabled: boolean;
+  configured: boolean;
+  reachable: boolean;
+  authValid: boolean;
+  discoveredCapabilities: string[];
+  lastCheckedAt: string;
+  error?: string;
+}
+
 const PROVIDER_MODEL_HINTS: Record<string, { fast: string; default: string; strong: string }> = {
   anthropic: { fast: "claude-haiku-4-5-20251001", default: "claude-sonnet-4-6-20250514", strong: "claude-opus-4-6-20250514" },
   openai: { fast: "gpt-5.4-mini", default: "gpt-5.4", strong: "gpt-5.4" },
@@ -291,6 +303,9 @@ export function SettingsView() {
   const [skillsRefreshing, setSkillsRefreshing] = useState(false);
   const [skillsRefreshError, setSkillsRefreshError] = useState<string | null>(null);
   const [skillsSearch, setSkillsSearch] = useState("");
+  const [connectorStatuses, setConnectorStatuses] = useState<Record<string, ConnectorStatus>>({});
+  const [connectorsLoading, setConnectorsLoading] = useState(false);
+  const [connectorsError, setConnectorsError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/config")
@@ -354,6 +369,7 @@ export function SettingsView() {
 
     void refreshGitHub();
     void loadSkillsRegistry();
+    void loadConnectorStatuses();
 
     return () => {
       if (githubPollTimerRef.current !== null) {
@@ -608,6 +624,26 @@ export function SettingsView() {
     }
   }
 
+  async function loadConnectorStatuses(force = false) {
+    setConnectorsLoading(true);
+    setConnectorsError(null);
+    try {
+      const q = force ? "?force=true" : "";
+      const res = await fetch(`/api/connectors/status${q}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to load connector status");
+      const byId: Record<string, ConnectorStatus> = {};
+      for (const status of (data.statuses ?? []) as ConnectorStatus[]) {
+        byId[status.id] = status;
+      }
+      setConnectorStatuses(byId);
+    } catch (err) {
+      setConnectorsError((err as Error).message);
+    } finally {
+      setConnectorsLoading(false);
+    }
+  }
+
   function toggleSkill(name: string, enabled: boolean) {
     setConfig((c) => {
       if (!c) return c;
@@ -807,6 +843,58 @@ export function SettingsView() {
           >
             {githubSaving ? "Saving..." : "Save GitHub settings"}
           </button>
+        </div>
+      </section>
+
+      <div className="h-px bg-zinc-800" />
+
+      <section>
+        <h3 className="text-sm font-semibold text-zinc-300 mb-1">Connectors Status</h3>
+        <p className="text-xs text-zinc-600 mb-3">
+          Runtime health and capabilities for curated connectors. Assignment remains in the Agents tab.
+        </p>
+        <div className="space-y-2">
+          {CURATED_MCP_SERVERS.map((connector) => {
+            const status = connectorStatuses[connector.id];
+            return (
+              <div key={connector.id} className="rounded-md border border-zinc-800 bg-zinc-900/40 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-zinc-300">{connector.name}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${status?.enabled ? "text-emerald-300 border-emerald-800/60" : "text-zinc-500 border-zinc-700"}`}>
+                    {status?.enabled ? "enabled" : "disabled"}
+                  </span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${status?.configured ? "text-zinc-300 border-zinc-700" : "text-zinc-500 border-zinc-700"}`}>
+                    {status?.configured ? "configured" : "no token"}
+                  </span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${status?.reachable ? "text-emerald-300 border-emerald-800/60" : "text-amber-300 border-amber-800/60"}`}>
+                    {status?.reachable ? "reachable" : "unreachable"}
+                  </span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${status?.authValid ? "text-emerald-300 border-emerald-800/60" : "text-amber-300 border-amber-800/60"}`}>
+                    {status?.authValid ? "auth valid" : "auth unknown/invalid"}
+                  </span>
+                  <span className="ml-auto text-[10px] text-zinc-600">
+                    {status?.lastCheckedAt ? new Date(status.lastCheckedAt).toLocaleTimeString() : "not checked"}
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-500 mt-1">
+                  {(status?.discoveredCapabilities ?? []).join(", ") || "No capabilities discovered"}
+                </p>
+                {status?.error && (
+                  <p className="text-[11px] text-amber-400 mt-1">{status.error}</p>
+                )}
+              </div>
+            );
+          })}
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={() => void loadConnectorStatuses(true)}
+              disabled={connectorsLoading}
+              className="px-3 py-1.5 rounded-md text-xs border border-zinc-700 text-zinc-300 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {connectorsLoading ? "Refreshing..." : "Refresh connector checks"}
+            </button>
+            {connectorsError && <span className="text-xs text-red-400">{connectorsError}</span>}
+          </div>
         </div>
       </section>
 

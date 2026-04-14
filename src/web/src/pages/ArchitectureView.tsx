@@ -358,8 +358,10 @@ function AuditIssueCard({ issue, onAddAsTask }: { issue: AuditIssue; onAddAsTask
   const [expanded, setExpanded] = useState(false);
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   async function handleAdd() {
+    setAddError(null);
     setAdding(true);
     try {
       const res = await fetch("/api/tasks/append", {
@@ -370,10 +372,14 @@ function AuditIssueCard({ issue, onAddAsTask }: { issue: AuditIssue; onAddAsTask
           description: `**Issue:** ${issue.description}\n\n**Recommendation:** ${issue.recommendation}${issue.files?.length ? `\n\n**Files:** ${issue.files.join(", ")}` : ""}`,
         }),
       });
-      if (res.ok) {
-        setAdded(true);
-        onAddAsTask(issue);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((body as { error?: string }).error ?? "Failed to add task");
       }
+      setAdded(true);
+      onAddAsTask(issue);
+    } catch (err) {
+      setAddError((err as Error).message);
     } finally {
       setAdding(false);
     }
@@ -427,6 +433,9 @@ function AuditIssueCard({ issue, onAddAsTask }: { issue: AuditIssue; onAddAsTask
               <span className="text-[11px] font-medium text-zinc-600">Category: </span>
               <span className="text-[11px] text-zinc-500">{issue.category}</span>
             </div>
+          )}
+          {addError && (
+            <p className="text-xs text-red-400">{addError}</p>
           )}
         </div>
       )}

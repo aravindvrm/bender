@@ -170,6 +170,54 @@ export class StateManager {
     await this.writeTaskAgents(current);
   }
 
+  // --- Task GitHub Links ---
+
+  async readTaskGitHubLinks(): Promise<Record<string, TaskGitHubLink>> {
+    const raw = await this.readFileOrNull("tasks/github-links.json");
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const result: Record<string, TaskGitHubLink> = {};
+      for (const [taskId, value] of Object.entries(parsed)) {
+        if (!taskId.trim() || typeof value !== "object" || !value) continue;
+        const link = normalizeTaskGitHubLink(value);
+        if (link) result[taskId] = link;
+      }
+      return result;
+    } catch {
+      return {};
+    }
+  }
+
+  async writeTaskGitHubLinks(links: Record<string, TaskGitHubLink>): Promise<void> {
+    await this.writeStateFile("tasks/github-links.json", JSON.stringify(links, null, 2));
+  }
+
+  async getTaskGitHubLink(taskId: string): Promise<TaskGitHubLink | null> {
+    const links = await this.readTaskGitHubLinks();
+    return links[taskId] ?? null;
+  }
+
+  async setTaskGitHubLink(taskId: string, link: Partial<TaskGitHubLink> | null): Promise<void> {
+    const links = await this.readTaskGitHubLinks();
+    if (!link) {
+      delete links[taskId];
+      await this.writeTaskGitHubLinks(links);
+      return;
+    }
+    const current = links[taskId] ?? {};
+    const next = normalizeTaskGitHubLink({
+      ...current,
+      ...link,
+    });
+    if (!next) {
+      delete links[taskId];
+    } else {
+      links[taskId] = next;
+    }
+    await this.writeTaskGitHubLinks(links);
+  }
+
   // --- Reanalyze counter ---
 
   async readReanalyzeCounter(): Promise<number> {
@@ -321,6 +369,40 @@ export interface ProjectContext {
   decisions: string[];
   currentTasks: string | null;
   apiContracts: string | null;
+}
+
+function normalizeTaskGitHubLink(input: unknown): TaskGitHubLink | null {
+  if (!input || typeof input !== "object") return null;
+  const obj = input as Record<string, unknown>;
+
+  const repoFullName = typeof obj.repoFullName === "string" && obj.repoFullName.trim() ? obj.repoFullName.trim() : undefined;
+  const issueNumber = typeof obj.issueNumber === "number" && Number.isFinite(obj.issueNumber) ? obj.issueNumber : undefined;
+  const issueUrl = typeof obj.issueUrl === "string" && obj.issueUrl.trim() ? obj.issueUrl.trim() : undefined;
+  const branchName = typeof obj.branchName === "string" && obj.branchName.trim() ? obj.branchName.trim() : undefined;
+  const prNumber = typeof obj.prNumber === "number" && Number.isFinite(obj.prNumber) ? obj.prNumber : undefined;
+  const prUrl = typeof obj.prUrl === "string" && obj.prUrl.trim() ? obj.prUrl.trim() : undefined;
+  const lastSyncedAt = typeof obj.lastSyncedAt === "number" && Number.isFinite(obj.lastSyncedAt) ? obj.lastSyncedAt : undefined;
+
+  const out: TaskGitHubLink = {};
+  if (repoFullName) out.repoFullName = repoFullName;
+  if (issueNumber !== undefined) out.issueNumber = issueNumber;
+  if (issueUrl) out.issueUrl = issueUrl;
+  if (branchName) out.branchName = branchName;
+  if (prNumber !== undefined) out.prNumber = prNumber;
+  if (prUrl) out.prUrl = prUrl;
+  if (lastSyncedAt !== undefined) out.lastSyncedAt = lastSyncedAt;
+
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+export interface TaskGitHubLink {
+  repoFullName?: string;
+  issueNumber?: number;
+  issueUrl?: string;
+  branchName?: string;
+  prNumber?: number;
+  prUrl?: string;
+  lastSyncedAt?: number;
 }
 
 /**

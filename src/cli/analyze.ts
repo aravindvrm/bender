@@ -77,6 +77,7 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
         role: "analyzer",
         pinnedSkills: analyzerAgent.pinnedSkills,
         mcpServerIds: analyzerAgent.mcpServerIds,
+        capabilityPolicy: analyzerAgent.capabilityPolicy,
         modelTier: analyzerAgent.modelTier,
       },
       undefined,

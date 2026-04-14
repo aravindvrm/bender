@@ -9,7 +9,7 @@ export interface ProjectEntry {
   lastOpened: string; // ISO date
 }
 
-const REGISTRY_DIR = join(homedir(), ".bender");
+const REGISTRY_DIR = process.env.BENDER_HOME_DIR?.trim() || join(homedir(), ".bender");
 const REGISTRY_FILE = join(REGISTRY_DIR, "projects.json");
 
 export async function readRegistry(): Promise<ProjectEntry[]> {

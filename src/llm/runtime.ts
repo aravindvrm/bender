@@ -8,13 +8,18 @@ import type { BenderConfig, McpServerConfig } from "../state/config.js";
 import type { RoleExecutionOptions } from "../roles/base.js";
 import type { BaseRole } from "../state/agents.js";
 import { BUILTIN_AGENTS } from "../state/agents.js";
+import type { CapabilityPolicy } from "../state/capabilities.js";
+import { resolveConnectorAccess } from "../state/capabilities.js";
 import {
-  readRegistry,
-  fetchSkillContent,
-  selectSkillsByKeyword,
   buildProjectContextQuery,
   TIER2_MAX_BYTES,
 } from "../state/skills.js";
+import {
+  fetchSkillPackages,
+  fetchSkillPackageContent,
+  selectSkillPackagesHybrid,
+  type SkillPackageMeta,
+} from "../state/skill-packages.js";
 
 interface RoleSkillBudget {
   maxTier1PinnedSkills: number;
@@ -115,6 +120,8 @@ export interface RuntimeOptions {
   pinnedSkills?: string[];
   /** Restrict MCP to the connectors assigned to this agent (server IDs). */
   mcpServerIds?: string[];
+  /** Capability policy is the preferred access-control surface. */
+  capabilityPolicy?: CapabilityPolicy;
   /** Override model tier (from agent config). */
   modelTier?: string;
 }
@@ -234,6 +241,7 @@ async function buildLegacySkillsContext(
 // ── Registry-based skills (three-tier) ───────────────────────────────────────
 
 async function buildRegistrySkillsContext(
+  projectRoot: string,
   config: BenderConfig,
   roleOpts: RuntimeOptions,
   architectureText?: string,
@@ -245,44 +253,45 @@ async function buildRegistrySkillsContext(
 
   if (!config.skills?.enabled && !hasPinnedSkills) return { text: null, fileCount: 0 };
 
-  const configuredSkillNames = config.skills?.enabledSkills ?? [];
-  const candidateSkillNames = hasPinnedSkills
-    ? [...new Set(pinnedSkills)]
-    : [...new Set(configuredSkillNames)];
-  if (candidateSkillNames.length === 0) return { text: null, fileCount: 0 };
-
-  // Load registry metadata (needed for size filtering + keyword matching)
-  const registry = await readRegistry();
-  if (!registry) {
-    logger?.warn?.("Skills registry not loaded. Run a refresh from Settings.");
-    return { text: null, fileCount: 0 };
+  const registry = await fetchSkillPackages({ projectRoot });
+  const configuredSkillNames = new Set(config.skills?.enabledSkills ?? []);
+  const pinnedSet = new Set(pinnedSkills);
+  const enabledPkgs = registry.packages.filter((pkg) => (
+    pinnedSet.has(pkg.name)
+    || pinnedSet.has(pkg.id)
+    || configuredSkillNames.has(pkg.name)
+    || configuredSkillNames.has(pkg.id)
+  ));
+  if (enabledPkgs.length === 0) return { text: null, fileCount: 0 };
+  const enabledByName = new Map<string, SkillPackageMeta>();
+  const enabledById = new Map<string, SkillPackageMeta>();
+  for (const pkg of enabledPkgs) {
+    enabledByName.set(pkg.name, pkg);
+    enabledById.set(pkg.id, pkg);
   }
-
-  const enabledMetas = registry.skills.filter((s) => candidateSkillNames.includes(s.name));
-  if (enabledMetas.length === 0) return { text: null, fileCount: 0 };
-  const enabledSet = new Set(enabledMetas.map((s) => s.name));
   const budget = getRoleSkillBudget(roleOpts.role);
 
   const selectedNames = new Set<string>();
-  const selectedInOrder: string[] = [];
-  const tier1Selected: string[] = [];
-  const tier2Selected: string[] = [];
-  const tier3Selected: string[] = [];
+  const selectedInOrder: SkillPackageMeta[] = [];
+  const tier1Selected: SkillPackageMeta[] = [];
+  const tier2Selected: SkillPackageMeta[] = [];
+  const tier3Selected: SkillPackageMeta[] = [];
 
-  const addSelectedSkill = (name: string): boolean => {
-    if (selectedNames.has(name)) return true;
+  const addSelectedSkill = (pkg: SkillPackageMeta): boolean => {
+    if (selectedNames.has(pkg.id)) return true;
     if (selectedInOrder.length >= budget.maxTotalRegistrySkills) return false;
-    selectedNames.add(name);
-    selectedInOrder.push(name);
+    selectedNames.add(pkg.id);
+    selectedInOrder.push(pkg);
     return true;
   };
 
   // ── Tier 1: Role-pinned skills (from agent config or builtin defaults) ──────
-  for (const name of pinnedSkills) {
+  for (const nameOrId of pinnedSkills) {
     if (tier1Selected.length >= budget.maxTier1PinnedSkills) break;
-    if (!enabledSet.has(name)) continue;
-    if (!addSelectedSkill(name)) break;
-    tier1Selected.push(name);
+    const pkg = enabledById.get(nameOrId) ?? enabledByName.get(nameOrId);
+    if (!pkg) continue;
+    if (!addSelectedSkill(pkg)) break;
+    tier1Selected.push(pkg);
   }
   if (pinnedSkills.length > budget.maxTier1PinnedSkills) {
     logger?.warn?.(
@@ -292,23 +301,23 @@ async function buildRegistrySkillsContext(
 
   // ── Tier 2: Project context skills (small skills only, < TIER2_MAX_BYTES) ──
   const projectQuery = buildProjectContextQuery(config, architectureText);
-  const smallMetas = enabledMetas.filter((s) => s.size <= TIER2_MAX_BYTES);
-  const tier2Candidates = selectSkillsByKeyword(smallMetas, projectQuery, budget.maxTier2ContextSkills * 4);
-  for (const name of tier2Candidates) {
+  const smallPkgs = enabledPkgs.filter((s) => s.size <= TIER2_MAX_BYTES);
+  const tier2Candidates = selectSkillPackagesHybrid(smallPkgs, projectQuery, budget.maxTier2ContextSkills * 4);
+  for (const pkg of tier2Candidates) {
     if (tier2Selected.length >= budget.maxTier2ContextSkills) break;
-    if (selectedNames.has(name)) continue;
-    if (!addSelectedSkill(name)) break;
-    tier2Selected.push(name);
+    if (selectedNames.has(pkg.id)) continue;
+    if (!addSelectedSkill(pkg)) break;
+    tier2Selected.push(pkg);
   }
 
   // ── Tier 3: Task-specific skills (any size, top 3 by relevance) ─────────────
   if (roleOpts.taskDescription) {
-    const tier3Candidates = selectSkillsByKeyword(enabledMetas, roleOpts.taskDescription, budget.maxTier3TaskSkills * 4);
-    for (const name of tier3Candidates) {
+    const tier3Candidates = selectSkillPackagesHybrid(enabledPkgs, roleOpts.taskDescription, budget.maxTier3TaskSkills * 4);
+    for (const pkg of tier3Candidates) {
       if (tier3Selected.length >= budget.maxTier3TaskSkills) break;
-      if (selectedNames.has(name)) continue;
-      if (!addSelectedSkill(name)) break;
-      tier3Selected.push(name);
+      if (selectedNames.has(pkg.id)) continue;
+      if (!addSelectedSkill(pkg)) break;
+      tier3Selected.push(pkg);
     }
   }
 
@@ -320,18 +329,18 @@ async function buildRegistrySkillsContext(
   let usedChars = 0;
   const sections: string[] = [];
 
-  for (const name of selectedInOrder) {
+  for (const pkg of selectedInOrder) {
     if (usedChars >= maxChars) break;
     try {
-      const content = await fetchSkillContent(name);
+      const content = await fetchSkillPackageContent(pkg);
       if (!content) continue;
       const remaining = maxChars - usedChars;
       const body = content.slice(0, Math.min(remaining, budget.maxCharsPerSkill));
       if (!body.trim()) continue;
-      sections.push(`### ${name}\n${body}`);
+      sections.push(`### ${pkg.name} [${pkg.source}]\n${body}`);
       usedChars += body.length;
     } catch {
-      logger?.warn?.(`Could not load skill: ${name}`);
+      logger?.warn?.(`Could not load skill package: ${pkg.id}`);
     }
   }
 
@@ -402,10 +411,10 @@ export async function createRoleRuntime(
   logger?: RuntimeLogAdapter,
 ): Promise<RoleRuntime> {
   // Build skills context (registry-based takes priority, falls back to legacy paths)
-  const hasRegistrySkills = (config.skills?.enabledSkills?.length ?? 0) > 0;
+  const hasRegistrySkills = config.skills?.enabled || (roleOpts.pinnedSkills?.length ?? 0) > 0;
 
   const skills = hasRegistrySkills
-    ? await buildRegistrySkillsContext(config, roleOpts, architectureText, logger)
+    ? await buildRegistrySkillsContext(projectRoot, config, roleOpts, architectureText, logger)
     : await buildLegacySkillsContext(projectRoot, config, logger);
 
   const runtime: RoleRuntime = {
@@ -425,16 +434,24 @@ export async function createRoleRuntime(
   if (!config.mcp?.enabled) return runtime;
 
   const allEnabledServers = (config.mcp.servers ?? []).filter((s) => s.enabled !== false);
-  if (roleOpts.mcpServerIds && roleOpts.mcpServerIds.length === 0) {
+  const { allowedConnectorIds } = resolveConnectorAccess(
+    {
+      capabilityPolicy: roleOpts.capabilityPolicy,
+      mcpServerIds: roleOpts.mcpServerIds,
+    },
+    allEnabledServers,
+  );
+  const hasExplicitPolicyInput = !!roleOpts.capabilityPolicy || Array.isArray(roleOpts.mcpServerIds);
+  if (hasExplicitPolicyInput && allowedConnectorIds.size === 0) {
     return runtime;
   }
-  const enabledServers = roleOpts.mcpServerIds
-    ? allEnabledServers.filter((s) => !!s.id && roleOpts.mcpServerIds?.includes(s.id))
+  const enabledServers = hasExplicitPolicyInput
+    ? allEnabledServers.filter((s) => !!s.id && allowedConnectorIds.has(s.id))
     : allEnabledServers;
 
-  if (roleOpts.mcpServerIds && roleOpts.mcpServerIds.length > 0 && enabledServers.length === 0) {
+  if (hasExplicitPolicyInput && enabledServers.length === 0) {
     logger?.warn?.(
-      `No active MCP connectors matched agent assignments [${roleOpts.mcpServerIds.join(", ")}].`,
+      "No active MCP connectors matched agent capability policy.",
     );
   }
 

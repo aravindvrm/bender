@@ -27,6 +27,16 @@ interface AgentOption {
   isBuiltin?: boolean;
 }
 
+interface TaskGitHubLink {
+  repoFullName?: string;
+  issueNumber?: number;
+  issueUrl?: string;
+  branchName?: string;
+  prNumber?: number;
+  prUrl?: string;
+  lastSyncedAt?: number;
+}
+
 function parseTasks(markdown: string): ParsedTask[] {
   const tasks: ParsedTask[] = [];
   const pattern = /###\s*Task\s*(\d+):\s*(.+?)\n([\s\S]*?)(?=\n###\s*Task|\n##\s|$)/g;
@@ -81,16 +91,22 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [taskAgents, setTaskAgents] = useState<Record<string, string>>(state.taskAgents ?? {});
+  const [taskGitHubLinks, setTaskGitHubLinks] = useState<Record<string, TaskGitHubLink>>(state.taskGitHubLinks ?? {});
   const [assigningTaskId, setAssigningTaskId] = useState<number | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [githubError, setGithubError] = useState<string | null>(null);
   const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
   const [deleteDialogTaskId, setDeleteDialogTaskId] = useState<number | null>(null);
 
   useEffect(() => {
     setTaskAgents(state.taskAgents ?? {});
   }, [state.taskAgents]);
+
+  useEffect(() => {
+    setTaskGitHubLinks(state.taskGitHubLinks ?? {});
+  }, [state.taskGitHubLinks]);
 
   useEffect(() => {
     fetch("/api/agents")
@@ -136,6 +152,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
     completed: isTaskCompleted(task.id, state.completedTasks),
     runStatus: getTaskRunStatus(task, state.completedTasks),
     assignedAgentId: taskAgents[String(task.id)] ?? "",
+    githubLink: taskGitHubLinks[String(task.id)] ?? null,
   }));
   const filtered = tasksWithStatus.filter((task) => {
     if (statusFilter === "completed" && !task.completed) return false;
@@ -212,6 +229,88 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
     }
   }
 
+  async function saveTaskGitHubLink(taskId: number, link: Partial<TaskGitHubLink>) {
+    setGithubError(null);
+    const previous = taskGitHubLinks[String(taskId)] ?? {};
+    const optimistic = { ...previous, ...link };
+    setTaskGitHubLinks((prev) => ({ ...prev, [String(taskId)]: optimistic }));
+    try {
+      const res = await fetch(`/api/tasks/links/${taskId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(link),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to update task GitHub link");
+      setTaskGitHubLinks(body.links ?? {});
+      await onTasksChanged?.();
+    } catch (err) {
+      setTaskGitHubLinks((prev) => ({ ...prev, [String(taskId)]: previous }));
+      setGithubError((err as Error).message);
+      throw err;
+    }
+  }
+
+  async function createTaskIssue(taskId: number, repoFullName?: string) {
+    setGithubError(null);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/github/issue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repoFullName }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to create linked issue");
+      if (body.link) {
+        setTaskGitHubLinks((prev) => ({ ...prev, [String(taskId)]: body.link as TaskGitHubLink }));
+      }
+      await onTasksChanged?.();
+    } catch (err) {
+      setGithubError((err as Error).message);
+      throw err;
+    }
+  }
+
+  async function createTaskBranch(taskId: number, branchName?: string) {
+    setGithubError(null);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/github/branch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branchName }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to create/switch task branch");
+      if (body.link) {
+        setTaskGitHubLinks((prev) => ({ ...prev, [String(taskId)]: body.link as TaskGitHubLink }));
+      }
+      await onTasksChanged?.();
+    } catch (err) {
+      setGithubError((err as Error).message);
+      throw err;
+    }
+  }
+
+  async function createTaskPR(taskId: number, repoFullName?: string) {
+    setGithubError(null);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/github/pr`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repoFullName }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to open linked PR");
+      if (body.link) {
+        setTaskGitHubLinks((prev) => ({ ...prev, [String(taskId)]: body.link as TaskGitHubLink }));
+      }
+      await onTasksChanged?.();
+    } catch (err) {
+      setGithubError((err as Error).message);
+      throw err;
+    }
+  }
+
   return (
     <div className="max-w-5xl mx-auto space-y-5">
       {/* Header row */}
@@ -270,6 +369,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       {assignError && <p className="text-xs text-red-400">{assignError}</p>}
       {editError && <p className="text-xs text-red-400">{editError}</p>}
       {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
+      {githubError && <p className="text-xs text-red-400">{githubError}</p>}
 
       {/* Table */}
       <div className="border border-zinc-800 rounded-xl overflow-hidden">
@@ -298,6 +398,10 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
               onAssignAgent={(agentId) => void assignAgent(task.id, agentId)}
               onSaveEdits={(updates) => saveTaskEdits(task.id, updates)}
               onDelete={() => setDeleteDialogTaskId(task.id)}
+              onSaveGitHubLink={(link) => saveTaskGitHubLink(task.id, link)}
+              onCreateIssue={(repoFullName) => createTaskIssue(task.id, repoFullName)}
+              onCreateBranch={(branchName) => createTaskBranch(task.id, branchName)}
+              onCreatePR={(repoFullName) => createTaskPR(task.id, repoFullName)}
             />
           ))
         )}
@@ -325,7 +429,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
 }
 
 interface TaskRowProps {
-  task: ParsedTask & { completed: boolean; runStatus: TaskRunStatus; assignedAgentId: string };
+  task: ParsedTask & { completed: boolean; runStatus: TaskRunStatus; assignedAgentId: string; githubLink: TaskGitHubLink | null };
   allTasks: (ParsedTask & { completed: boolean })[];
   agents: AgentOption[];
   assigning: boolean;
@@ -336,6 +440,10 @@ interface TaskRowProps {
   onAssignAgent: (agentId: string) => void;
   onSaveEdits: (updates: { title: string; description: string; dependencies: string; criteria: string }) => Promise<void>;
   onDelete: () => void;
+  onSaveGitHubLink: (link: Partial<TaskGitHubLink>) => Promise<void>;
+  onCreateIssue: (repoFullName?: string) => Promise<void>;
+  onCreateBranch: (branchName?: string) => Promise<void>;
+  onCreatePR: (repoFullName?: string) => Promise<void>;
 }
 
 function TaskRow({
@@ -350,6 +458,10 @@ function TaskRow({
   onAssignAgent,
   onSaveEdits,
   onDelete,
+  onSaveGitHubLink,
+  onCreateIssue,
+  onCreateBranch,
+  onCreatePR,
 }: TaskRowProps) {
   const progress = task.completed ? 100 : 0;
   const barColor = task.completed ? "bg-emerald-500" : "bg-zinc-700";
@@ -359,6 +471,12 @@ function TaskRow({
   const [draftDescription, setDraftDescription] = useState(task.description);
   const [draftDependencies, setDraftDependencies] = useState(task.dependencies);
   const [draftCriteria, setDraftCriteria] = useState(task.criteria);
+  const [draftRepoFullName, setDraftRepoFullName] = useState(task.githubLink?.repoFullName ?? "");
+  const [draftBranchName, setDraftBranchName] = useState(task.githubLink?.branchName ?? "");
+  const [savingGitHubLink, setSavingGitHubLink] = useState(false);
+  const [creatingIssue, setCreatingIssue] = useState(false);
+  const [creatingBranch, setCreatingBranch] = useState(false);
+  const [creatingPR, setCreatingPR] = useState(false);
 
   const statusLabel = task.completed ? "Completed" : "Pending";
   const statusColors: Record<string, string> = {
@@ -375,7 +493,9 @@ function TaskRow({
     setDraftDescription(task.description);
     setDraftDependencies(task.dependencies);
     setDraftCriteria(task.criteria);
-  }, [task.id, task.title, task.description, task.dependencies, task.criteria]);
+    setDraftRepoFullName(task.githubLink?.repoFullName ?? "");
+    setDraftBranchName(task.githubLink?.branchName ?? "");
+  }, [task.id, task.title, task.description, task.dependencies, task.criteria, task.githubLink?.repoFullName, task.githubLink?.branchName]);
 
   return (
     <>
@@ -545,6 +665,105 @@ function TaskRow({
               <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
             </div>
             {assigning && <span className="text-[11px] text-zinc-500">Saving…</span>}
+          </div>
+
+          <div className="ml-6 space-y-2 pt-1">
+            <p className="text-xs text-zinc-600">GitHub Linkage</p>
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2 max-w-3xl">
+              <input
+                value={draftRepoFullName}
+                onChange={(e) => setDraftRepoFullName(e.target.value)}
+                className="select-flat px-3 py-1.5 text-xs font-mono"
+                placeholder="owner/repo"
+              />
+              <input
+                value={draftBranchName}
+                onChange={(e) => setDraftBranchName(e.target.value)}
+                className="select-flat px-3 py-1.5 text-xs font-mono"
+                placeholder="task/123-short-name"
+              />
+              <button
+                disabled={savingGitHubLink}
+                onClick={async () => {
+                  setSavingGitHubLink(true);
+                  try {
+                    await onSaveGitHubLink({
+                      repoFullName: draftRepoFullName.trim() || undefined,
+                      branchName: draftBranchName.trim() || undefined,
+                    });
+                  } finally {
+                    setSavingGitHubLink(false);
+                  }
+                }}
+                className="px-2 py-1 text-xs border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {savingGitHubLink ? "Saving..." : "Save Link"}
+              </button>
+            </div>
+            <div className="flex items-center flex-wrap gap-2 text-xs">
+              <button
+                disabled={creatingIssue}
+                onClick={async () => {
+                  setCreatingIssue(true);
+                  try {
+                    await onCreateIssue(draftRepoFullName.trim() || undefined);
+                  } finally {
+                    setCreatingIssue(false);
+                  }
+                }}
+                className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {creatingIssue ? "Creating issue..." : "Create Linked Issue"}
+              </button>
+              <button
+                disabled={creatingBranch}
+                onClick={async () => {
+                  setCreatingBranch(true);
+                  try {
+                    await onCreateBranch(draftBranchName.trim() || undefined);
+                  } finally {
+                    setCreatingBranch(false);
+                  }
+                }}
+                className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {creatingBranch ? "Switching..." : "Create/Switch Branch"}
+              </button>
+              <button
+                disabled={creatingPR}
+                onClick={async () => {
+                  setCreatingPR(true);
+                  try {
+                    await onCreatePR(draftRepoFullName.trim() || undefined);
+                  } finally {
+                    setCreatingPR(false);
+                  }
+                }}
+                className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {creatingPR ? "Opening PR..." : "Open PR"}
+              </button>
+              {task.githubLink?.issueUrl && (
+                <a
+                  href={task.githubLink.issueUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-zinc-400 hover:text-zinc-200 underline decoration-zinc-700 underline-offset-2"
+                >
+                  Issue #{task.githubLink.issueNumber ?? "?"}
+                </a>
+              )}
+              {task.githubLink?.prUrl && (
+                <a
+                  href={task.githubLink.prUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-zinc-400 hover:text-zinc-200 underline decoration-zinc-700 underline-offset-2"
+                >
+                  PR #{task.githubLink.prNumber ?? "?"}
+                </a>
+              )}
+            </div>
           </div>
 
           <div className="ml-6 flex items-center gap-2 pt-1">

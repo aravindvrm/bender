@@ -11,10 +11,17 @@ import { simpleGit } from "simple-git";
 import { readEffectiveConfig, readGlobalConfig, writeConfig, writeGlobalConfig, type BenderConfig } from "../state/config.js";
 import { createModelSet, getModelForTier } from "../llm/provider.js";
 import { createRoleRuntime } from "../llm/runtime.js";
-import { StateManager, type AuditResult, type AuditIssue } from "../state/manager.js";
+import { StateManager, type AuditResult, type AuditIssue, type TaskGitHubLink } from "../state/manager.js";
 import { GitOperations } from "../git/operations.js";
 import { readRegistry, addToRegistry, removeFromRegistry } from "../state/registry.js";
 import { fetchRegistry, readRegistry as readSkillsRegistry } from "../state/skills.js";
+import {
+  getSkillWorkbench,
+  setSkillEvalCases,
+  appendSkillEvalRun,
+  setSkillEvalRunFeedback,
+  type SkillEvalCase,
+} from "../state/skill-workbench.js";
 import {
   getAllAgents,
   readCustomAgents,
@@ -28,6 +35,8 @@ import {
   type AgentConfig,
   type BaseRole,
 } from "../state/agents.js";
+import { getConnectorCapabilities, normalizeCapabilityPolicy } from "../state/capabilities.js";
+import { appendTaskToPlan } from "../state/task-plan.js";
 import { initCommand } from "./init.js";
 import { planCommand } from "./plan.js";
 import { implementCommand, implementSingleTask } from "./implement.js";
@@ -51,6 +60,17 @@ interface CuratedMcpServerDefinition {
   name: string;
   url: string;
   description: string;
+}
+
+interface ConnectorHealthStatus {
+  id: string;
+  enabled: boolean;
+  configured: boolean;
+  reachable: boolean;
+  authValid: boolean;
+  discoveredCapabilities: string[];
+  lastCheckedAt: string;
+  error?: string;
 }
 
 const CURATED_MCP_CONNECTORS: CuratedMcpServerDefinition[] = [
@@ -80,6 +100,9 @@ const CURATED_MCP_CONNECTORS: CuratedMcpServerDefinition[] = [
   },
 ];
 
+const connectorHealthCache = new Map<string, ConnectorHealthStatus>();
+const CONNECTOR_HEALTH_TTL_MS = 60_000;
+
 function toPromptSnippet(prompt: string, maxChars = 220): string {
   const paragraphs = prompt
     .split(/\n\s*\n/g)
@@ -97,6 +120,74 @@ function toPromptSnippet(prompt: string, maxChars = 220): string {
 
   if (preferred.length <= maxChars) return preferred;
   return `${preferred.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+async function probeConnectorReachability(
+  url: string,
+  token?: string,
+): Promise<{ reachable: boolean; authValid: boolean; error?: string }> {
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      signal: ctrl.signal,
+    });
+    const reachable = true;
+    const authValid = response.status !== 401 && response.status !== 403;
+    return { reachable, authValid };
+  } catch (err) {
+    return {
+      reachable: false,
+      authValid: false,
+      error: (err as Error).message,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getConnectorHealthStatus(
+  def: CuratedMcpServerDefinition,
+  existing: { enabled?: boolean; authorizationToken?: string } | undefined,
+  forceRefresh: boolean,
+): Promise<ConnectorHealthStatus> {
+  const cached = connectorHealthCache.get(def.id);
+  const cachedAge = cached ? Date.now() - Date.parse(cached.lastCheckedAt) : Number.POSITIVE_INFINITY;
+  if (!forceRefresh && cached && Number.isFinite(cachedAge) && cachedAge <= CONNECTOR_HEALTH_TTL_MS) {
+    return cached;
+  }
+
+  const enabled = existing?.enabled ?? false;
+  const token = existing?.authorizationToken?.trim();
+  const configured = !!token;
+  let reachable = false;
+  let authValid = false;
+  let error: string | undefined;
+
+  if (enabled) {
+    const probe = await probeConnectorReachability(def.url, token);
+    reachable = probe.reachable;
+    authValid = configured ? probe.authValid : false;
+    error = probe.error;
+  }
+
+  const status: ConnectorHealthStatus = {
+    id: def.id,
+    enabled,
+    configured,
+    reachable,
+    authValid,
+    discoveredCapabilities: getConnectorCapabilities(def.id),
+    lastCheckedAt: new Date().toISOString(),
+    ...(error ? { error } : {}),
+  };
+  connectorHealthCache.set(def.id, status);
+  return status;
 }
 
 // ── SSE event types ──────────────────────────────────────────────────────────
@@ -233,6 +324,7 @@ function normalizeAgentCreatePayload(
   if (normalizedMcpServers.error) return { error: normalizedMcpServers.error };
   const normalizedPrompt = normalizeSystemPromptAddition(input.systemPromptAddition);
   if (normalizedPrompt.error) return { error: normalizedPrompt.error };
+  const normalizedCapabilityPolicy = normalizeCapabilityPolicy(input.capabilityPolicy);
 
   return {
     value: {
@@ -242,6 +334,7 @@ function normalizeAgentCreatePayload(
       modelTier: modelTierRaw,
       pinnedSkills: normalizedSkills.value ?? [],
       mcpServerIds: normalizedMcpServers.value ?? [],
+      ...(normalizedCapabilityPolicy ? { capabilityPolicy: normalizedCapabilityPolicy } : {}),
       systemPromptAddition: normalizedPrompt.value,
       isBuiltin: false,
     },
@@ -295,6 +388,10 @@ function normalizeAgentPatchPayload(
     const normalizedPrompt = normalizeSystemPromptAddition(input.systemPromptAddition);
     if (normalizedPrompt.error) return { error: normalizedPrompt.error };
     next.systemPromptAddition = normalizedPrompt.value;
+  }
+
+  if (input.capabilityPolicy !== undefined) {
+    next.capabilityPolicy = normalizeCapabilityPolicy(input.capabilityPolicy);
   }
 
   return { value: next };
@@ -664,14 +761,20 @@ async function clearGitHubSession(): Promise<void> {
   }
 }
 
-async function githubApi<T>(path: string, token: string): Promise<T> {
+async function githubApi<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+  const extraHeaders = new Headers(init?.headers ?? {});
+  const headers = new Headers({
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${token}`,
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "bender-local",
+  });
+  for (const [key, value] of extraHeaders.entries()) {
+    headers.set(key, value);
+  }
   const res = await fetch(`https://api.github.com${path}`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "bender-local",
-    },
+    ...init,
+    headers,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -683,6 +786,14 @@ async function githubApi<T>(path: string, token: string): Promise<T> {
 function authCloneUrl(cloneUrl: string, token: string): string {
   if (!cloneUrl.startsWith("https://")) return cloneUrl;
   return cloneUrl.replace("https://", `https://x-access-token:${encodeURIComponent(token)}@`);
+}
+
+function parseGitHubRepoFullName(remoteUrl: string): string | null {
+  const trimmed = remoteUrl.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/github\.com[:/]+([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);
+  if (!match) return null;
+  return match[1];
 }
 
 // ── Pending answers ──────────────────────────────────────────────────────────
@@ -817,7 +928,7 @@ async function runOperation(
 
 // ── Server ────────────────────────────────────────────────────────────────────
 
-export async function startServer(initialProject?: string): Promise<HttpServer> {
+export async function startServer(initialProject?: string, port = API_PORT): Promise<HttpServer> {
   if (initialProject) {
     currentProject = initialProject;
     await addToRegistry(initialProject);
@@ -1410,6 +1521,7 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
       const completedTasks = await state.readCompletedTasks();
       const flows = await state.readFlows();
       const taskAgents = await state.readTaskAgents();
+      const taskGitHubLinks = await state.readTaskGitHubLinks();
 
       let git = null;
       try {
@@ -1433,6 +1545,7 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
         currentTasks: context.currentTasks,
         completedTasks,
         taskAgents,
+        taskGitHubLinks,
         apiContracts: context.apiContracts,
         flows,
         config: {
@@ -1585,6 +1698,28 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
     }
   });
 
+  app.get("/api/connectors/status", async (req, res) => {
+    try {
+      const force = String(req.query.force ?? "false").toLowerCase() === "true";
+      const config = await readGlobalConfig();
+      const servers = config.mcp?.servers ?? [];
+
+      const statuses = await Promise.all(
+        CURATED_MCP_CONNECTORS.map(async (def) => {
+          const existing = servers.find((s) => s.id === def.id);
+          const health = await getConnectorHealthStatus(def, existing, force);
+          return {
+            name: def.name,
+            ...health,
+          };
+        }),
+      );
+      res.json({ statuses });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   app.put("/api/mcp/connectors/:id", async (req, res) => {
     try {
       const { id } = req.params;
@@ -1633,6 +1768,7 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
       };
 
       await writeGlobalConfig(nextConfig);
+      connectorHealthCache.delete(id);
 
       res.json({
         connector: {
@@ -2162,6 +2298,302 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
     }
   });
 
+  // ── Task GitHub Links ─────────────────────────────────────────────────────
+
+  app.get("/api/tasks/links", async (_req, res) => {
+    if (!currentProject) {
+      res.json({ links: {} });
+      return;
+    }
+    try {
+      const state = new StateManager(currentProject);
+      if (!state.isInitialized()) {
+        res.json({ links: {} });
+        return;
+      }
+      const links = await state.readTaskGitHubLinks();
+      res.json({ links });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/tasks/links/:taskId", async (req, res) => {
+    if (!currentProject) {
+      res.status(400).json({ error: "No project selected" });
+      return;
+    }
+    try {
+      const { taskId } = req.params;
+      const normalizedTaskId = taskId.trim();
+      if (!normalizedTaskId || !/^\d+$/.test(normalizedTaskId)) {
+        res.status(400).json({ error: "taskId must be numeric" });
+        return;
+      }
+
+      const state = new StateManager(currentProject);
+      if (!state.isInitialized()) {
+        res.status(400).json({ error: "Project is not initialized" });
+        return;
+      }
+
+      const body = (req.body ?? {}) as Partial<TaskGitHubLink> & { clear?: boolean };
+      if (body.clear) {
+        await state.setTaskGitHubLink(normalizedTaskId, null);
+      } else {
+        await state.setTaskGitHubLink(normalizedTaskId, {
+          repoFullName: body.repoFullName,
+          issueNumber: body.issueNumber,
+          issueUrl: body.issueUrl,
+          branchName: body.branchName,
+          prNumber: body.prNumber,
+          prUrl: body.prUrl,
+          lastSyncedAt: Date.now(),
+        });
+      }
+      const links = await state.readTaskGitHubLinks();
+      res.json({ ok: true, links, link: links[normalizedTaskId] ?? null });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/tasks/:taskId/github/issue", async (req, res) => {
+    if (!currentProject) {
+      res.status(400).json({ error: "No project selected" });
+      return;
+    }
+    try {
+      const { taskId } = req.params;
+      const normalizedTaskId = taskId.trim();
+      if (!normalizedTaskId || !/^\d+$/.test(normalizedTaskId)) {
+        return res.status(400).json({ error: "taskId must be numeric" });
+      }
+
+      const state = new StateManager(currentProject);
+      if (!state.isInitialized()) {
+        return res.status(400).json({ error: "Project is not initialized" });
+      }
+
+      const session = await readGitHubSession();
+      if (!session?.accessToken) {
+        return res.status(401).json({ error: "Not connected to GitHub" });
+      }
+
+      const markdown = await state.readCurrentTasks();
+      if (!markdown) return res.status(400).json({ error: "No current task plan found" });
+      const tasks = parseTaskBlocks(markdown);
+      const id = Number(normalizedTaskId);
+      const task = tasks.find((t) => t.id === id);
+      if (!task) return res.status(404).json({ error: `Task ${id} not found` });
+
+      const existingLink = await state.getTaskGitHubLink(normalizedTaskId);
+      let repoFullName = ((req.body ?? {}) as { repoFullName?: string }).repoFullName?.trim()
+        || existingLink?.repoFullName;
+      if (!repoFullName) {
+        const gitOps = new GitOperations(currentProject);
+        if (await gitOps.isRepo()) {
+          const remotes = await gitOps.getRemotes();
+          const origin = remotes.find((r) => r.name === "origin");
+          if (origin?.fetch) {
+            repoFullName = parseGitHubRepoFullName(origin.fetch) ?? undefined;
+          }
+        }
+      }
+      if (!repoFullName) {
+        return res.status(400).json({ error: "Set linked repo first (task link repoFullName or origin remote)." });
+      }
+
+      const descriptionMatch = task.body.match(/\*\*Description\*\*:\s*([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
+      const bodyText = descriptionMatch ? descriptionMatch[1].trim() : task.body.trim();
+      const issue = await githubApi<{ number: number; html_url: string }>(
+        `/repos/${repoFullName}/issues`,
+        session.accessToken,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: `Task ${task.id}: ${task.title}`,
+            body: [
+              `Created from Bender task plan.`,
+              "",
+              `Task ID: ${task.id}`,
+              "",
+              bodyText,
+            ].join("\n"),
+          }),
+        },
+      );
+
+      await state.setTaskGitHubLink(normalizedTaskId, {
+        ...existingLink,
+        repoFullName,
+        issueNumber: issue.number,
+        issueUrl: issue.html_url,
+        lastSyncedAt: Date.now(),
+      });
+      const link = await state.getTaskGitHubLink(normalizedTaskId);
+      res.json({ ok: true, issueNumber: issue.number, issueUrl: issue.html_url, link });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/tasks/:taskId/github/branch", async (req, res) => {
+    if (!currentProject) {
+      res.status(400).json({ error: "No project selected" });
+      return;
+    }
+    try {
+      const { taskId } = req.params;
+      const normalizedTaskId = taskId.trim();
+      if (!normalizedTaskId || !/^\d+$/.test(normalizedTaskId)) {
+        return res.status(400).json({ error: "taskId must be numeric" });
+      }
+
+      const state = new StateManager(currentProject);
+      if (!state.isInitialized()) {
+        return res.status(400).json({ error: "Project is not initialized" });
+      }
+
+      const markdown = await state.readCurrentTasks();
+      if (!markdown) return res.status(400).json({ error: "No current task plan found" });
+      const tasks = parseTaskBlocks(markdown);
+      const id = Number(normalizedTaskId);
+      const task = tasks.find((t) => t.id === id);
+      if (!task) return res.status(404).json({ error: `Task ${id} not found` });
+
+      const gitOps = new GitOperations(currentProject);
+      if (!(await gitOps.isRepo())) {
+        return res.status(400).json({ error: "Not a git repository" });
+      }
+
+      const existingLink = await state.getTaskGitHubLink(normalizedTaskId);
+      const requestedBranch = ((req.body ?? {}) as { branchName?: string }).branchName?.trim();
+      const slug = task.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 48);
+      const branchName = requestedBranch || existingLink?.branchName || `task/${task.id}-${slug || "work"}`;
+
+      const branches = await gitOps.getBranches();
+      const exists = branches.all.includes(branchName);
+      await gitOps.checkoutBranch(branchName, !exists);
+
+      await state.setTaskGitHubLink(normalizedTaskId, {
+        ...existingLink,
+        branchName,
+        lastSyncedAt: Date.now(),
+      });
+      const link = await state.getTaskGitHubLink(normalizedTaskId);
+      res.json({ ok: true, branchName, created: !exists, link });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/tasks/:taskId/github/pr", async (req, res) => {
+    if (!currentProject) {
+      res.status(400).json({ error: "No project selected" });
+      return;
+    }
+    try {
+      const { taskId } = req.params;
+      const normalizedTaskId = taskId.trim();
+      if (!normalizedTaskId || !/^\d+$/.test(normalizedTaskId)) {
+        return res.status(400).json({ error: "taskId must be numeric" });
+      }
+      const session = await readGitHubSession();
+      if (!session?.accessToken) return res.status(401).json({ error: "Not connected to GitHub" });
+
+      const state = new StateManager(currentProject);
+      const link = await state.getTaskGitHubLink(normalizedTaskId);
+      const repoFullName = ((req.body ?? {}) as { repoFullName?: string }).repoFullName?.trim() || link?.repoFullName;
+      const head = ((req.body ?? {}) as { head?: string }).head?.trim() || link?.branchName;
+      if (!repoFullName) return res.status(400).json({ error: "linked repo is required (repoFullName)." });
+      if (!head) return res.status(400).json({ error: "linked branch is required (branchName)." });
+
+      const markdown = await state.readCurrentTasks();
+      const tasks = parseTaskBlocks(markdown ?? "");
+      const task = tasks.find((t) => t.id === Number(normalizedTaskId));
+      const title = ((req.body ?? {}) as { title?: string }).title?.trim() || (task ? `Task ${task.id}: ${task.title}` : `Task ${normalizedTaskId}`);
+      const base = ((req.body ?? {}) as { base?: string }).base?.trim() || "main";
+      const bodyText = ((req.body ?? {}) as { body?: string }).body?.trim() || (task ? task.body.trim() : "Opened from Bender task workflow.");
+
+      const pr = await githubApi<{ number: number; html_url: string }>(
+        `/repos/${repoFullName}/pulls`,
+        session.accessToken,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title,
+            head,
+            base,
+            body: bodyText,
+          }),
+        },
+      );
+
+      await state.setTaskGitHubLink(normalizedTaskId, {
+        ...link,
+        repoFullName,
+        branchName: head,
+        prNumber: pr.number,
+        prUrl: pr.html_url,
+        lastSyncedAt: Date.now(),
+      });
+      res.json({ ok: true, prNumber: pr.number, prUrl: pr.html_url, link: await state.getTaskGitHubLink(normalizedTaskId) });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/tasks/:taskId/github/pr/comment", async (req, res) => {
+    if (!currentProject) {
+      res.status(400).json({ error: "No project selected" });
+      return;
+    }
+    try {
+      const { taskId } = req.params;
+      const normalizedTaskId = taskId.trim();
+      if (!normalizedTaskId || !/^\d+$/.test(normalizedTaskId)) {
+        return res.status(400).json({ error: "taskId must be numeric" });
+      }
+      const session = await readGitHubSession();
+      if (!session?.accessToken) return res.status(401).json({ error: "Not connected to GitHub" });
+
+      const state = new StateManager(currentProject);
+      const link = await state.getTaskGitHubLink(normalizedTaskId);
+      const body = ((req.body ?? {}) as { body?: string }).body?.trim();
+      if (!body) return res.status(400).json({ error: "comment body is required" });
+      const repoFullName = ((req.body ?? {}) as { repoFullName?: string }).repoFullName?.trim() || link?.repoFullName;
+      const issueNumber = ((req.body ?? {}) as { prNumber?: number }).prNumber ?? link?.prNumber;
+      if (!repoFullName) return res.status(400).json({ error: "linked repo is required (repoFullName)." });
+      if (!issueNumber) return res.status(400).json({ error: "linked PR number is required (prNumber)." });
+
+      const comment = await githubApi<{ html_url: string }>(
+        `/repos/${repoFullName}/issues/${issueNumber}/comments`,
+        session.accessToken,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body }),
+        },
+      );
+      await state.setTaskGitHubLink(normalizedTaskId, {
+        ...link,
+        repoFullName,
+        prNumber: issueNumber,
+        lastSyncedAt: Date.now(),
+      });
+      res.json({ ok: true, commentUrl: comment.html_url, link: await state.getTaskGitHubLink(normalizedTaskId) });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Run operations (SSE) ──────────────────────────────────────────────────
 
   app.post("/api/run/answer", (req, res) => {
@@ -2318,6 +2750,7 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
             role: "architect",
             pinnedSkills: architectAgent.pinnedSkills,
             mcpServerIds: architectAgent.mcpServerIds,
+            capabilityPolicy: architectAgent.capabilityPolicy,
             modelTier: architectAgent.modelTier,
           },
           context.architecture ?? undefined,
@@ -2396,6 +2829,7 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
             taskDescription: auditType === "security" ? "security audit vulnerability analysis" : "test harness coverage audit",
             pinnedSkills: analyzerAgent.pinnedSkills,
             mcpServerIds: analyzerAgent.mcpServerIds,
+            capabilityPolicy: analyzerAgent.capabilityPolicy,
             modelTier: analyzerAgent.modelTier,
           },
           context.architecture ?? undefined,
@@ -2527,11 +2961,12 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
       }
       const state = new StateManager(getProject());
       const existing = await state.readCurrentTasks();
-      const taskId = `task-${randomUUID().slice(0, 8)}`;
-      const newEntry = `\n## ${title}\n\nID: ${taskId}\nStatus: pending\n\n${description ?? ""}\n`;
-      const updated = (existing ?? "") + newEntry;
-      await state.writeCurrentTasks(updated.trim());
-      res.json({ ok: true, taskId });
+      const next = appendTaskToPlan(existing, {
+        title: title.trim(),
+        description,
+      });
+      await state.writeCurrentTasks(next.updatedMarkdown);
+      res.json({ ok: true, taskId: next.taskId });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -2682,6 +3117,19 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
         await state.writeTaskAgents(taskAgents);
       }
 
+      const taskGitHubLinks = await state.readTaskGitHubLinks();
+      let changedLinks = false;
+      for (const deletedId of idsToDelete) {
+        const key = String(deletedId);
+        if (taskGitHubLinks[key]) {
+          delete taskGitHubLinks[key];
+          changedLinks = true;
+        }
+      }
+      if (changedLinks) {
+        await state.writeTaskGitHubLinks(taskGitHubLinks);
+      }
+
       res.json({ ok: true, deletedTaskIds: Array.from(idsToDelete).sort((a, b) => a - b) });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -2706,6 +3154,116 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
     try {
       const registry = await fetchRegistry(true);
       res.json({ skills: registry.skills, fetchedAt: registry.fetchedAt });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get("/api/skills/workbench/:skillId", async (req, res) => {
+    try {
+      const skillId = decodeURIComponent(req.params.skillId ?? "").trim();
+      if (!skillId) return res.status(400).json({ error: "skillId is required" });
+      const workbench = await getSkillWorkbench(skillId);
+      res.json(workbench);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/skills/workbench/:skillId/cases", async (req, res) => {
+    try {
+      const skillId = decodeURIComponent(req.params.skillId ?? "").trim();
+      if (!skillId) return res.status(400).json({ error: "skillId is required" });
+      const { cases } = (req.body ?? {}) as { cases?: SkillEvalCase[] };
+      if (!Array.isArray(cases)) return res.status(400).json({ error: "cases must be an array" });
+      const workbench = await setSkillEvalCases(skillId, cases);
+      res.json(workbench);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/skills/workbench/:skillId/runs/:runId/feedback", async (req, res) => {
+    try {
+      const skillId = decodeURIComponent(req.params.skillId ?? "").trim();
+      const runId = decodeURIComponent(req.params.runId ?? "").trim();
+      if (!skillId || !runId) return res.status(400).json({ error: "skillId and runId are required" });
+      const body = (req.body ?? {}) as { pass?: boolean; feedback?: string };
+      const workbench = await setSkillEvalRunFeedback(skillId, runId, {
+        pass: typeof body.pass === "boolean" ? body.pass : undefined,
+        feedback: body.feedback,
+      });
+      res.json(workbench);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/skills/workbench/:skillId/run", async (req, res) => {
+    if (!currentProject) {
+      res.status(400).json({ error: "No project selected" });
+      return;
+    }
+    try {
+      const skillId = decodeURIComponent(req.params.skillId ?? "").trim();
+      if (!skillId) return res.status(400).json({ error: "skillId is required" });
+
+      const body = (req.body ?? {}) as {
+        prompt?: string;
+        withSkill?: boolean;
+        role?: BaseRole;
+        modelTier?: "fast" | "default" | "strong";
+      };
+      const prompt = body.prompt?.trim();
+      if (!prompt) return res.status(400).json({ error: "prompt is required" });
+      const role = typeof body.role === "string" && isBaseRole(body.role) ? body.role : "planner";
+      const withSkill = body.withSkill !== false;
+      const modelTier = body.modelTier ?? "default";
+
+      const projectRoot = currentProject;
+      const state = new StateManager(projectRoot);
+      const context = await state.gatherContext();
+      const config = await readEffectiveConfig(projectRoot);
+      const runtime = await createRoleRuntime(
+        projectRoot,
+        {
+          ...config,
+          skills: {
+            ...(config.skills ?? {}),
+            enabled: withSkill,
+            enabledSkills: withSkill ? [skillId, skillId.replace(/^.+:/, "")] : [],
+          },
+        },
+        {
+          role,
+          taskDescription: prompt,
+          pinnedSkills: withSkill ? [skillId, skillId.replace(/^.+:/, "")] : [],
+          modelTier,
+        },
+        context.architecture ?? undefined,
+      );
+      const models = createModelSet(config);
+      const output = await runRole(
+        getModelForTier(models, modelTier),
+        role,
+        context.architecture ?? "",
+        prompt,
+        runtime,
+      );
+      await runtime.close();
+
+      const run = {
+        id: randomUUID(),
+        skillId,
+        prompt,
+        withSkill,
+        role,
+        modelTier,
+        output,
+        createdAt: Date.now(),
+      };
+      const workbench = await appendSkillEvalRun(run);
+      res.json({ run, workbench });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -2856,7 +3414,7 @@ export async function startServer(initialProject?: string): Promise<HttpServer> 
   });
 
   return await new Promise<HttpServer>((resolvePromise, rejectPromise) => {
-    const server = app.listen(API_PORT, () => resolvePromise(server));
+    const server = app.listen(port, () => resolvePromise(server));
     server.once("error", rejectPromise);
   });
 }
