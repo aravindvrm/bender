@@ -41,6 +41,15 @@ export interface RoleExecutionOptions {
   logger?: Logger;
 }
 
+export interface RoleDetailedResult {
+  text: string;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
+}
+
 function buildSystemPrompt(
   systemPrompt: string,
   systemContext: string,
@@ -121,6 +130,20 @@ export async function runRole(
   userMessage: string,
   options?: RoleExecutionOptions,
 ): Promise<string> {
+  const detailed = await runRoleDetailed(model, roleName, systemContext, userMessage, options);
+  return detailed.text;
+}
+
+/**
+ * Run a role and return text + token usage.
+ */
+export async function runRoleDetailed(
+  model: LanguageModel,
+  roleName: string,
+  systemContext: string,
+  userMessage: string,
+  options?: RoleExecutionOptions,
+): Promise<RoleDetailedResult> {
   const logger = options?.logger ?? createNullLogger(roleName);
   const start = Date.now();
   const systemPrompt = await loadPrompt(roleName);
@@ -143,7 +166,14 @@ export async function runRole(
     outputChars: result.text.length,
   });
 
-  return result.text;
+  return {
+    text: result.text,
+    usage: {
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      totalTokens: (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0),
+    },
+  };
 }
 
 /**

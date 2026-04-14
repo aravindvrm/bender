@@ -11,6 +11,7 @@ import { BriefView } from "./pages/BriefView";
 import { GitView } from "./pages/ChangesView";
 import { SettingsView } from "./pages/SettingsView";
 import { AgentsView } from "./pages/AgentsView";
+import { EvalsView } from "./pages/EvalsView";
 
 interface PlanRunSubmission {
   feature: string;
@@ -25,6 +26,7 @@ const VIEW_LABELS: Record<View, string> = {
   plan: "Tasks",
   architecture: "Architecture",
   brief: "Overview",
+  evals: "Evals",
   git: "Git",
   agents: "Agents",
   settings: "Settings",
@@ -156,6 +158,13 @@ export function App() {
             <div className="p-6">
               {activeView === "brief" && state && (
                 <BriefView state={state} />
+              )}
+              {activeView === "evals" && state && (
+                <EvalsView
+                  state={state}
+                  onNewTask={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
+                  runOperation={(url, body, options) => op.startOperation(url, body, options)}
+                />
               )}
               {activeView === "plan" && state && (
                 <PlanView

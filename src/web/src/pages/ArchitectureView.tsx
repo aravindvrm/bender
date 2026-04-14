@@ -748,19 +748,18 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
     { id: "security", label: securityIssueCount > 0 ? `Security (${securityIssueCount})` : "Security", available: true },
     { id: "tests", label: testsIssueCount > 0 ? `Tests (${testsIssueCount})` : "Tests", available: true },
   ];
+  const availableTabs = tabs.filter((t) => t.available);
 
   return (
     <div className="max-w-4xl mx-auto">
       {/* Tabs */}
-      <div className="flex items-center gap-1 mb-6 border-b border-zinc-800">
-        {tabs.filter((t) => t.available).map((tab) => (
+      <div className="inline-flex border border-zinc-800 overflow-hidden mb-6">
+        {availableTabs.map((tab, idx) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2.5 text-sm transition-colors border-b-2 -mb-px ${
-              activeTab === tab.id
-                ? "border-zinc-100 text-zinc-100"
-                : "border-transparent text-zinc-500 hover:text-zinc-300"
+            className={`px-4 py-2 text-xs ${activeTab === tab.id ? "bg-zinc-800 text-zinc-100" : "bg-zinc-900 text-zinc-400 hover:text-zinc-200"} ${
+              idx > 0 ? "border-l border-zinc-800" : ""
             }`}
           >
             {tab.label}
