@@ -24,16 +24,6 @@ function parseGeneratedTaskIds(planMarkdown: string): number[] {
   return matches.map((m) => parseInt(m[1], 10)).filter((n) => Number.isFinite(n));
 }
 
-function isOfficeHoursPlannerAgent(agent: {
-  id: string;
-  baseRole: string;
-  systemPromptAddition?: string;
-}): boolean {
-  if (agent.baseRole !== "planner") return false;
-  if (agent.id === "default-office-hours") return true;
-  return (agent.systemPromptAddition ?? "").toLowerCase().includes("office-hours");
-}
-
 type ArchitectureGate = "PASS" | "SIMPLIFY" | "VALIDATE" | "BLOCKED";
 
 function parseArchitectureGate(architectureUpdate: string): ArchitectureGate | null {
@@ -107,7 +97,7 @@ export async function planCommand(
     ? `\n\nRole perspective: prioritize outcomes and risks from the ${requestedRole} role.`
     : "";
   const roleGuidedFeatureDescription = `${featureDescription}${roleGuidance}`.trim();
-  const officeHoursEnabled = isOfficeHoursPlannerAgent(plannerAgent)
+  const officeHoursEnabled = requestedRole === "planner"
     && officeHoursMode === "pressure-test";
 
   // Step 1 + 3 use planner runtime
@@ -348,7 +338,7 @@ export async function planCommand(
     // Write session log
     await state.writeSession(
       "plan",
-      `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nRole: ${requestedRole}\n\nOffice Hours mode: ${isOfficeHoursPlannerAgent(plannerAgent) ? officeHoursMode : "n/a"}\n${officeHoursEnabled ? `Office Hours verdict: ${officeHoursVerdict ?? "unknown"}\n\n` : ""}${officeHoursOutput ? `## Office Hours\n\n${officeHoursOutput}\n\n` : ""}Status: completed`,
+      `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nRole: ${requestedRole}\n\nOffice Hours mode: ${requestedRole === "planner" ? officeHoursMode : "n/a"}\n${officeHoursEnabled ? `Office Hours verdict: ${officeHoursVerdict ?? "unknown"}\n\n` : ""}${officeHoursOutput ? `## Office Hours\n\n${officeHoursOutput}\n\n` : ""}Status: completed`,
     );
 
     logger.info("Plan complete");
