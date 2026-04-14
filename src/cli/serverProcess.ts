@@ -86,12 +86,24 @@ export async function findPidsListeningOnPort(port: number): Promise<number[]> {
     const child = spawn("lsof", ["-ti", `tcp:${port}`], {
       stdio: ["ignore", "pipe", "ignore"],
     });
+    const timeout = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+      resolve([]);
+    }, 1500);
     let stdout = "";
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
     });
-    child.on("error", () => resolve([]));
+    child.on("error", () => {
+      clearTimeout(timeout);
+      resolve([]);
+    });
     child.on("close", (code) => {
+      clearTimeout(timeout);
       if (code !== 0 && stdout.trim().length === 0) {
         resolve([]);
         return;
