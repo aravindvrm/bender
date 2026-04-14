@@ -4,6 +4,7 @@ import { createModelSet, getModelForTier } from "../llm/provider.js";
 import { generateClarifyingQuestions, generateBrief } from "../roles/clarifier.js";
 import { updateArchitecture } from "../roles/architect.js";
 import { generateFeaturePlan } from "../roles/planner.js";
+import { runOfficeHours, type OfficeHoursVerdict } from "../roles/office-hours.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getEffectiveAgentForRole } from "../state/agents.js";
@@ -20,6 +21,24 @@ export interface PlanCommandOptions {
 function parseGeneratedTaskIds(planMarkdown: string): number[] {
   const matches = [...planMarkdown.matchAll(/###\s*Task\s*(\d+):/g)];
   return matches.map((m) => parseInt(m[1], 10)).filter((n) => Number.isFinite(n));
+}
+
+function isOfficeHoursPlannerAgent(agent: {
+  id: string;
+  baseRole: string;
+  systemPromptAddition?: string;
+}): boolean {
+  if (agent.baseRole !== "planner") return false;
+  if (agent.id === "default-office-hours") return true;
+  return (agent.systemPromptAddition ?? "").toLowerCase().includes("office-hours");
+}
+
+type ArchitectureGate = "PASS" | "SIMPLIFY" | "VALIDATE" | "BLOCKED";
+
+function parseArchitectureGate(architectureUpdate: string): ArchitectureGate | null {
+  const m = architectureUpdate.match(/GATE:\s*(PASS|SIMPLIFY|VALIDATE|BLOCKED)/i);
+  if (!m) return null;
+  return m[1].toUpperCase() as ArchitectureGate;
 }
 
 export async function planCommand(
@@ -85,6 +104,7 @@ export async function planCommand(
     ? `\n\nRole perspective: prioritize outcomes and risks from the ${requestedRole} role.`
     : "";
   const roleGuidedFeatureDescription = `${featureDescription}${roleGuidance}`.trim();
+  const officeHoursEnabled = isOfficeHoursPlannerAgent(plannerAgent);
 
   // Step 1 + 3 use planner runtime
   let plannerRuntime: RoleRuntime;
@@ -148,6 +168,46 @@ export async function planCommand(
       adapter.info("Clarification step: skipped (explicit toggle off).");
     }
 
+    let officeHoursVerdict: OfficeHoursVerdict | null = null;
+    let officeHoursOutput: string | null = null;
+    if (officeHoursEnabled) {
+      adapter.subheader("Step 1.5: Office Hours Pressure Test");
+      adapter.info("Running office-hours pressure test before architecture and task planning...\n");
+      const officeHoursModel = getModelForTier(models, plannerAgent.modelTier);
+      const result = await runOfficeHours(
+        officeHoursModel,
+        fullDescription,
+        existingContext.brief,
+        existingContext.architecture,
+        adapter.streamWriter(),
+        plannerRuntime,
+      );
+      officeHoursVerdict = result.verdict;
+      officeHoursOutput = result.output;
+
+      if (officeHoursVerdict) {
+        adapter.info(`Office Hours verdict: ${officeHoursVerdict}`);
+      } else {
+        adapter.warn("Office Hours verdict missing. Continuing with planner flow.");
+      }
+
+      if (officeHoursVerdict === "KILL" || officeHoursVerdict === "DEFER") {
+        const continueAfterGate = await adapter.confirm(
+          `Office Hours returned ${officeHoursVerdict}. Continue to architecture and task planning anyway?`,
+          false,
+        );
+        if (!continueAfterGate) {
+          adapter.info("Planning halted based on Office Hours verdict.");
+          await state.writeSession(
+            "plan",
+            `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nRole: ${requestedRole}\n\nOffice Hours verdict: ${officeHoursVerdict}\n\nStatus: halted`,
+          );
+          adapter.cleanup();
+          return;
+        }
+      }
+    }
+
     // Step 2: Architecture update
     adapter.subheader("Step 2: Architecture Impact");
     adapter.info("Analyzing architecture impact...\n");
@@ -196,6 +256,32 @@ export async function planCommand(
     if (schemaMigration) {
       adapter.warn("Schema migration required:");
       adapter.info(schemaMigration);
+    }
+
+    const architectureGate = parseArchitectureGate(architectureUpdate);
+    if (architectureGate) {
+      adapter.info(`Architecture gate: ${architectureGate}`);
+    }
+    if (architectureGate === "BLOCKED") {
+      const continueBlocked = await adapter.confirm(
+        "Architecture gate is BLOCKED. Continue anyway?",
+        false,
+      );
+      if (!continueBlocked) {
+        adapter.info("Planning halted based on architecture gate.");
+        adapter.cleanup();
+        return;
+      }
+    } else if (architectureGate === "SIMPLIFY" || architectureGate === "VALIDATE") {
+      const continueRisk = await adapter.confirm(
+        `Architecture gate is ${architectureGate}. Continue to task planning with this risk?`,
+        false,
+      );
+      if (!continueRisk) {
+        adapter.info("Planning halted based on architecture gate.");
+        adapter.cleanup();
+        return;
+      }
     }
 
     const archApproved = requireArchitectureApproval
@@ -258,7 +344,7 @@ export async function planCommand(
     // Write session log
     await state.writeSession(
       "plan",
-      `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nRole: ${requestedRole}\n\nStatus: completed`,
+      `# Plan Session\n\nDate: ${new Date().toISOString()}\n\nFeature: ${featureDescription}\n\nRole: ${requestedRole}\n\nOffice Hours mode: ${officeHoursEnabled ? "enabled" : "disabled"}\n${officeHoursEnabled ? `Office Hours verdict: ${officeHoursVerdict ?? "unknown"}\n\n` : ""}${officeHoursOutput ? `## Office Hours\n\n${officeHoursOutput}\n\n` : ""}Status: completed`,
     );
 
     logger.info("Plan complete");

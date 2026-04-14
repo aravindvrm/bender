@@ -61,14 +61,20 @@ function parseReviewResult(output: string): ReviewResult {
     : "APPROVED";
 
   const issues: ReviewIssue[] = [];
-  const issuePattern = /\*\*\[(critical|major|minor)\]\*\*\s*(?:\[([^\]]*)\])?\s*[—–-]\s*(.*?)(?:\n\s*\*\*Fix\*\*:\s*(.*?))?(?=\n\d+\.|$)/gs;
+  const issuesSection = output.match(/###?\s*Issues Found\s*\n([\s\S]*?)(?=\n###|$)/i)?.[1] ?? output;
+  const issuePattern = /(?:^|\n)\d+\.\s+\*\*\[(?:severity:\s*)?(critical|major|minor)\]\*\*\s*(?:\[([^\]]*)\])?\s*[—–-]\s*([\s\S]*?)(?=(?:\n\d+\.\s+\*\*)|\n###|$)/gi;
   let match: RegExpExecArray | null;
-  while ((match = issuePattern.exec(output)) !== null) {
+  while ((match = issuePattern.exec(issuesSection)) !== null) {
+    const issueBlock = match[3].trim();
+    const fixMatch = issueBlock.match(/\*\*Fix\*\*:\s*([^\n]+)/i);
+    const description = issueBlock
+      .replace(/\*\*Fix\*\*:[\s\S]*$/i, "")
+      .trim();
     issues.push({
       severity: match[1] as "critical" | "major" | "minor",
       file: match[2]?.trim() ?? "",
-      description: match[3].trim(),
-      fix: match[4]?.trim() ?? "",
+      description,
+      fix: fixMatch?.[1]?.trim() ?? "",
     });
   }
 

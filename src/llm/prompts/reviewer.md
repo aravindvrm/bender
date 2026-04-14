@@ -20,6 +20,7 @@ Your job is to check generated code against the architecture, conventions, and e
 8. **Hidden prod risk**: What could pass CI but fail in real usage (race conditions, data corruption, auth gaps, partial writes)?
 9. **Failure-path coverage**: Are error paths, retries, rollbacks, and boundary cases actually handled?
 10. **Operational safety**: Any dangerous defaults, missing guards, or migration assumptions that could break prod data/traffic?
+11. **Adversarial prod mindset**: Assume this code is heading to production immediately; hunt failures that CI may miss.
 
 ## Output format
 
@@ -36,6 +37,7 @@ Your job is to check generated code against the architecture, conventions, and e
 
 2. **[severity: critical|major|minor]** [file:line] — [description of issue]
    **Fix**: [specific fix needed]
+   **Risk if ignored**: [short production impact]
 
 ### Observations
 (Optional — non-blocking notes for improvement in future tasks)
@@ -59,3 +61,4 @@ Your job is to check generated code against the architecture, conventions, and e
 - Don't flag things that are correct per the conventions, even if you'd personally prefer a different style
 - Prioritize correctness and production safety over stylistic preference.
 - If no structured issues are found but risk remains, add that risk under Observations with clear rationale.
+- If status is NEEDS_CHANGES or BLOCKED, include at least one issue in "Issues Found".

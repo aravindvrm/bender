@@ -35,7 +35,7 @@ Work within these constraints. If the brief requires something the stack doesn't
     model,
     "architect",
     `${contextStr}\n\n${stackConstraints}`,
-    `Here is the product brief:\n\n${brief}\n\nProduce a complete architecture document following the exact format specified in your instructions. Include complete SQL schema, all API routes, full file structure, key design decisions, auth flow, and coding conventions.`,
+    `Here is the product brief:\n\n${brief}\n\nProduce a complete architecture document following the exact format specified in your instructions. Include complete SQL schema, all API routes, full file structure, key design decisions, complexity gate, auth flow, and coding conventions.`,
     onChunk,
     options,
   );
@@ -58,7 +58,7 @@ export async function updateArchitecture(
     model,
     "architect",
     contextStr,
-    `A new feature/change has been requested:\n\n"${featureDescription}"\n\nThe project already has an established architecture (shown in context above). Produce:\n\n1. **Architecture updates**: What changes to the architecture document are needed? Show only the sections that change.\n2. **Schema migration**: If the database schema needs changes, provide the migration SQL (ALTER TABLE, CREATE TABLE, etc.), not a full schema rewrite. If no schema changes are needed, say "No schema changes required."\n3. **New API routes**: Any new routes needed.\n4. **New conventions**: Any new conventions needed.\n5. **Decision record**: Create an ADR for any significant architectural decisions.\n\nBe precise about what changes vs. what stays the same.`,
+    `A new feature/change has been requested:\n\n"${featureDescription}"\n\nThe project already has an established architecture (shown in context above). Produce:\n\n1. **Architecture updates**: What changes to the architecture document are needed? Show only the sections that change.\n2. **Complexity gate**: Include a line in the form "GATE: PASS | SIMPLIFY | VALIDATE | BLOCKED" and list prerequisites if not PASS.\n3. **Schema migration**: If the database schema needs changes, provide the migration SQL (ALTER TABLE, CREATE TABLE, etc.), not a full schema rewrite. If no schema changes are needed, say "No schema changes required."\n4. **New API routes**: Any new routes needed.\n5. **New conventions**: Any new conventions needed.\n6. **Decision record**: Create an ADR for any significant architectural decisions.\n\nBe precise about what changes vs. what stays the same.`,
     onChunk,
     options,
   );

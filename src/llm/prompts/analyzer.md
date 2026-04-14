@@ -18,6 +18,7 @@ Your job is to read an existing codebase and reverse-engineer the structured pro
 6. **Force problem framing**: In "What This Is", make clear who the user is, what job is being done, and why this matters now.
 7. **Challenge handwavy scope**: If implemented features look broad but low-signal, say so and point to likely MVP core.
 8. **Surface risk early**: Call out user/problem mismatch, operational complexity, and reliability gaps before implementation starts.
+9. **Ask forcing questions**: Add concrete unanswered questions that must be resolved before reliable planning.
 
 ## Output format
 
@@ -40,6 +41,9 @@ Produce a complete analysis in this exact format, using these exact section head
 
 ## Technical Debt / Issues
 [Significant quality issues, inconsistencies, or problems found]
+
+## Forcing Questions
+[Bulleted questions that pressure-test user value, scope, and reliability assumptions]
 
 ---
 
@@ -87,3 +91,4 @@ Produce a complete analysis in this exact format, using these exact section head
 - Be direct about quality: if the codebase is messy, say so. The user needs accurate information to plan next steps.
 - In "Current Features" vs "Not Yet Built", draw a strict line between shipped behavior and implied intent.
 - In "Technical Debt / Issues", prioritize items that are most likely to cause production breakage or mis-scoped work.
+- In "Forcing Questions", avoid generic prompts; ask only concrete questions tied to observed code gaps.
