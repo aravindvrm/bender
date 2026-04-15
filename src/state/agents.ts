@@ -6,6 +6,7 @@ import type { ModelTier } from "./config.js";
 import type { CapabilityPolicy } from "./capabilities.js";
 import { normalizeCapabilityPolicy } from "./capabilities.js";
 import { getBenderHomeDir, getBenderHomePath } from "./paths.js";
+import { getRoleDefaultPinnedSkills } from "./role-skill-defaults.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -41,7 +42,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     name: "Discovery",
     baseRole: "analyzer",
     modelTier: "strong",
-    pinnedSkills: ["security-best-practices", "security-threat-model"],
+    pinnedSkills: getRoleDefaultPinnedSkills("analyzer"),
     mcpServerIds: ["github", "neon"],
     capabilityPolicy: {
       allow: [
@@ -59,7 +60,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     name: "Eng Review",
     baseRole: "architect",
     modelTier: "strong",
-    pinnedSkills: ["security-best-practices"],
+    pinnedSkills: getRoleDefaultPinnedSkills("architect"),
     mcpServerIds: ["github", "figma", "neon", "vercel"],
     capabilityPolicy: {
       allow: [
@@ -79,7 +80,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     name: "Execution Plan",
     baseRole: "planner",
     modelTier: "default",
-    pinnedSkills: [],
+    pinnedSkills: getRoleDefaultPinnedSkills("planner"),
     mcpServerIds: ["github"],
     capabilityPolicy: {
       allow: ["connector.github.use", "github.repo.read", "github.issue.read", "github.pr.read"],
@@ -91,7 +92,10 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     name: "Office Hours",
     baseRole: "planner",
     modelTier: "strong",
-    pinnedSkills: [],
+    pinnedSkills: [
+      ...getRoleDefaultPinnedSkills("planner"),
+      "notion-research-documentation",
+    ],
     mcpServerIds: ["github"],
     capabilityPolicy: {
       allow: ["connector.github.use", "github.repo.read", "github.issue.read", "github.pr.read"],
@@ -109,7 +113,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     name: "Implement",
     baseRole: "implementer",
     modelTier: "default",
-    pinnedSkills: [],
+    pinnedSkills: getRoleDefaultPinnedSkills("implementer"),
     mcpServerIds: ["github", "neon", "vercel"],
     capabilityPolicy: {
       allow: [
@@ -129,7 +133,7 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
     name: "Review",
     baseRole: "reviewer",
     modelTier: "default",
-    pinnedSkills: ["security-best-practices", "security-ownership-map"],
+    pinnedSkills: getRoleDefaultPinnedSkills("reviewer"),
     mcpServerIds: ["github"],
     capabilityPolicy: {
       allow: [
