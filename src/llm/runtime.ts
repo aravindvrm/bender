@@ -10,6 +10,7 @@ import type { BaseRole } from "../state/agents.js";
 import { BUILTIN_AGENTS } from "../state/agents.js";
 import type { CapabilityPolicy } from "../state/capabilities.js";
 import { resolveConnectorAccess } from "../state/capabilities.js";
+import { getRoleRuntimeBaselineSkills } from "../state/role-skill-defaults.js";
 import {
   buildProjectContextQuery,
   TIER2_MAX_BYTES,
@@ -249,14 +250,26 @@ async function buildRegistrySkillsContext(
   architectureText?: string,
   logger?: RuntimeLogAdapter,
 ): Promise<{ text: string | null; fileCount: number }> {
+  const dedupe = (values: string[]): string[] => [...new Set(values.map((value) => value.trim()).filter(Boolean))];
   const builtinPinned = BUILTIN_AGENTS.find((a) => a.baseRole === roleOpts.role)?.pinnedSkills ?? [];
-  const pinnedSkills = roleOpts.pinnedSkills ?? builtinPinned;
+  const pinnedSkills = dedupe(roleOpts.pinnedSkills ?? builtinPinned);
+  const roleRuntimeBaseline = dedupe(getRoleRuntimeBaselineSkills(roleOpts.role));
   const hasPinnedSkills = pinnedSkills.length > 0;
+  const hasRoleBaseline = roleRuntimeBaseline.length > 0;
 
-  if (!config.skills?.enabled && !hasPinnedSkills) return { text: null, fileCount: 0 };
+  if (!config.skills?.enabled && !hasPinnedSkills && !hasRoleBaseline) return { text: null, fileCount: 0 };
 
-  const registry = await fetchSkillPackages({ projectRoot });
-  const configuredSkillNames = new Set(config.skills?.enabledSkills ?? []);
+  let registry;
+  try {
+    registry = await fetchSkillPackages({ projectRoot });
+  } catch (err) {
+    logger?.warn?.(`Could not fetch skill registry: ${(err as Error).message}`);
+    return { text: null, fileCount: 0 };
+  }
+  const configuredSkillNames = new Set([
+    ...(config.skills?.enabledSkills ?? []),
+    ...roleRuntimeBaseline,
+  ]);
   const pinnedSet = new Set(pinnedSkills);
   const enabledPkgs = registry.packages.filter((pkg) => (
     pinnedSet.has(pkg.name)

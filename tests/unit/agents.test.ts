@@ -34,6 +34,7 @@ describe("state/agents", () => {
     expect(builtinIds.has("default-implementer")).toBe(true);
     expect(builtinIds.has("default-reviewer")).toBe(true);
     expect(builtins.every((a) => Array.isArray(a.pinnedSkills))).toBe(true);
+    expect(builtins.every((a) => a.pinnedSkills.length > 0)).toBe(true);
     expect(builtins.every((a) => Array.isArray(a.mcpServerIds))).toBe(true);
   });
 
