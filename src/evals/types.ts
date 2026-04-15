@@ -22,8 +22,35 @@ export interface EvalTask {
   id: string;
   name: string;
   prompt: string;
+  assertions?: EvalTaskAssertion[];
   createdAt: number;
   updatedAt: number;
+}
+
+export interface EvalTaskAssertion {
+  id: string;
+  type: "javascript";
+  source: string;
+  metric?: string;
+  enabled?: boolean;
+}
+
+export interface EvalAssertionResult {
+  id: string;
+  type: string;
+  metric?: string;
+  pass: boolean;
+  score?: number | null;
+  reason?: string;
+  raw?: Record<string, unknown> | null;
+}
+
+export interface EvalAssertionSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  score: number | null;
+  reason?: string;
 }
 
 export interface EvalConfig {
@@ -69,6 +96,9 @@ export interface EvalTaskRun {
   estimatedCostUsd?: number | null;
   error?: string;
   trace: Record<string, unknown>;
+  assertionSummary?: EvalAssertionSummary;
+  assertions?: EvalAssertionResult[];
+  promptfoo?: Record<string, unknown>;
   startedAt: number;
   completedAt: number;
   score: EvalScore;

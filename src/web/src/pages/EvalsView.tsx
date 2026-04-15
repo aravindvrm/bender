@@ -69,6 +69,27 @@ interface EvalTaskRun {
   estimatedCostUsd?: number | null;
   error?: string;
   trace: Record<string, unknown>;
+  assertionSummary?: EvalAssertionSummary;
+  assertions?: EvalAssertionResult[];
+  promptfoo?: Record<string, unknown>;
+}
+
+interface EvalAssertionSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  score: number | null;
+  reason?: string;
+}
+
+interface EvalAssertionResult {
+  id: string;
+  type: string;
+  metric?: string;
+  pass: boolean;
+  score?: number | null;
+  reason?: string;
+  raw?: Record<string, unknown> | null;
 }
 
 interface EvalCompareRunSummary {
@@ -871,15 +892,50 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                             <span>Duration: {fmtMs(run.durationMs)}</span>
                             <span>Tokens: {fmtTokens(run.usage)}</span>
                             <span>Cost: {fmtCost(run.estimatedCostUsd)}</span>
+                            <span>
+                              Assertions: {run.assertionSummary ? `${run.assertionSummary.passed}/${run.assertionSummary.total}` : "—"}
+                            </span>
                           </div>
                         </button>
                       ))}
                     </div>
                     {selectedCompareDetail && (
                       <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3 space-y-3">
+                        <div className="grid gap-2 md:grid-cols-2 text-[11px] text-zinc-400">
+                          <span>
+                            Assertion score: {typeof selectedCompareDetail.assertionSummary?.score === "number" ? selectedCompareDetail.assertionSummary.score.toFixed(3) : "—"}
+                          </span>
+                          <span>
+                            Assertion pass: {selectedCompareDetail.assertionSummary ? `${selectedCompareDetail.assertionSummary.passed}/${selectedCompareDetail.assertionSummary.total}` : "—"}
+                          </span>
+                        </div>
+                        {selectedCompareDetail.assertions && selectedCompareDetail.assertions.length > 0 ? (
+                          <div className="space-y-2">
+                            <p className="text-[11px] uppercase tracking-wide text-zinc-500">Assertions</p>
+                            <div className="space-y-1">
+                              {selectedCompareDetail.assertions.map((assertion) => (
+                                <div key={assertion.id} className="rounded border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] text-zinc-300">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span>{assertion.metric ?? assertion.type}</span>
+                                    <span className={assertion.pass ? "text-emerald-400" : "text-rose-400"}>
+                                      {assertion.pass ? "pass" : "fail"}
+                                    </span>
+                                  </div>
+                                  {assertion.reason ? <div className="mt-1 text-zinc-400">{assertion.reason}</div> : null}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                         <pre className="text-xs text-zinc-300 whitespace-pre-wrap break-words max-h-64 overflow-auto border border-zinc-800 rounded-md p-3 bg-zinc-950">
                           {selectedCompareDetail.output || selectedCompareDetail.error || "No output."}
                         </pre>
+                        <details>
+                          <summary className="text-xs text-zinc-500 cursor-pointer">Promptfoo Details</summary>
+                          <pre className="text-[11px] text-zinc-400 whitespace-pre-wrap break-words mt-2 border border-zinc-800 rounded-md p-3 bg-zinc-950 max-h-56 overflow-auto">
+                            {JSON.stringify(selectedCompareDetail.promptfoo ?? {}, null, 2)}
+                          </pre>
+                        </details>
                         <details>
                           <summary className="text-xs text-zinc-500 cursor-pointer">Trace</summary>
                           <pre className="text-[11px] text-zinc-400 whitespace-pre-wrap break-words mt-2 border border-zinc-800 rounded-md p-3 bg-zinc-950 max-h-56 overflow-auto">

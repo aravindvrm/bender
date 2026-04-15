@@ -73,6 +73,9 @@ All project state is stored locally under `.bender/`.
 - `bender status -d <dir>`  
   Show current project status.
 
+- `bender eval-ci --suite <suite-id> -d <dir>`  
+  Run a saved eval suite as a CI gate (Promptfoo-backed), with optional thresholds for success rate, latency, and cost.
+
 ## Dashboard
 
 The local dashboard is organized around project execution:
@@ -131,6 +134,7 @@ Bender stores project state under `.bender/`, including:
 
 ```text
 .bender/
+  bender.db
   brief.md
   architecture.md
   conventions.md
@@ -142,6 +146,10 @@ Bender stores project state under `.bender/`, including:
   api-contracts/
   sessions/
 ```
+
+`bender.db` is the embedded local SQLite store used for project-scoped state/query persistence.
+Global/home-scoped state is stored in `~/.bender/bender-home.db`.
+No external server (Docker/Postgres) is required.
 
 ## Installation
 
@@ -182,3 +190,18 @@ bender bend
 - `npm run test:unit` — unit tests
 - `npm run test:integration` — CLI integration smoke tests
 - `npm run test:e2e:smoke` — end-to-end LLM smoke test (requires API key)
+
+## Eval CI Gate
+
+Use saved eval suites as repeatable quality gates in CI:
+
+```bash
+bender eval-ci \
+  --suite <suite-id> \
+  --min-success-rate 0.9 \
+  --max-median-latency-ms 2000 \
+  --max-average-cost-usd 0.01 \
+  -d .
+```
+
+This command exits non-zero when thresholds are violated.

@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getBenderDir } from "./config.js";
+import { LocalProjectDb } from "./local-db.js";
 import type {
   EvalCompareRunSummary,
   EvalConfig,
@@ -15,6 +16,15 @@ interface JsonObject {
   [key: string]: unknown;
 }
 
+const NS_TASK = "eval.task";
+const NS_CONFIG = "eval.config";
+const NS_SUITE = "eval.suite";
+const NS_COMPARE_RUN = "eval.compare_run";
+const NS_TASK_RUN = "eval.task_run";
+const NS_SUITE_RUN = "eval.suite_run";
+
+const LEGACY_IMPORT_KEY = "evals:legacy-imported:v1";
+
 async function readJsonOr<T>(path: string, fallback: T): Promise<T> {
   if (!existsSync(path)) return fallback;
   try {
@@ -25,10 +35,6 @@ async function readJsonOr<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
-async function writeJson(path: string, value: unknown): Promise<void> {
-  await writeFile(path, JSON.stringify(value, null, 2), "utf-8");
-}
-
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
 }
@@ -37,197 +43,272 @@ function asRecord(value: unknown): JsonObject {
   return value && typeof value === "object" ? value as JsonObject : {};
 }
 
+function normalizeLimit(limit = 50): number {
+  return Math.max(1, Math.min(10_000, Math.floor(limit)));
+}
+
 export class EvalsStore {
-  private readonly baseDir: string;
-  private readonly runsDir: string;
-  private readonly taskRunsDir: string;
-  private readonly suiteRunsDir: string;
-  private readonly tasksPath: string;
-  private readonly configsPath: string;
-  private readonly suitesPath: string;
-  private readonly compareIndexPath: string;
-  private readonly suiteIndexPath: string;
+  private readonly db: LocalProjectDb;
+  private readonly legacyBaseDir: string;
+  private readonly legacyRunsDir: string;
+  private readonly legacyTaskRunsDir: string;
+  private readonly legacySuiteRunsDir: string;
+  private readonly legacyTasksPath: string;
+  private readonly legacyConfigsPath: string;
+  private readonly legacySuitesPath: string;
+  private readonly legacyCompareIndexPath: string;
+  private readonly legacySuiteIndexPath: string;
 
   constructor(projectRoot: string) {
-    this.baseDir = join(getBenderDir(projectRoot), "evals");
-    this.runsDir = join(this.baseDir, "runs");
-    this.taskRunsDir = join(this.runsDir, "tasks");
-    this.suiteRunsDir = join(this.runsDir, "suites");
-    this.tasksPath = join(this.baseDir, "tasks.json");
-    this.configsPath = join(this.baseDir, "configs.json");
-    this.suitesPath = join(this.baseDir, "suites.json");
-    this.compareIndexPath = join(this.runsDir, "compare-index.json");
-    this.suiteIndexPath = join(this.runsDir, "suite-index.json");
+    this.db = LocalProjectDb.forProject(projectRoot);
+    this.legacyBaseDir = join(getBenderDir(projectRoot), "evals");
+    this.legacyRunsDir = join(this.legacyBaseDir, "runs");
+    this.legacyTaskRunsDir = join(this.legacyRunsDir, "tasks");
+    this.legacySuiteRunsDir = join(this.legacyRunsDir, "suites");
+    this.legacyTasksPath = join(this.legacyBaseDir, "tasks.json");
+    this.legacyConfigsPath = join(this.legacyBaseDir, "configs.json");
+    this.legacySuitesPath = join(this.legacyBaseDir, "suites.json");
+    this.legacyCompareIndexPath = join(this.legacyRunsDir, "compare-index.json");
+    this.legacySuiteIndexPath = join(this.legacyRunsDir, "suite-index.json");
   }
 
   async init(): Promise<void> {
-    const dirs = [this.baseDir, this.runsDir, this.taskRunsDir, this.suiteRunsDir];
-    for (const dir of dirs) {
-      if (!existsSync(dir)) await mkdir(dir, { recursive: true });
-    }
+    await this.db.init();
+    const imported = this.db.getKv(LEGACY_IMPORT_KEY);
+    if (imported === "1") return;
+    await this.importLegacyFilesIfPresent();
+    this.db.setKv(LEGACY_IMPORT_KEY, "1");
   }
 
   // ── Tasks ──────────────────────────────────────────────────────────────────
 
   async listTasks(): Promise<EvalTask[]> {
-    const parsed = await readJsonOr<unknown>(this.tasksPath, []);
-    return asArray<EvalTask>(parsed)
-      .filter((t) => typeof t?.id === "string")
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return this.db.listRecords<EvalTask>(NS_TASK, { limit: 10_000, orderBy: "updated_at", desc: true })
+      .filter((task) => typeof task?.id === "string");
   }
 
   async getTask(taskId: string): Promise<EvalTask | null> {
-    const tasks = await this.listTasks();
-    return tasks.find((t) => t.id === taskId) ?? null;
+    return this.db.getRecord<EvalTask>(NS_TASK, taskId);
   }
 
   async upsertTask(task: EvalTask): Promise<void> {
-    const tasks = await this.listTasks();
-    const next = [...tasks.filter((t) => t.id !== task.id), task];
-    await writeJson(this.tasksPath, next.sort((a, b) => b.updatedAt - a.updatedAt));
+    this.db.upsertRecord(NS_TASK, task.id, task, {
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+    });
   }
 
   async deleteTask(taskId: string): Promise<void> {
-    const tasks = await this.listTasks();
-    await writeJson(this.tasksPath, tasks.filter((t) => t.id !== taskId));
+    this.db.deleteRecord(NS_TASK, taskId);
   }
 
   // ── Configs ────────────────────────────────────────────────────────────────
 
   async listConfigs(): Promise<EvalConfig[]> {
-    const parsed = await readJsonOr<unknown>(this.configsPath, []);
-    return asArray<EvalConfig>(parsed)
-      .filter((c) => typeof c?.id === "string")
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return this.db.listRecords<EvalConfig>(NS_CONFIG, { limit: 10_000, orderBy: "updated_at", desc: true })
+      .filter((config) => typeof config?.id === "string");
   }
 
   async getConfig(configId: string): Promise<EvalConfig | null> {
-    const configs = await this.listConfigs();
-    return configs.find((c) => c.id === configId) ?? null;
+    return this.db.getRecord<EvalConfig>(NS_CONFIG, configId);
   }
 
   async upsertConfig(config: EvalConfig): Promise<void> {
-    const configs = await this.listConfigs();
-    const next = [...configs.filter((c) => c.id !== config.id), config];
-    await writeJson(this.configsPath, next.sort((a, b) => b.updatedAt - a.updatedAt));
+    this.db.upsertRecord(NS_CONFIG, config.id, config, {
+      createdAt: config.createdAt,
+      updatedAt: config.updatedAt,
+    });
   }
 
   async deleteConfig(configId: string): Promise<void> {
-    const configs = await this.listConfigs();
-    await writeJson(this.configsPath, configs.filter((c) => c.id !== configId));
+    this.db.deleteRecord(NS_CONFIG, configId);
   }
 
   // ── Suites ─────────────────────────────────────────────────────────────────
 
   async listSuites(): Promise<EvalSuite[]> {
-    const parsed = await readJsonOr<unknown>(this.suitesPath, []);
-    return asArray<EvalSuite>(parsed)
-      .filter((s) => typeof s?.id === "string")
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return this.db.listRecords<EvalSuite>(NS_SUITE, { limit: 10_000, orderBy: "updated_at", desc: true })
+      .filter((suite) => typeof suite?.id === "string");
   }
 
   async getSuite(suiteId: string): Promise<EvalSuite | null> {
-    const suites = await this.listSuites();
-    return suites.find((s) => s.id === suiteId) ?? null;
+    return this.db.getRecord<EvalSuite>(NS_SUITE, suiteId);
   }
 
   async upsertSuite(suite: EvalSuite): Promise<void> {
-    const suites = await this.listSuites();
-    const next = [...suites.filter((s) => s.id !== suite.id), suite];
-    await writeJson(this.suitesPath, next.sort((a, b) => b.updatedAt - a.updatedAt));
+    this.db.upsertRecord(NS_SUITE, suite.id, suite, {
+      createdAt: suite.createdAt,
+      updatedAt: suite.updatedAt,
+    });
   }
 
   async deleteSuite(suiteId: string): Promise<void> {
-    const suites = await this.listSuites();
-    await writeJson(this.suitesPath, suites.filter((s) => s.id !== suiteId));
+    this.db.deleteRecord(NS_SUITE, suiteId);
   }
 
   // ── Compare runs ───────────────────────────────────────────────────────────
 
   async listCompareRuns(limit = 50): Promise<EvalCompareRunSummary[]> {
-    const parsed = await readJsonOr<unknown>(this.compareIndexPath, []);
-    const all = asArray<EvalCompareRunSummary>(parsed)
-      .filter((r) => typeof r?.id === "string")
-      .sort((a, b) => b.createdAt - a.createdAt);
-    return all.slice(0, Math.max(1, limit));
+    const capped = normalizeLimit(limit);
+    return this.db.listRecords<EvalCompareRunSummary>(NS_COMPARE_RUN, {
+      limit: capped,
+      orderBy: "created_at",
+      desc: true,
+    }).filter((run) => typeof run?.id === "string")
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, capped);
   }
 
   async getCompareRunSummary(compareRunId: string): Promise<EvalCompareRunSummary | null> {
-    const runs = await this.listCompareRuns(500);
-    return runs.find((r) => r.id === compareRunId) ?? null;
+    return this.db.getRecord<EvalCompareRunSummary>(NS_COMPARE_RUN, compareRunId);
   }
 
   async upsertCompareRunSummary(summary: EvalCompareRunSummary): Promise<void> {
-    const current = await this.listCompareRuns(1000);
-    const next = [...current.filter((r) => r.id !== summary.id), summary]
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, 1000);
-    await writeJson(this.compareIndexPath, next);
+    this.db.upsertRecord(NS_COMPARE_RUN, summary.id, summary, {
+      createdAt: summary.createdAt,
+      updatedAt: summary.completedAt ?? summary.createdAt,
+    });
   }
 
   async writeTaskRun(run: EvalTaskRun): Promise<void> {
-    const path = join(this.taskRunsDir, `${run.id}.json`);
-    await writeJson(path, run);
+    this.db.upsertRecord(NS_TASK_RUN, run.id, run, {
+      createdAt: run.startedAt,
+      updatedAt: run.completedAt,
+    });
   }
 
   async getTaskRun(runId: string): Promise<EvalTaskRun | null> {
-    const path = join(this.taskRunsDir, `${runId}.json`);
-    return readJsonOr<EvalTaskRun | null>(path, null);
+    return this.db.getRecord<EvalTaskRun>(NS_TASK_RUN, runId);
   }
 
   async getTaskRuns(runIds: string[]): Promise<EvalTaskRun[]> {
-    const loaded = await Promise.all(runIds.map((id) => this.getTaskRun(id)));
-    return loaded.filter((r): r is EvalTaskRun => !!r);
+    const out: EvalTaskRun[] = [];
+    for (const runId of runIds) {
+      const run = await this.getTaskRun(runId);
+      if (run) out.push(run);
+    }
+    return out;
   }
 
   // ── Suite runs ─────────────────────────────────────────────────────────────
 
   async listSuiteRuns(limit = 50): Promise<EvalSuiteRun[]> {
-    const parsed = await readJsonOr<unknown>(this.suiteIndexPath, []);
-    const all = asArray<EvalSuiteRun>(parsed)
-      .filter((r) => typeof r?.id === "string")
-      .sort((a, b) => b.createdAt - a.createdAt);
-    return all.slice(0, Math.max(1, limit));
+    const capped = normalizeLimit(limit);
+    return this.db.listRecords<EvalSuiteRun>(NS_SUITE_RUN, {
+      limit: capped,
+      orderBy: "created_at",
+      desc: true,
+    }).filter((run) => typeof run?.id === "string")
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, capped);
   }
 
   async getSuiteRun(runId: string): Promise<EvalSuiteRun | null> {
-    const path = join(this.suiteRunsDir, `${runId}.json`);
-    return readJsonOr<EvalSuiteRun | null>(path, null);
+    return this.db.getRecord<EvalSuiteRun>(NS_SUITE_RUN, runId);
   }
 
   async writeSuiteRun(run: EvalSuiteRun): Promise<void> {
-    const path = join(this.suiteRunsDir, `${run.id}.json`);
-    await writeJson(path, run);
-
-    const index = await this.listSuiteRuns(1000);
-    const slim: EvalSuiteRun = {
-      ...run,
-      taskRunIds: run.taskRunIds,
-      perConfig: run.perConfig,
-      ranking: run.ranking,
-    };
-    const next = [...index.filter((r) => r.id !== run.id), slim]
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, 1000);
-    await writeJson(this.suiteIndexPath, next);
+    this.db.upsertRecord(NS_SUITE_RUN, run.id, run, {
+      createdAt: run.createdAt,
+      updatedAt: run.completedAt ?? run.createdAt,
+    });
   }
 
   // ── Utilities ──────────────────────────────────────────────────────────────
 
   async ensureConsistentTaskReferences(): Promise<void> {
     const tasks = await this.listTasks();
-    const taskIds = new Set(tasks.map((t) => t.id));
+    const taskIds = new Set(tasks.map((task) => task.id));
     const suites = await this.listSuites();
-    const nextSuites = suites.map((suite) => ({
-      ...suite,
-      taskIds: suite.taskIds.filter((id) => taskIds.has(id)),
-    }));
-    await writeJson(this.suitesPath, nextSuites);
+    for (const suite of suites) {
+      const next: EvalSuite = {
+        ...suite,
+        taskIds: suite.taskIds.filter((id) => taskIds.has(id)),
+      };
+      if (next.taskIds.length !== suite.taskIds.length) {
+        await this.upsertSuite(next);
+      }
+    }
   }
 
   async readBlob(blobPath: string): Promise<JsonObject | null> {
     const parsed = await readJsonOr<unknown>(blobPath, null);
     return parsed ? asRecord(parsed) : null;
+  }
+
+  private async importLegacyFilesIfPresent(): Promise<void> {
+    const tasks = asArray<EvalTask>(await readJsonOr<unknown>(this.legacyTasksPath, []));
+    const configs = asArray<EvalConfig>(await readJsonOr<unknown>(this.legacyConfigsPath, []));
+    const suites = asArray<EvalSuite>(await readJsonOr<unknown>(this.legacySuitesPath, []));
+    const compareRuns = asArray<EvalCompareRunSummary>(await readJsonOr<unknown>(this.legacyCompareIndexPath, []));
+    const suiteRunIndex = asArray<EvalSuiteRun>(await readJsonOr<unknown>(this.legacySuiteIndexPath, []));
+    const taskRunFiles = await this.readLegacyJsonFiles<EvalTaskRun>(this.legacyTaskRunsDir);
+    const suiteRunFiles = await this.readLegacyJsonFiles<EvalSuiteRun>(this.legacySuiteRunsDir);
+
+    this.db.transaction(() => {
+      for (const task of tasks) {
+        if (!task?.id) continue;
+        this.db.upsertRecord(NS_TASK, task.id, task, {
+          createdAt: task.createdAt,
+          updatedAt: task.updatedAt,
+        });
+      }
+      for (const config of configs) {
+        if (!config?.id) continue;
+        this.db.upsertRecord(NS_CONFIG, config.id, config, {
+          createdAt: config.createdAt,
+          updatedAt: config.updatedAt,
+        });
+      }
+      for (const suite of suites) {
+        if (!suite?.id) continue;
+        this.db.upsertRecord(NS_SUITE, suite.id, suite, {
+          createdAt: suite.createdAt,
+          updatedAt: suite.updatedAt,
+        });
+      }
+      for (const summary of compareRuns) {
+        if (!summary?.id) continue;
+        this.db.upsertRecord(NS_COMPARE_RUN, summary.id, summary, {
+          createdAt: summary.createdAt,
+          updatedAt: summary.completedAt ?? summary.createdAt,
+        });
+      }
+      for (const run of taskRunFiles) {
+        if (!run?.id) continue;
+        this.db.upsertRecord(NS_TASK_RUN, run.id, run, {
+          createdAt: run.startedAt,
+          updatedAt: run.completedAt,
+        });
+      }
+      const suiteRunsById = new Map<string, EvalSuiteRun>();
+      for (const run of suiteRunIndex) {
+        if (run?.id) suiteRunsById.set(run.id, run);
+      }
+      for (const run of suiteRunFiles) {
+        if (run?.id) suiteRunsById.set(run.id, run);
+      }
+      for (const run of suiteRunsById.values()) {
+        this.db.upsertRecord(NS_SUITE_RUN, run.id, run, {
+          createdAt: run.createdAt,
+          updatedAt: run.completedAt ?? run.createdAt,
+        });
+      }
+    });
+  }
+
+  private async readLegacyJsonFiles<T>(dirPath: string): Promise<T[]> {
+    if (!existsSync(dirPath)) return [];
+    const files = await readdir(dirPath);
+    const out: T[] = [];
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const parsed = await readJsonOr<unknown>(join(dirPath, file), null);
+      if (parsed && typeof parsed === "object") {
+        out.push(parsed as T);
+      }
+    }
+    return out;
   }
 }
 

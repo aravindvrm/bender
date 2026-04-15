@@ -319,7 +319,29 @@ export async function getGitDiff(
   if (!(await gitOps.isRepo())) {
     return { diff: null };
   }
-  const commits = parseInt(String(commitsQuery ?? "1"), 10);
-  const diff = await gitOps.getDiffRange(`HEAD~${commits}..HEAD`);
+  const parsed = Number.parseInt(String(commitsQuery ?? "1"), 10);
+  const requestedCommits = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+
+  let commitCount = 0;
+  try {
+    const logWindow = await gitOps.log(Math.max(1, requestedCommits + 1));
+    commitCount = logWindow.length;
+  } catch {
+    commitCount = 0;
+  }
+
+  if (commitCount === 0) {
+    const diff = await gitOps.getDiff();
+    return { diff };
+  }
+
+  if (commitCount === 1) {
+    const diff = await gitOps.getCommitPatch("HEAD");
+    return { diff };
+  }
+
+  const maxReachableCommits = commitCount - 1;
+  const effectiveCommits = Math.min(requestedCommits, maxReachableCommits);
+  const diff = await gitOps.getDiffRange(`HEAD~${effectiveCommits}..HEAD`);
   return { diff };
 }

@@ -7,6 +7,7 @@ import type { CapabilityPolicy } from "./capabilities.js";
 import { normalizeCapabilityPolicy } from "./capabilities.js";
 import { getBenderHomeDir, getBenderHomePath } from "./paths.js";
 import { getRoleDefaultPinnedSkills } from "./role-skill-defaults.js";
+import { HomeDb } from "./home-db.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ export interface AgentsStore {
 
 export const MAX_PINNED_SKILLS_PER_AGENT = 6;
 export const MAX_MCP_SERVERS_PER_AGENT = 6;
+const AGENTS_STORE_DB_KEY = "state.agents.store.v1";
 
 // ── Built-in default agents ───────────────────────────────────────────────────
 
@@ -167,32 +169,50 @@ function isBaseRole(value: string): value is BaseRole {
 }
 
 async function readAgentsStore(): Promise<AgentsStore> {
+  const db = HomeDb.current();
+  await db.init();
+  const fromDb = db.getJson<AgentsStore>(AGENTS_STORE_DB_KEY);
+  if (fromDb && typeof fromDb === "object") {
+    return sanitizeAgentsStore(fromDb);
+  }
+
   const path = getAgentsPath();
   if (!existsSync(path)) return {};
   try {
     const raw = await readFile(path, "utf-8");
     const parsed = parseYaml(raw) as Partial<AgentsStore>;
-    const selectedRaw = parsed.selectedByRole ?? {};
-    const selectedByRole = Object.fromEntries(
-      Object.entries(selectedRaw).filter(
-        ([role, id]) => isBaseRole(role) && typeof id === "string" && id.trim().length > 0,
-      ),
-    ) as Partial<Record<BaseRole, string>>;
-    return {
-      agents: parsed.agents ?? [],
-      selectedByRole,
-    };
+    const sanitized = sanitizeAgentsStore(parsed);
+    db.setJson(AGENTS_STORE_DB_KEY, sanitized);
+    return sanitized;
   } catch {
     return {};
   }
 }
 
 async function writeAgentsStore(store: AgentsStore): Promise<void> {
+  const db = HomeDb.current();
+  await db.init();
+  const sanitized = sanitizeAgentsStore(store);
+  db.setJson(AGENTS_STORE_DB_KEY, sanitized);
+
   const dir = getBenderGlobalDir();
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }
-  await writeFile(getAgentsPath(), stringifyYaml(store), "utf-8");
+  await writeFile(getAgentsPath(), stringifyYaml(sanitized), "utf-8");
+}
+
+function sanitizeAgentsStore(input: Partial<AgentsStore>): AgentsStore {
+  const selectedRaw = input.selectedByRole ?? {};
+  const selectedByRole = Object.fromEntries(
+    Object.entries(selectedRaw).filter(
+      ([role, id]) => isBaseRole(role) && typeof id === "string" && id.trim().length > 0,
+    ),
+  ) as Partial<Record<BaseRole, string>>;
+  return {
+    agents: Array.isArray(input.agents) ? input.agents : [],
+    selectedByRole,
+  };
 }
 
 export async function readCustomAgents(): Promise<AgentConfig[]> {

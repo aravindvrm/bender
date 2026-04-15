@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ProjectState } from "../hooks/useApi";
-import { Play, Sparkles, Search, ChevronDown, Lock, Pencil, Trash2, Save, X } from "lucide-react";
+import { Play, Sparkles, Search, ChevronDown, Lock, Pencil, Trash2, Save, X, GitBranch } from "lucide-react";
+import { GitHubIssueImportDialog } from "../components/GitHubIssueImportDialog";
 
 interface PlanViewProps {
   state: ProjectState;
@@ -99,6 +100,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
   const [githubError, setGithubError] = useState<string | null>(null);
   const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
   const [deleteDialogTaskId, setDeleteDialogTaskId] = useState<number | null>(null);
+  const [showGitHubIssueImportDialog, setShowGitHubIssueImportDialog] = useState(false);
 
   useEffect(() => {
     setTaskAgents(state.taskAgents ?? {});
@@ -120,19 +122,36 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
 
   function renderEmptyState() {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-500">
-        <div className="text-center space-y-4">
-          <p className="text-base font-medium text-zinc-400">No task plan</p>
-          <p className="text-sm text-zinc-500">Describe a feature or change to generate tasks.</p>
-          <button
-            onClick={onNewTask}
-            className="flex items-center gap-1.5 px-4 py-2 mx-auto bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
-          >
-            <Sparkles className="h-4 w-4 text-zinc-400" />
-            New Task
-          </button>
+      <>
+        <div className="flex items-center justify-center h-full text-zinc-500">
+          <div className="text-center space-y-4">
+            <p className="text-base font-medium text-zinc-400">No task plan</p>
+            <p className="text-sm text-zinc-500">Describe a feature or change to generate tasks.</p>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={onNewTask}
+                className="flex items-center gap-1.5 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
+              >
+                <Sparkles className="h-4 w-4 text-zinc-400" />
+                New Task
+              </button>
+              <button
+                onClick={() => setShowGitHubIssueImportDialog(true)}
+                className="flex items-center gap-1.5 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
+              >
+                <GitBranch className="h-4 w-4 text-zinc-400" />
+                Import GitHub Issues
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+        {showGitHubIssueImportDialog && (
+          <GitHubIssueImportDialog
+            onClose={() => setShowGitHubIssueImportDialog(false)}
+            onImported={onTasksChanged}
+          />
+        )}
+      </>
     );
   }
 
@@ -323,6 +342,13 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setShowGitHubIssueImportDialog(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-xs text-zinc-200 transition-colors"
+          >
+            <GitBranch className="h-3.5 w-3.5 text-zinc-400" />
+            Import Issues
+          </button>
+          <button
             onClick={onNewTask}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs text-zinc-200 transition-colors"
           >
@@ -422,6 +448,13 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
           deleting={deletingTaskId === deleteDialogTaskId}
           onCancel={() => setDeleteDialogTaskId(null)}
           onConfirm={(cascade) => void deleteTask(deleteDialogTaskId, cascade)}
+        />
+      )}
+
+      {showGitHubIssueImportDialog && (
+        <GitHubIssueImportDialog
+          onClose={() => setShowGitHubIssueImportDialog(false)}
+          onImported={onTasksChanged}
         />
       )}
     </div>

@@ -1,7 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { getBenderHomePath } from "./paths.js";
+import { HomeDb } from "./home-db.js";
 
 export interface SkillEvalCase {
   id: string;
@@ -32,23 +33,42 @@ interface SkillWorkbenchStore {
   workbenches: Record<string, SkillWorkbench>;
 }
 
-const STORE_PATH = getBenderHomePath("skill-workbench.json");
+const WORKBENCH_DB_KEY = "state.skill-workbench.v1";
+
+function getStorePath(): string {
+  return getBenderHomePath("skill-workbench.json");
+}
 
 async function readStore(): Promise<SkillWorkbenchStore> {
-  if (!existsSync(STORE_PATH)) return { workbenches: {} };
+  const db = HomeDb.current();
+  await db.init();
+  const fromDb = db.getJson<SkillWorkbenchStore>(WORKBENCH_DB_KEY);
+  if (fromDb && typeof fromDb === "object" && fromDb.workbenches) {
+    return fromDb;
+  }
+
+  const storePath = getStorePath();
+  if (!existsSync(storePath)) return { workbenches: {} };
   try {
-    const raw = await readFile(STORE_PATH, "utf-8");
+    const raw = await readFile(storePath, "utf-8");
     const parsed = JSON.parse(raw) as SkillWorkbenchStore;
-    return parsed && typeof parsed === "object" && parsed.workbenches ? parsed : { workbenches: {} };
+    const normalized = parsed && typeof parsed === "object" && parsed.workbenches ? parsed : { workbenches: {} };
+    db.setJson(WORKBENCH_DB_KEY, normalized);
+    return normalized;
   } catch {
     return { workbenches: {} };
   }
 }
 
 async function writeStore(store: SkillWorkbenchStore): Promise<void> {
-  const dir = dirname(STORE_PATH);
+  const db = HomeDb.current();
+  await db.init();
+  db.setJson(WORKBENCH_DB_KEY, store);
+
+  const storePath = getStorePath();
+  const dir = dirname(storePath);
   if (!existsSync(dir)) await mkdir(dir, { recursive: true });
-  await writeFile(STORE_PATH, JSON.stringify(store, null, 2), "utf-8");
+  await writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
 }
 
 export async function getSkillWorkbench(skillId: string): Promise<SkillWorkbench> {

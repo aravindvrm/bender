@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getBenderDir } from "./config.js";
+import { LocalProjectDb } from "./local-db.js";
 import {
   normalizeCanonicalTaskPlan,
   renderTaskPlanMarkdown,
@@ -9,15 +10,25 @@ import {
   type CanonicalTaskPlanDocument,
 } from "./task-plan.js";
 
+function nowTs(): number {
+  return Date.now();
+}
+
 /**
  * Central state manager for the .bender/ directory.
  * Reads and writes all persistent project state.
  */
 export class StateManager {
   private benderDir: string;
+  private db: LocalProjectDb;
+
+  private static readonly DECISION_NS = "state.decision";
+  private static readonly COMPLETED_TASK_NS = "state.completed_task";
+  private static readonly SESSION_NS = "state.session";
 
   constructor(private projectRoot: string) {
     this.benderDir = getBenderDir(projectRoot);
+    this.db = LocalProjectDb.forProject(projectRoot);
   }
 
   get root(): string {
@@ -25,6 +36,7 @@ export class StateManager {
   }
 
   async init(): Promise<void> {
+    await this.db.init();
     const dirs = [
       this.benderDir,
       join(this.benderDir, "decisions"),
@@ -87,6 +99,18 @@ export class StateManager {
   // --- Decisions (ADRs) ---
 
   async readDecisions(): Promise<{ name: string; content: string }[]> {
+    await this.db.init();
+    const fromDb = this.db.listRecords<{ name?: string; content?: string }>(
+      StateManager.DECISION_NS,
+      { limit: 10_000, orderBy: "updated_at", desc: false },
+    );
+    if (fromDb.length > 0) {
+      return fromDb
+        .filter((d) => typeof d.name === "string" && typeof d.content === "string")
+        .map((d) => ({ name: String(d.name), content: String(d.content) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     const dir = join(this.benderDir, "decisions");
     if (!existsSync(dir)) return [];
     const files = await readdir(dir);
@@ -95,10 +119,23 @@ export class StateManager {
       const content = await readFile(join(dir, file), "utf-8");
       decisions.push({ name: file, content });
     }
+    if (decisions.length > 0) {
+      this.db.transaction(() => {
+        for (const decision of decisions) {
+          this.db.upsertRecord(StateManager.DECISION_NS, decision.name, decision, {
+            updatedAt: nowTs(),
+          });
+        }
+      });
+    }
     return decisions;
   }
 
   async writeDecision(name: string, content: string): Promise<void> {
+    await this.db.init();
+    this.db.upsertRecord(StateManager.DECISION_NS, name, { name, content }, {
+      updatedAt: nowTs(),
+    });
     const dir = join(this.benderDir, "decisions");
     if (!existsSync(dir)) await mkdir(dir, { recursive: true });
     await writeFile(join(dir, name), content, "utf-8");
@@ -169,13 +206,33 @@ export class StateManager {
   }
 
   async completeTask(taskId: string, content: string): Promise<void> {
+    await this.db.init();
     const dir = join(this.benderDir, "tasks", "completed");
     if (!existsSync(dir)) await mkdir(dir, { recursive: true });
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    await writeFile(join(dir, `${timestamp}-${taskId}.md`), content, "utf-8");
+    const fileName = `${timestamp}-${taskId}.md`;
+    this.db.upsertRecord(StateManager.COMPLETED_TASK_NS, fileName, {
+      name: fileName,
+      content,
+    }, {
+      updatedAt: nowTs(),
+    });
+    await writeFile(join(dir, fileName), content, "utf-8");
   }
 
   async readCompletedTasks(): Promise<{ name: string; content: string }[]> {
+    await this.db.init();
+    const fromDb = this.db.listRecords<{ name?: string; content?: string }>(
+      StateManager.COMPLETED_TASK_NS,
+      { limit: 10_000, orderBy: "created_at", desc: false },
+    );
+    if (fromDb.length > 0) {
+      return fromDb
+        .filter((task) => typeof task.name === "string" && typeof task.content === "string")
+        .map((task) => ({ name: String(task.name), content: String(task.content) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     const dir = join(this.benderDir, "tasks", "completed");
     if (!existsSync(dir)) return [];
     const files = await readdir(dir);
@@ -183,6 +240,15 @@ export class StateManager {
     for (const file of files.filter((f: string) => f.endsWith(".md")).sort()) {
       const content = await readFile(join(dir, file), "utf-8");
       tasks.push({ name: file, content });
+    }
+    if (tasks.length > 0) {
+      this.db.transaction(() => {
+        for (const task of tasks) {
+          this.db.upsertRecord(StateManager.COMPLETED_TASK_NS, task.name, task, {
+            updatedAt: nowTs(),
+          });
+        }
+      });
     }
     return tasks;
   }
@@ -295,13 +361,40 @@ export class StateManager {
   // --- Sessions ---
 
   async writeSession(operation: string, content: string): Promise<void> {
+    await this.db.init();
     const dir = join(this.benderDir, "sessions");
     if (!existsSync(dir)) await mkdir(dir, { recursive: true });
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    await writeFile(join(dir, `${timestamp}-${operation}.md`), content, "utf-8");
+    const fileName = `${timestamp}-${operation}.md`;
+    this.db.upsertRecord(StateManager.SESSION_NS, fileName, {
+      name: fileName,
+      operation,
+      date: timestamp.slice(0, 10),
+      content,
+    }, {
+      updatedAt: nowTs(),
+    });
+    await writeFile(join(dir, fileName), content, "utf-8");
   }
 
   async readSessions(): Promise<{ name: string; operation: string; date: string; content: string }[]> {
+    await this.db.init();
+    const fromDb = this.db.listRecords<{ name?: string; operation?: string; date?: string; content?: string }>(
+      StateManager.SESSION_NS,
+      { limit: 20_000, orderBy: "created_at", desc: true },
+    );
+    if (fromDb.length > 0) {
+      return fromDb
+        .filter((session) => typeof session.name === "string" && typeof session.content === "string")
+        .map((session) => ({
+          name: String(session.name),
+          operation: typeof session.operation === "string" ? session.operation : "unknown",
+          date: typeof session.date === "string" ? session.date : "",
+          content: String(session.content),
+        }))
+        .sort((a, b) => b.name.localeCompare(a.name));
+    }
+
     const dir = join(this.benderDir, "sessions");
     if (!existsSync(dir)) return [];
     const files = await readdir(dir);
@@ -313,6 +406,15 @@ export class StateManager {
       const operation = parts[parts.length - 1];
       const date = parts.slice(0, 3).join("-");
       sessions.push({ name: file, operation, date, content });
+    }
+    if (sessions.length > 0) {
+      this.db.transaction(() => {
+        for (const session of sessions) {
+          this.db.upsertRecord(StateManager.SESSION_NS, session.name, session, {
+            updatedAt: nowTs(),
+          });
+        }
+      });
     }
     return sessions;
   }
@@ -380,16 +482,29 @@ export class StateManager {
   // --- Helpers ---
 
   private async readFileOrNull(relativePath: string): Promise<string | null> {
+    await this.db.init();
+    const key = this.stateFileKey(relativePath);
+    const fromDb = this.db.getKv(key);
+    if (fromDb !== null) return fromDb;
+
     const fullPath = join(this.benderDir, relativePath);
     if (!existsSync(fullPath)) return null;
-    return readFile(fullPath, "utf-8");
+    const fromFile = await readFile(fullPath, "utf-8");
+    this.db.setKv(key, fromFile);
+    return fromFile;
   }
 
   private async writeStateFile(relativePath: string, content: string): Promise<void> {
+    await this.db.init();
+    this.db.setKv(this.stateFileKey(relativePath), content);
     const fullPath = join(this.benderDir, relativePath);
     const dir = join(fullPath, "..");
     if (!existsSync(dir)) await mkdir(dir, { recursive: true });
     await writeFile(fullPath, content, "utf-8");
+  }
+
+  private stateFileKey(relativePath: string): string {
+    return `state-file:${relativePath}`;
   }
 }
 
