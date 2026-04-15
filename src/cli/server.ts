@@ -12,6 +12,7 @@ import { registerEvalRoutes } from "./routes/evals.js";
 import { registerFilesystemRoutes } from "./routes/filesystem.js";
 import { registerGitRoutes } from "./routes/git.js";
 import { registerGitHubRoutes } from "./routes/github.js";
+import { registerGitHubWorkItemRoutes } from "./routes/github-work-items.js";
 import { registerLlmRoutes } from "./routes/llm.js";
 import { registerLogRoutes } from "./routes/logs.js";
 import { registerProjectRoutes } from "./routes/projects.js";
@@ -90,6 +91,11 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
     createAuthState: createGitHubAuthState,
     consumeAuthState: consumeGitHubAuthState,
   });
+  registerGitHubWorkItemRoutes(app, {
+    getCurrentProject: () => currentProject,
+    readGitHubSession,
+    githubApi,
+  });
 
   registerFilesystemRoutes(app, { normalizeUserPath });
 
@@ -163,4 +169,3 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
     server.once("error", rejectPromise);
   });
 }
-
