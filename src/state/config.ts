@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { LogLevel, SinkLevel } from "../logger.js";
 import { getBenderHomePath } from "./paths.js";
+import { LocalProjectDb } from "./local-db.js";
+import { HomeDb } from "./home-db.js";
 
 export type ModelTier = "fast" | "default" | "strong";
 
@@ -137,6 +139,9 @@ export const DEFAULT_CONFIG: BenderConfig = {
   },
 };
 
+const PROJECT_CONFIG_DB_KEY = "state.config.project.v1";
+const GLOBAL_CONFIG_DB_KEY = "state.config.global.v1";
+
 export function getBenderDir(projectRoot: string): string {
   return join(projectRoot, ".bender");
 }
@@ -146,11 +151,14 @@ export function getConfigPath(projectRoot: string): string {
 }
 
 export async function readConfig(projectRoot: string): Promise<BenderConfig> {
-  const configPath = getConfigPath(projectRoot);
-  return readConfigAtPath(configPath);
+  const { config } = await readProjectConfigRaw(projectRoot);
+  return mergeConfig(DEFAULT_CONFIG, config ?? {});
 }
 
 export async function writeConfig(projectRoot: string, config: BenderConfig): Promise<void> {
+  const db = LocalProjectDb.forProject(projectRoot);
+  await db.init();
+  db.setKv(PROJECT_CONFIG_DB_KEY, JSON.stringify(config));
   const configPath = getConfigPath(projectRoot);
   await writeConfigAtPath(configPath, config);
 }
@@ -160,22 +168,25 @@ export function getGlobalConfigPath(): string {
 }
 
 export async function readGlobalConfig(): Promise<BenderConfig> {
-  return readConfigAtPath(getGlobalConfigPath());
+  const { config } = await readGlobalConfigRaw();
+  return mergeConfig(DEFAULT_CONFIG, config ?? {});
 }
 
 export async function writeGlobalConfig(config: BenderConfig): Promise<void> {
+  const db = HomeDb.current();
+  await db.init();
+  db.setJson(GLOBAL_CONFIG_DB_KEY, config);
   await writeConfigAtPath(getGlobalConfigPath(), config);
 }
 
 export async function readEffectiveConfig(projectRoot?: string | null): Promise<BenderConfig> {
   const globalConfig = await readGlobalConfig();
   if (!projectRoot) return globalConfig;
-  const projectConfigPath = getConfigPath(projectRoot);
-  if (!existsSync(projectConfigPath)) {
+  const project = await readProjectConfigRaw(projectRoot);
+  if (!project.exists) {
     return globalConfig;
   }
-  const projectConfig = await readConfig(projectRoot);
-  return mergeConfig(globalConfig, projectConfig);
+  return mergeConfig(globalConfig, project.config ?? {});
 }
 
 async function readConfigAtPath(configPath: string): Promise<BenderConfig> {
@@ -185,6 +196,52 @@ async function readConfigAtPath(configPath: string): Promise<BenderConfig> {
   const raw = await readFile(configPath, "utf-8");
   const parsed = parseYaml(raw) as Partial<BenderConfig>;
   return mergeConfig(DEFAULT_CONFIG, parsed);
+}
+
+async function readConfigFilePartial(configPath: string): Promise<{ exists: boolean; config: Partial<BenderConfig> | null }> {
+  if (!existsSync(configPath)) return { exists: false, config: null };
+  try {
+    const raw = await readFile(configPath, "utf-8");
+    const parsed = parseYaml(raw) as Partial<BenderConfig>;
+    return { exists: true, config: parsed };
+  } catch {
+    return { exists: true, config: null };
+  }
+}
+
+async function readProjectConfigRaw(projectRoot: string): Promise<{ exists: boolean; config: Partial<BenderConfig> | null }> {
+  const db = LocalProjectDb.forProject(projectRoot);
+  await db.init();
+  const fromDbRaw = db.getKv(PROJECT_CONFIG_DB_KEY);
+  if (fromDbRaw) {
+    try {
+      const parsed = JSON.parse(fromDbRaw) as Partial<BenderConfig>;
+      return { exists: true, config: parsed };
+    } catch {
+      // Fall through to legacy file import.
+    }
+  }
+
+  const file = await readConfigFilePartial(getConfigPath(projectRoot));
+  if (file.exists && file.config) {
+    db.setKv(PROJECT_CONFIG_DB_KEY, JSON.stringify(file.config));
+  }
+  return file;
+}
+
+async function readGlobalConfigRaw(): Promise<{ exists: boolean; config: Partial<BenderConfig> | null }> {
+  const db = HomeDb.current();
+  await db.init();
+  const fromDb = db.getJson<Partial<BenderConfig>>(GLOBAL_CONFIG_DB_KEY);
+  if (fromDb) {
+    return { exists: true, config: fromDb };
+  }
+
+  const file = await readConfigFilePartial(getGlobalConfigPath());
+  if (file.exists && file.config) {
+    db.setJson(GLOBAL_CONFIG_DB_KEY, file.config);
+  }
+  return file;
 }
 
 async function writeConfigAtPath(configPath: string, config: BenderConfig): Promise<void> {
@@ -212,6 +269,7 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
       return [name, resolved ? { apiKey: resolved } : {}];
     }),
   ) as { [name: string]: { apiKey?: string } };
+  const providers = providerNames.size > 0 ? mergedProviders : undefined;
 
   return {
     llm: {
@@ -222,7 +280,7 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
         ...overrides.llm?.models,
       },
     },
-    providers: mergedProviders,
+    ...(providers ? { providers } : {}),
     mcp: {
       ...defaults.mcp,
       ...overrides.mcp,

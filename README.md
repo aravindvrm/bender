@@ -134,6 +134,7 @@ Bender stores project state under `.bender/`, including:
 
 ```text
 .bender/
+  bender.db
   brief.md
   architecture.md
   conventions.md
@@ -145,6 +146,10 @@ Bender stores project state under `.bender/`, including:
   api-contracts/
   sessions/
 ```
+
+`bender.db` is the embedded local SQLite store used for project-scoped state/query persistence.
+Global/home-scoped state is stored in `~/.bender/bender-home.db`.
+No external server (Docker/Postgres) is required.
 
 ## Installation
 
