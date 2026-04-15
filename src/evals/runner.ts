@@ -3,6 +3,16 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { exec as execCb } from "node:child_process";
 import { promisify } from "node:util";
+import { evaluate as promptfooEvaluate } from "promptfoo";
+import type {
+  Assertion,
+  AssertionValueFunctionContext,
+  CallApiContextParams,
+  CallApiFunction,
+  EvaluateResult,
+  GradingResult,
+  TokenUsage as PromptfooTokenUsage,
+} from "promptfoo";
 import type { BaseRole } from "../state/agents.js";
 import { getAllAgents, getEffectiveAgentForRole } from "../state/agents.js";
 import type { CapabilityPolicy } from "../state/capabilities.js";
@@ -13,11 +23,14 @@ import { StateManager } from "../state/manager.js";
 import { EvalsStore } from "../state/evals.js";
 import type {
   EvalCompareRunSummary,
+  EvalAssertionResult,
+  EvalAssertionSummary,
   EvalConfig,
   EvalSuite,
   EvalSuiteRun,
   EvalSuccessMode,
   EvalTask,
+  EvalTaskAssertion,
   EvalTaskRun,
 } from "./types.js";
 import { aggregateSuiteByConfig, rankSuiteConfigs } from "./aggregate.js";
@@ -51,6 +64,27 @@ type ExecuteTaskFn = (params: ExecuteTaskParams) => Promise<EvalTaskRun>;
 const DEFAULT_EVAL_CONCURRENCY = 2;
 const VERIFICATION_TIMEOUT_MS = 120_000;
 const VERIFICATION_MAX_BUFFER = 1024 * 1024;
+const PROMPTFOO_PROVIDER_PREFIX = "bender-config:";
+
+interface BenderPromptfooMetadata {
+  runId: string;
+  configId: string;
+  taskId: string;
+  role: BaseRole;
+  provider: string;
+  model: string;
+  enabledSkills: string[];
+  enabledTools: string[];
+  durationMs: number;
+  usage?: EvalTaskRun["usage"];
+  estimatedCostUsd?: number | null;
+  error?: string;
+  trace: Record<string, unknown>;
+  startedAt: number;
+  completedAt: number;
+  success: boolean;
+  output: string;
+}
 
 function normalizeConcurrency(value?: number): number {
   if (!Number.isFinite(value) || (value ?? 0) <= 0) return DEFAULT_EVAL_CONCURRENCY;
@@ -77,6 +111,56 @@ async function runWithConcurrency<T>(
 
   const workers = Array.from({ length: Math.min(limit, items.length) }, () => runWorker());
   await Promise.all(workers);
+}
+
+function makeDisabledConfigRun(params: {
+  compareRunId: string;
+  taskId: string;
+  config: EvalConfig;
+  defaultProvider: string;
+}): EvalTaskRun {
+  const now = Date.now();
+  return {
+    id: randomUUID(),
+    compareRunId: params.compareRunId,
+    taskId: params.taskId,
+    configId: params.config.id,
+    role: params.config.role,
+    provider: params.config.provider ?? params.defaultProvider,
+    model: params.config.model ?? "",
+    enabledSkills: dedupe(params.config.pinnedSkills),
+    enabledTools: dedupe(params.config.mcpServerIds),
+    status: "failed",
+    success: false,
+    output: "",
+    durationMs: 0,
+    error: "Config is disabled.",
+    trace: {},
+    assertionSummary: {
+      total: 1,
+      passed: 0,
+      failed: 1,
+      score: 0,
+      reason: "Config is disabled.",
+    },
+    assertions: [
+      {
+        id: "1",
+        type: "bender-config",
+        metric: "enabled",
+        pass: false,
+        score: 0,
+        reason: "Config is disabled.",
+        raw: null,
+      },
+    ],
+    startedAt: now,
+    completedAt: now,
+    score: buildEvalScore({
+      success: false,
+      durationMs: 0,
+    }),
+  };
 }
 
 interface ResolvedExecution {
@@ -210,6 +294,175 @@ async function resolveExecution(
     agentName: agent.name,
     runConfig,
   };
+}
+
+function promptfooProviderId(configId: string): string {
+  return `${PROMPTFOO_PROVIDER_PREFIX}${configId}`;
+}
+
+function configIdFromPromptfooProviderId(providerId: string): string | null {
+  return providerId.startsWith(PROMPTFOO_PROVIDER_PREFIX)
+    ? providerId.slice(PROMPTFOO_PROVIDER_PREFIX.length)
+    : null;
+}
+
+function toPromptfooTokenUsage(usage?: EvalTaskRun["usage"]): PromptfooTokenUsage | undefined {
+  if (!usage) return undefined;
+  return {
+    prompt: usage.inputTokens,
+    completion: usage.outputTokens,
+    total: usage.totalTokens,
+  };
+}
+
+function toEvalUsage(usage?: Partial<PromptfooTokenUsage>): EvalTaskRun["usage"] | undefined {
+  if (!usage) return undefined;
+  const inputTokens = typeof usage.prompt === "number" ? usage.prompt : undefined;
+  const outputTokens = typeof usage.completion === "number" ? usage.completion : undefined;
+  const totalTokens = typeof usage.total === "number"
+    ? usage.total
+    : (typeof inputTokens === "number" || typeof outputTokens === "number")
+      ? (inputTokens ?? 0) + (outputTokens ?? 0)
+      : undefined;
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) return undefined;
+  return {
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
+  };
+}
+
+function formatOutput(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return "";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function toNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function extractAssertionResults(result: EvaluateResult): {
+  assertions: EvalAssertionResult[];
+  summary: EvalAssertionSummary;
+} {
+  const grading = result.gradingResult ?? null;
+  const components = grading?.componentResults?.length
+    ? grading.componentResults
+    : grading
+      ? [grading]
+      : [];
+  const assertions = components.map((component, index) => {
+    const assertionMeta = toRecord(component.assertion);
+    return {
+      id: String(index + 1),
+      type: typeof assertionMeta.type === "string" ? assertionMeta.type : "unknown",
+      ...(typeof assertionMeta.metric === "string" ? { metric: assertionMeta.metric } : {}),
+      pass: !!component.pass,
+      score: toNumberOrNull(component.score),
+      ...(typeof component.reason === "string" && component.reason.trim() ? { reason: component.reason.trim() } : {}),
+      raw: toRecord(component.metadata ?? {}),
+    } satisfies EvalAssertionResult;
+  });
+  const passed = assertions.filter((a) => a.pass).length;
+  const failed = assertions.length - passed;
+  return {
+    assertions,
+    summary: {
+      total: assertions.length,
+      passed,
+      failed,
+      score: toNumberOrNull(result.score),
+      ...(typeof grading?.reason === "string" && grading.reason.trim() ? { reason: grading.reason.trim() } : {}),
+    },
+  };
+}
+
+function safeErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function normalizeCustomAssertionResult(
+  value: unknown,
+  assertionId: string,
+): boolean | number | GradingResult {
+  if (typeof value === "boolean" || typeof value === "number") return value;
+  if (value && typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    const pass = typeof rec.pass === "boolean" ? rec.pass : undefined;
+    const score = typeof rec.score === "number" ? rec.score : undefined;
+    const reason = typeof rec.reason === "string" ? rec.reason : undefined;
+    if (pass !== undefined || score !== undefined) {
+      return {
+        pass: pass ?? false,
+        score: score ?? (pass ? 1 : 0),
+        reason: reason ?? `Custom assertion ${assertionId}`,
+        ...(rec && Object.keys(rec).length > 0 ? { metadata: rec } : {}),
+      };
+    }
+  }
+  return {
+    pass: false,
+    score: 0,
+    reason: `Custom assertion ${assertionId} returned an unsupported value`,
+  };
+}
+
+function compileCustomAssertion(assertion: EvalTaskAssertion): Assertion {
+  return {
+    type: "javascript",
+    metric: assertion.metric?.trim() || assertion.id,
+    value: async (output: string, context: AssertionValueFunctionContext) => {
+      try {
+        const runtime = toRecord(context.providerResponse?.metadata).bender;
+        const fn = new Function("output", "context", "runtime", `"use strict";\n${assertion.source}`);
+        const raw = await Promise.resolve(fn(output, context, runtime));
+        return normalizeCustomAssertionResult(raw, assertion.id);
+      } catch (err) {
+        return {
+          pass: false,
+          score: 0,
+          reason: `Custom assertion ${assertion.id} failed: ${safeErrorMessage(err)}`,
+        };
+      }
+    },
+  };
+}
+
+function buildTaskAssertions(task: EvalTask): Assertion[] {
+  const defaults: Assertion[] = [
+    {
+      type: "javascript",
+      metric: "bender-success",
+      value: (_output: string, context: AssertionValueFunctionContext) => {
+        const meta = toRecord(context.providerResponse?.metadata).bender;
+        const pass = !!(meta && typeof meta === "object" && (meta as Record<string, unknown>).success === true);
+        const reason = pass
+          ? "Bender execution succeeded."
+          : ((meta as Record<string, unknown> | undefined)?.error as string | undefined) ?? "Bender execution failed.";
+        return {
+          pass,
+          score: pass ? 1 : 0,
+          reason,
+        };
+      },
+    },
+  ];
+  const custom = (task.assertions ?? [])
+    .filter((assertion) => assertion.enabled !== false)
+    .map((assertion) => compileCustomAssertion(assertion));
+  return [...defaults, ...custom];
 }
 
 async function executeTaskForConfig(params: ExecuteTaskParams): Promise<EvalTaskRun> {
@@ -400,7 +653,275 @@ async function executeTaskForConfig(params: ExecuteTaskParams): Promise<EvalTask
   return run;
 }
 
+function toPromptfooMetadata(run: EvalTaskRun): BenderPromptfooMetadata {
+  return {
+    runId: run.id,
+    configId: run.configId,
+    taskId: run.taskId,
+    role: run.role,
+    provider: run.provider,
+    model: run.model,
+    enabledSkills: [...run.enabledSkills],
+    enabledTools: [...run.enabledTools],
+    durationMs: run.durationMs,
+    usage: run.usage,
+    estimatedCostUsd: run.estimatedCostUsd ?? null,
+    error: run.error,
+    trace: run.trace,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    success: run.success,
+    output: run.output,
+  };
+}
+
+async function runPromptfooMatrix(params: {
+  projectRoot: string;
+  compareRunId: string;
+  tasks: EvalTask[];
+  configs: EvalConfig[];
+  adapter?: EvalAdapter;
+  concurrency?: number;
+}): Promise<EvalTaskRun[]> {
+  const { projectRoot, compareRunId, tasks, configs, adapter, concurrency } = params;
+  const state = new StateManager(projectRoot);
+  await state.init();
+  const baseConfig = await readEffectiveConfig(projectRoot);
+
+  const taskById = new Map(tasks.map((task) => [task.id, task]));
+  const configById = new Map(configs.map((config) => [config.id, config]));
+  const promptfooRuns = new Map<string, EvalTaskRun>();
+
+  const providers = configs.map((config) => {
+    const provider: CallApiFunction = async (_prompt: string, context?: CallApiContextParams) => {
+      const rawTaskId = context?.vars?.taskId;
+      const taskId = typeof rawTaskId === "string" ? rawTaskId : "";
+      const task = taskById.get(taskId);
+      if (!task) {
+        return {
+          error: `Unknown eval task: ${taskId || "(missing)"}`,
+          output: "",
+        };
+      }
+      const run = await executeTaskForConfig({
+        projectRoot,
+        compareRunId,
+        task,
+        config,
+        baseConfig,
+        state,
+        adapter,
+      });
+      promptfooRuns.set(`${task.id}:${config.id}`, run);
+      return {
+        output: run.output,
+        error: run.error,
+        tokenUsage: toPromptfooTokenUsage(run.usage),
+        cost: run.estimatedCostUsd ?? undefined,
+        latencyMs: run.durationMs,
+        metadata: {
+          bender: toPromptfooMetadata(run),
+        },
+      };
+    };
+    provider.label = promptfooProviderId(config.id);
+    return provider;
+  });
+
+  const tests = tasks.map((task) => ({
+    description: task.name,
+    vars: {
+      taskId: task.id,
+      taskPrompt: task.prompt,
+    },
+    assert: buildTaskAssertions(task),
+    metadata: {
+      taskId: task.id,
+    },
+  }));
+
+  const evaluated = await promptfooEvaluate(
+    {
+      prompts: ["{{taskPrompt}}"],
+      providers,
+      tests,
+      writeLatestResults: false,
+      description: `Bender eval run ${compareRunId}`,
+    },
+    {
+      maxConcurrency: normalizeConcurrency(concurrency),
+    },
+  );
+  const summary = await evaluated.toEvaluateSummary();
+  const results = summary.results as EvaluateResult[];
+
+  const runs: EvalTaskRun[] = [];
+  for (const result of results) {
+    const providerId = result.provider.id ?? "";
+    const benderMeta = toRecord(result.response?.metadata).bender;
+    const runtimeMeta = toRecord(benderMeta);
+    const configId = configIdFromPromptfooProviderId(providerId)
+      ?? (typeof runtimeMeta.configId === "string" ? runtimeMeta.configId : null);
+    if (!configId) continue;
+    const config = configById.get(configId);
+    if (!config) continue;
+    const rawTaskId = result.testCase?.vars?.taskId;
+    const taskId = typeof rawTaskId === "string" ? rawTaskId : "";
+    const task = taskById.get(taskId);
+    if (!task) continue;
+
+    const key = `${task.id}:${config.id}`;
+    const baseRun = promptfooRuns.get(key);
+    const usage = toEvalUsage(result.tokenUsage) ?? baseRun?.usage;
+    const estimatedCostUsd = typeof result.cost === "number"
+      ? result.cost
+      : (typeof result.response?.cost === "number"
+        ? result.response.cost
+        : (baseRun?.estimatedCostUsd ?? estimateCostUsd(baseRun?.provider ?? "", baseRun?.model ?? "", usage)));
+    const output = formatOutput(result.response?.output ?? baseRun?.output ?? "");
+    const error = result.error ?? result.response?.error ?? baseRun?.error;
+    const durationMs = Number.isFinite(result.latencyMs) && result.latencyMs > 0
+      ? Math.round(result.latencyMs)
+      : Math.max(0, baseRun?.durationMs ?? 0);
+    const { assertions, summary: assertionSummary } = extractAssertionResults(result);
+
+    const runId = typeof runtimeMeta.runId === "string" ? runtimeMeta.runId : randomUUID();
+    const startedAt = typeof runtimeMeta.startedAt === "number" ? runtimeMeta.startedAt : Date.now();
+    const completedAt = typeof runtimeMeta.completedAt === "number"
+      ? runtimeMeta.completedAt
+      : startedAt + durationMs;
+
+    const provider = typeof runtimeMeta.provider === "string"
+      ? runtimeMeta.provider
+      : (baseRun?.provider ?? config.provider ?? baseConfig.llm.provider);
+    const model = typeof runtimeMeta.model === "string"
+      ? runtimeMeta.model
+      : (baseRun?.model ?? config.model ?? "");
+    const enabledSkills = Array.isArray(runtimeMeta.enabledSkills)
+      ? (runtimeMeta.enabledSkills.filter((v): v is string => typeof v === "string"))
+      : (baseRun?.enabledSkills ?? dedupe(config.pinnedSkills));
+    const enabledTools = Array.isArray(runtimeMeta.enabledTools)
+      ? (runtimeMeta.enabledTools.filter((v): v is string => typeof v === "string"))
+      : (baseRun?.enabledTools ?? dedupe(config.mcpServerIds));
+    const role = (typeof runtimeMeta.role === "string" ? runtimeMeta.role : baseRun?.role ?? config.role) as BaseRole;
+
+    const success = !!result.success;
+    const run: EvalTaskRun = {
+      id: runId,
+      compareRunId,
+      taskId: task.id,
+      configId: config.id,
+      role,
+      provider,
+      model,
+      enabledSkills,
+      enabledTools,
+      status: success ? "succeeded" : "failed",
+      success,
+      output,
+      durationMs,
+      usage,
+      estimatedCostUsd: typeof estimatedCostUsd === "number" && Number.isFinite(estimatedCostUsd) ? Number(estimatedCostUsd.toFixed(6)) : null,
+      error: error ? String(error) : undefined,
+      trace: {
+        ...(baseRun?.trace ?? {}),
+        promptfoo: {
+          providerId,
+          providerLabel: result.provider.label ?? null,
+          promptId: result.promptId,
+          failureReason: result.failureReason,
+          namedScores: result.namedScores,
+          metadata: result.metadata ?? null,
+        },
+      },
+      assertionSummary,
+      assertions,
+      promptfoo: {
+        provider: result.provider,
+        gradingResult: result.gradingResult ?? null,
+        namedScores: result.namedScores,
+        failureReason: result.failureReason,
+        metadata: result.metadata ?? null,
+      },
+      startedAt,
+      completedAt,
+      score: {
+        success: success ? 1 : 0,
+        latencyMs: durationMs,
+        tokenUsage: usage?.totalTokens ?? null,
+        estimatedCostUsd: typeof estimatedCostUsd === "number" && Number.isFinite(estimatedCostUsd) ? Number(estimatedCostUsd.toFixed(6)) : null,
+      },
+    };
+    runs.push(run);
+  }
+
+  return runs;
+}
+
 export async function runTaskCompare(params: {
+  projectRoot: string;
+  task: EvalTask;
+  configs: EvalConfig[];
+  adapter?: EvalAdapter;
+  executeTask?: ExecuteTaskFn;
+  concurrency?: number;
+}): Promise<{ summary: EvalCompareRunSummary; runs: EvalTaskRun[] }> {
+  if (params.executeTask) {
+    return await runTaskCompareLegacy(params);
+  }
+
+  const { projectRoot, task, configs, adapter, concurrency } = params;
+  const store = new EvalsStore(projectRoot);
+  await store.init();
+
+  const compareRunId = randomUUID();
+  const createdAt = Date.now();
+  const summaryStart: EvalCompareRunSummary = {
+    id: compareRunId,
+    taskId: task.id,
+    configIds: configs.map((c) => c.id),
+    runIds: [],
+    status: "running",
+    createdAt,
+  };
+  await store.upsertCompareRunSummary(summaryStart);
+  adapter?.header?.(`Evals Compare — ${task.name}`);
+  adapter?.info?.(`Running ${configs.length} config(s) with concurrency ${normalizeConcurrency(concurrency)} via Promptfoo.`);
+
+  const baseConfig = await readEffectiveConfig(projectRoot);
+  const enabledConfigs = configs.filter((cfg) => cfg.enabled);
+  const runs = await runPromptfooMatrix({
+    projectRoot,
+    compareRunId,
+    tasks: [task],
+    configs: enabledConfigs,
+    adapter,
+    concurrency,
+  });
+  for (const disabled of configs.filter((cfg) => !cfg.enabled)) {
+    runs.push(makeDisabledConfigRun({
+      compareRunId,
+      taskId: task.id,
+      config: disabled,
+      defaultProvider: baseConfig.llm.provider,
+    }));
+  }
+
+  for (const run of runs) {
+    await store.writeTaskRun(run);
+  }
+  const runIds = runs.map((run) => run.id);
+  const summaryEnd: EvalCompareRunSummary = {
+    ...summaryStart,
+    runIds,
+    status: runs.length > 0 && runs.every((r) => r.success) ? "succeeded" : "failed",
+    completedAt: Date.now(),
+  };
+  await store.upsertCompareRunSummary(summaryEnd);
+  return { summary: summaryEnd, runs };
+}
+
+async function runTaskCompareLegacy(params: {
   projectRoot: string;
   task: EvalTask;
   configs: EvalConfig[];
@@ -497,6 +1018,69 @@ export async function runTaskCompare(params: {
 }
 
 export async function runSuiteCompare(params: {
+  projectRoot: string;
+  suite: EvalSuite;
+  tasks: EvalTask[];
+  configs: EvalConfig[];
+  adapter?: EvalAdapter;
+  executeTask?: ExecuteTaskFn;
+  concurrency?: number;
+}): Promise<{ suiteRun: EvalSuiteRun; taskRuns: EvalTaskRun[] }> {
+  if (params.executeTask) {
+    return await runSuiteCompareLegacy(params);
+  }
+
+  const { projectRoot, suite, tasks, configs, adapter, concurrency } = params;
+  const store = new EvalsStore(projectRoot);
+  await store.init();
+
+  const suiteRunId = randomUUID();
+  const createdAt = Date.now();
+  adapter?.header?.(`Evals Suite — ${suite.name}`);
+  adapter?.info?.(`Running ${tasks.length * configs.length} task-config run(s) with concurrency ${normalizeConcurrency(concurrency)} via Promptfoo.`);
+
+  const baseConfig = await readEffectiveConfig(projectRoot);
+  const enabledConfigs = configs.filter((cfg) => cfg.enabled);
+  const taskRuns = await runPromptfooMatrix({
+    projectRoot,
+    compareRunId: suiteRunId,
+    tasks,
+    configs: enabledConfigs,
+    adapter,
+    concurrency,
+  });
+  for (const disabled of configs.filter((cfg) => !cfg.enabled)) {
+    for (const task of tasks) {
+      taskRuns.push(makeDisabledConfigRun({
+        compareRunId: suiteRunId,
+        taskId: task.id,
+        config: disabled,
+        defaultProvider: baseConfig.llm.provider,
+      }));
+    }
+  }
+  for (const run of taskRuns) {
+    await store.writeTaskRun(run);
+  }
+
+  const perConfig = aggregateSuiteByConfig(taskRuns, configs.map((c) => c.id));
+  const ranking = rankSuiteConfigs(perConfig);
+  const suiteRun: EvalSuiteRun = {
+    id: suiteRunId,
+    suiteId: suite.id,
+    configIds: configs.map((c) => c.id),
+    taskRunIds: taskRuns.map((r) => r.id),
+    status: taskRuns.length > 0 && taskRuns.every((r) => r.success) ? "succeeded" : "failed",
+    createdAt,
+    completedAt: Date.now(),
+    perConfig,
+    ranking,
+  };
+  await store.writeSuiteRun(suiteRun);
+  return { suiteRun, taskRuns };
+}
+
+async function runSuiteCompareLegacy(params: {
   projectRoot: string;
   suite: EvalSuite;
   tasks: EvalTask[];

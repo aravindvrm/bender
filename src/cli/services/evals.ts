@@ -7,6 +7,7 @@ import type {
   EvalSuite,
   EvalSuiteRun,
   EvalTask,
+  EvalTaskAssertion,
   EvalTaskRun,
 } from "../../evals/types.js";
 import { EvalsStore } from "../../state/evals.js";
@@ -21,6 +22,8 @@ const SUCCESS_MODES: EvalSuccessMode[] = ["response-only", "diff-generated", "bu
 const ALLOWED_CONNECTOR_IDS = new Set(["github", "figma", "neon", "vercel"]);
 const MAX_EVAL_NAME_CHARS = 120;
 const MAX_EVAL_PROMPT_CHARS = 20_000;
+const MAX_EVAL_ASSERTIONS = 12;
+const MAX_EVAL_ASSERTION_SOURCE_CHARS = 10_000;
 
 interface EvalAdapter {
   header?: (text: string) => void;
@@ -126,9 +129,48 @@ function normalizeEvalTaskPayload(input: Partial<EvalTask>): EvalTask {
     id: input.id?.trim() || randomUUID(),
     name,
     prompt,
+    assertions: normalizeEvalTaskAssertions(input.assertions),
     createdAt: typeof input.createdAt === "number" ? input.createdAt : now,
     updatedAt: now,
   };
+}
+
+function normalizeEvalTaskAssertions(input: unknown): EvalTaskAssertion[] | undefined {
+  if (input === undefined) return undefined;
+  if (!Array.isArray(input)) {
+    throw new EvalServiceError(400, "assertions must be an array");
+  }
+  const normalized: EvalTaskAssertion[] = [];
+  const seen = new Set<string>();
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Partial<EvalTaskAssertion>;
+    const id = (raw.id ?? randomUUID()).trim();
+    const type = raw.type ?? "javascript";
+    const source = (raw.source ?? "").trim();
+    if (!id || seen.has(id)) continue;
+    if (type !== "javascript") {
+      throw new EvalServiceError(400, `Unsupported assertion type: ${String(type)}`);
+    }
+    if (!source) {
+      throw new EvalServiceError(400, "assertion source is required");
+    }
+    if (source.length > MAX_EVAL_ASSERTION_SOURCE_CHARS) {
+      throw new EvalServiceError(400, `assertion source cannot exceed ${MAX_EVAL_ASSERTION_SOURCE_CHARS} characters`);
+    }
+    seen.add(id);
+    normalized.push({
+      id,
+      type: "javascript",
+      source,
+      ...(typeof raw.metric === "string" && raw.metric.trim() ? { metric: raw.metric.trim() } : {}),
+      ...(raw.enabled === false ? { enabled: false } : { enabled: true }),
+    });
+  }
+  if (normalized.length > MAX_EVAL_ASSERTIONS) {
+    throw new EvalServiceError(400, `assertions cannot exceed ${MAX_EVAL_ASSERTIONS} items`);
+  }
+  return normalized;
 }
 
 function normalizeEvalConfigPayload(input: Partial<EvalConfig>): EvalConfig {
