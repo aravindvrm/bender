@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { appendTaskToPlan, buildTaskBlock, nextTaskId, parseTaskIds } from "../../src/state/task-plan.js";
+import {
+  appendTaskToPlan,
+  buildTaskBlock,
+  nextTaskId,
+  normalizeCanonicalTaskPlan,
+  parseTaskIds,
+  parseTaskPlanMarkdown,
+  renderTaskPlanMarkdown,
+  toCanonicalTaskPlan,
+} from "../../src/state/task-plan.js";
 import { parseTaskPlan } from "../../src/cli/implement.js";
 
 describe("state/task-plan", () => {
@@ -64,5 +73,49 @@ describe("state/task-plan", () => {
       "tests/api/test_routes.py",
       "sable/tool_server.py",
     ]);
+  });
+
+  it("round-trips canonical task json from markdown", () => {
+    const markdown = [
+      "### Task 2: Add migrations",
+      "- **Description**: add migration scripts",
+      "- **Files to create/modify**:",
+      "  - `db/migrations/001.sql`",
+      "- **Dependencies**: 1",
+      "- **Acceptance criteria**: migration runs locally",
+    ].join("\n");
+
+    const canonical = toCanonicalTaskPlan(markdown);
+    expect(canonical.version).toBe(1);
+    expect(canonical.tasks).toHaveLength(1);
+    expect(canonical.tasks[0]?.id).toBe(2);
+    expect(canonical.tasks[0]?.dependencies).toBe("1");
+
+    const rendered = renderTaskPlanMarkdown(canonical.tasks);
+    const reparsed = parseTaskPlanMarkdown(rendered);
+    expect(reparsed).toHaveLength(1);
+    expect(reparsed[0]?.title).toBe("Add migrations");
+    expect(reparsed[0]?.files).toEqual(["db/migrations/001.sql"]);
+  });
+
+  it("normalizes malformed canonical task json", () => {
+    const normalized = normalizeCanonicalTaskPlan({
+      version: 7,
+      generatedAt: "",
+      tasks: [
+        { id: 3, title: " Task title ", files: [" a.ts ", ""], dependencies: "", acceptanceCriteria: "" },
+        { id: "bad", title: "skip me" },
+      ],
+    });
+
+    expect(normalized).not.toBeNull();
+    expect(normalized?.version).toBe(1);
+    expect(normalized?.tasks).toHaveLength(1);
+    expect(normalized?.tasks[0]).toMatchObject({
+      id: 3,
+      title: "Task title",
+      files: ["a.ts"],
+      dependencies: "None",
+    });
   });
 });

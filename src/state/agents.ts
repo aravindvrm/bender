@@ -1,11 +1,11 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { ModelTier } from "./config.js";
 import type { CapabilityPolicy } from "./capabilities.js";
 import { normalizeCapabilityPolicy } from "./capabilities.js";
+import { getBenderHomeDir, getBenderHomePath } from "./paths.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -147,11 +147,11 @@ export const BUILTIN_AGENTS: AgentConfig[] = [
 // ── Storage ───────────────────────────────────────────────────────────────────
 
 function getAgentsPath(): string {
-  return join(homedir(), ".bender", "agents.yaml");
+  return getBenderHomePath("agents.yaml");
 }
 
 function getBenderGlobalDir(): string {
-  return join(homedir(), ".bender");
+  return getBenderHomeDir();
 }
 
 function isBaseRole(value: string): value is BaseRole {

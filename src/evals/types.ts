@@ -3,6 +3,7 @@ import type { CapabilityPolicy } from "../state/capabilities.js";
 import type { ModelTier } from "../state/config.js";
 
 export type EvalRunStatus = "queued" | "running" | "succeeded" | "failed";
+export type EvalSuccessMode = "response-only" | "diff-generated" | "build-verified" | "test-verified";
 
 export interface EvalUsage {
   inputTokens?: number;
@@ -30,6 +31,7 @@ export interface EvalConfig {
   name: string;
   role: BaseRole;
   enabled: boolean;
+  successMode?: EvalSuccessMode;
   modelTier?: ModelTier;
   provider?: string;
   model?: string;
@@ -105,4 +107,3 @@ export interface EvalSuiteRun {
   perConfig: EvalSuiteConfigAggregate[];
   ranking: EvalSuiteConfigAggregate[];
 }
-

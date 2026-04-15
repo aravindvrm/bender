@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { getBenderHomePath } from "./paths.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ const GITHUB_REPO = "skills";
 const SKILLS_PATH = "skills/.curated";
 
 function getCacheDir(): string {
-  return join(homedir(), ".bender", "skills-cache");
+  return getBenderHomePath("skills-cache");
 }
 
 function getRegistryPath(): string {

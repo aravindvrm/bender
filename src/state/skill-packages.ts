@@ -1,12 +1,12 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import {
   fetchRegistry,
   fetchSkillContent,
   type SkillMeta,
 } from "./skills.js";
+import { getBenderHomePath } from "./paths.js";
 
 export type SkillPackageSource = "curated" | "user" | "project";
 
@@ -49,7 +49,7 @@ interface ParsedFrontmatter {
   examples: string[];
 }
 
-const USER_SKILLS_DIR = join(homedir(), ".bender", "skills");
+const USER_SKILLS_DIR = getBenderHomePath("skills");
 
 function parseArrayValue(value: string): string[] {
   const trimmed = value.trim();

@@ -2,6 +2,12 @@ import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getBenderDir } from "./config.js";
+import {
+  normalizeCanonicalTaskPlan,
+  renderTaskPlanMarkdown,
+  toCanonicalTaskPlan,
+  type CanonicalTaskPlanDocument,
+} from "./task-plan.js";
 
 /**
  * Central state manager for the .bender/ directory.
@@ -111,11 +117,55 @@ export class StateManager {
   // --- Tasks ---
 
   async readCurrentTasks(): Promise<string | null> {
-    return this.readFileOrNull("tasks/current.md");
+    const jsonRaw = await this.readFileOrNull("tasks/current.json");
+    if (jsonRaw) {
+      try {
+        const parsed = normalizeCanonicalTaskPlan(JSON.parse(jsonRaw));
+        if (parsed) {
+          const markdown = renderTaskPlanMarkdown(parsed.tasks);
+          return markdown.length > 0 ? markdown : null;
+        }
+      } catch {
+        // fall back to markdown migration path
+      }
+    }
+
+    const markdown = await this.readFileOrNull("tasks/current.md");
+    if (!markdown) return null;
+
+    // Migration path: current.md -> current.json (canonical)
+    const canonical = toCanonicalTaskPlan(markdown);
+    await this.writeCurrentTaskPlan(canonical);
+    return markdown;
   }
 
   async writeCurrentTasks(content: string): Promise<void> {
-    await this.writeStateFile("tasks/current.md", content);
+    const canonical = toCanonicalTaskPlan(content ?? "");
+    await this.writeCurrentTaskPlan(canonical);
+  }
+
+  async readCurrentTaskPlan(): Promise<CanonicalTaskPlanDocument | null> {
+    const jsonRaw = await this.readFileOrNull("tasks/current.json");
+    if (jsonRaw) {
+      try {
+        const parsed = normalizeCanonicalTaskPlan(JSON.parse(jsonRaw));
+        if (parsed) return parsed;
+      } catch {
+        // fall back to markdown migration path
+      }
+    }
+
+    const markdown = await this.readFileOrNull("tasks/current.md");
+    if (!markdown) return null;
+    const canonical = toCanonicalTaskPlan(markdown);
+    await this.writeCurrentTaskPlan(canonical);
+    return canonical;
+  }
+
+  async writeCurrentTaskPlan(plan: CanonicalTaskPlanDocument): Promise<void> {
+    const normalized = normalizeCanonicalTaskPlan(plan) ?? { version: 1 as const, generatedAt: new Date().toISOString(), tasks: [] };
+    await this.writeStateFile("tasks/current.json", JSON.stringify(normalized, null, 2));
+    await this.writeStateFile("tasks/current.md", renderTaskPlanMarkdown(normalized.tasks));
   }
 
   async completeTask(taskId: string, content: string): Promise<void> {

@@ -1,10 +1,10 @@
 import { existsSync, unlinkSync } from "node:fs";
 import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
 import { spawn } from "node:child_process";
+import { getBenderHomeDir } from "../state/paths.js";
 
-const BENDER_DIR = join(homedir(), ".bender");
+const BENDER_DIR = getBenderHomeDir();
 const DASHBOARD_PID_FILE = join(BENDER_DIR, "dashboard.pid");
 
 function sleep(ms: number): Promise<void> {

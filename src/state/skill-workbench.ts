@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
+import { getBenderHomePath } from "./paths.js";
 
 export interface SkillEvalCase {
   id: string;
@@ -32,7 +32,7 @@ interface SkillWorkbenchStore {
   workbenches: Record<string, SkillWorkbench>;
 }
 
-const STORE_PATH = join(homedir(), ".bender", "skill-workbench.json");
+const STORE_PATH = getBenderHomePath("skill-workbench.json");
 
 async function readStore(): Promise<SkillWorkbenchStore> {
   if (!existsSync(STORE_PATH)) return { workbenches: {} };
