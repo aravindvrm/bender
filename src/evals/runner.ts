@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { exec as execCb } from "node:child_process";
+import { promisify } from "node:util";
 import type { BaseRole } from "../state/agents.js";
 import { getAllAgents, getEffectiveAgentForRole } from "../state/agents.js";
 import type { CapabilityPolicy } from "../state/capabilities.js";
@@ -7,13 +11,23 @@ import type { BenderConfig, ModelTier } from "../state/config.js";
 import { readEffectiveConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { EvalsStore } from "../state/evals.js";
-import type { EvalCompareRunSummary, EvalConfig, EvalSuite, EvalSuiteRun, EvalTask, EvalTaskRun } from "./types.js";
+import type {
+  EvalCompareRunSummary,
+  EvalConfig,
+  EvalSuite,
+  EvalSuiteRun,
+  EvalSuccessMode,
+  EvalTask,
+  EvalTaskRun,
+} from "./types.js";
 import { aggregateSuiteByConfig, rankSuiteConfigs } from "./aggregate.js";
 import { buildEvalScore, estimateCostUsd } from "./scoring.js";
 import { createModelSet, getModelForTier } from "../llm/provider.js";
 import { createRoleRuntime } from "../llm/runtime.js";
 import { runRoleDetailed } from "../roles/base.js";
 import { implementTask, type TaskDescription } from "../roles/implementer.js";
+
+const execAsync = promisify(execCb);
 
 interface EvalAdapter {
   header?: (text: string) => void;
@@ -35,6 +49,8 @@ interface ExecuteTaskParams {
 
 type ExecuteTaskFn = (params: ExecuteTaskParams) => Promise<EvalTaskRun>;
 const DEFAULT_EVAL_CONCURRENCY = 2;
+const VERIFICATION_TIMEOUT_MS = 120_000;
+const VERIFICATION_MAX_BUFFER = 1024 * 1024;
 
 function normalizeConcurrency(value?: number): number {
   if (!Number.isFinite(value) || (value ?? 0) <= 0) return DEFAULT_EVAL_CONCURRENCY;
@@ -91,6 +107,53 @@ function dedupe(values?: string[]): string[] {
 
 function cloneConfig(config: BenderConfig): BenderConfig {
   return JSON.parse(JSON.stringify(config)) as BenderConfig;
+}
+
+function resolveSuccessMode(config: EvalConfig): EvalSuccessMode {
+  return config.successMode ?? "response-only";
+}
+
+async function readPackageScripts(projectRoot: string): Promise<Record<string, string>> {
+  const packageJsonPath = `${projectRoot}/package.json`;
+  if (!existsSync(packageJsonPath)) return {};
+  try {
+    const raw = await readFile(packageJsonPath, "utf-8");
+    const parsed = JSON.parse(raw) as { scripts?: Record<string, unknown> };
+    const scripts = parsed.scripts ?? {};
+    const out: Record<string, string> = {};
+    for (const [name, value] of Object.entries(scripts)) {
+      if (typeof value === "string" && value.trim()) {
+        out[name] = value;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+async function runVerificationCommand(
+  projectRoot: string,
+  command: string,
+): Promise<{ passed: boolean; command: string; output?: string; error?: string }> {
+  try {
+    const { stdout, stderr } = await execAsync(command, {
+      cwd: projectRoot,
+      timeout: VERIFICATION_TIMEOUT_MS,
+      maxBuffer: VERIFICATION_MAX_BUFFER,
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+    });
+    const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+    return { passed: true, command, ...(output ? { output } : {}) };
+  } catch (err: unknown) {
+    const execErr = err as { stdout?: string; stderr?: string; message?: string };
+    const output = [
+      (execErr.stdout ?? "").trim(),
+      (execErr.stderr ?? "").trim(),
+    ].filter(Boolean).join("\n");
+    const message = execErr.message ?? "Verification command failed.";
+    return { passed: false, command, error: output || message };
+  }
 }
 
 function resolveTierSnapshot(config: BenderConfig, tier: ModelTier): { provider: string; model: string } {
@@ -153,6 +216,7 @@ async function executeTaskForConfig(params: ExecuteTaskParams): Promise<EvalTask
   const { projectRoot, compareRunId, task, config, baseConfig, state, adapter } = params;
   const runId = randomUUID();
   const startedAt = Date.now();
+  const successMode = resolveSuccessMode(config);
 
   const execution = await resolveExecution(baseConfig, config);
   const connectorResolution = resolveConnectorAccess(
@@ -171,6 +235,9 @@ async function executeTaskForConfig(params: ExecuteTaskParams): Promise<EvalTask
   let usage: EvalTaskRun["usage"];
   let success = false;
   let runtimeSummary: Record<string, unknown> | null = null;
+  let verification: { passed: boolean; command: string; output?: string; error?: string } | undefined;
+  let generatedDiff = false;
+  let generatedResponse = false;
 
   let runtime: Awaited<ReturnType<typeof createRoleRuntime>> | null = null;
   try {
@@ -214,8 +281,8 @@ async function executeTaskForConfig(params: ExecuteTaskParams): Promise<EvalTask
         undefined,
         runtime,
       );
-      success = fileOps.length > 0;
-      if (!success) {
+      generatedDiff = fileOps.length > 0;
+      if (!generatedDiff) {
         error = "Implementer returned no file operations for eval task.";
         output = "";
       } else {
@@ -223,6 +290,7 @@ async function executeTaskForConfig(params: ExecuteTaskParams): Promise<EvalTask
           .map((op) => `### FILE: ${op.path}\nACTION: ${op.action}\n\n${op.content}`)
           .join("\n\n");
       }
+      generatedResponse = output.trim().length > 0;
     } else {
       const result = await runRoleDetailed(
         model,
@@ -233,8 +301,50 @@ async function executeTaskForConfig(params: ExecuteTaskParams): Promise<EvalTask
       );
       output = result.text;
       usage = result.usage;
-      success = result.text.trim().length > 0;
-      if (!success) error = "Model returned empty output.";
+      generatedResponse = result.text.trim().length > 0;
+      if (!generatedResponse) error = "Model returned empty output.";
+    }
+
+    const responseSuccess = generatedResponse;
+    const diffSuccess = execution.role === "implementer" ? generatedDiff : generatedResponse;
+    if (successMode === "response-only") {
+      success = responseSuccess;
+    } else if (successMode === "diff-generated") {
+      success = diffSuccess;
+    } else {
+      if (!diffSuccess) {
+        success = false;
+        if (!error) {
+          error = successMode === "build-verified"
+            ? "No file changes produced before build verification."
+            : "No file changes produced before test verification.";
+        }
+      } else {
+        const scripts = await readPackageScripts(projectRoot);
+        const verificationCommand = successMode === "build-verified"
+          ? (scripts.build ? "npm run -s build" : undefined)
+          : (execution.runConfig.test.command?.trim() || (scripts.test ? "npm run -s test" : undefined));
+        if (!verificationCommand) {
+          success = false;
+          verification = {
+            passed: false,
+            command: "",
+            error: successMode === "build-verified"
+              ? "No build command found. Add package.json scripts.build."
+              : "No test command found. Set config.test.command or package.json scripts.test.",
+          };
+          error = verification.error;
+        } else {
+          adapter?.info?.(`Verifying ${config.name} with: ${verificationCommand}`);
+          verification = await runVerificationCommand(projectRoot, verificationCommand);
+          success = verification.passed;
+          if (!success) {
+            error = verification.error
+              ? `Verification failed: ${verification.error}`
+              : "Verification command failed.";
+          }
+        }
+      }
     }
   } catch (err: unknown) {
     success = false;
@@ -268,6 +378,8 @@ async function executeTaskForConfig(params: ExecuteTaskParams): Promise<EvalTask
       agentId: execution.agentId,
       agentName: execution.agentName,
       modelTier: execution.modelTier,
+      successMode,
+      verification: verification ?? null,
       capabilityPolicy: execution.capabilityPolicy ?? null,
       runtime: runtimeSummary,
     },

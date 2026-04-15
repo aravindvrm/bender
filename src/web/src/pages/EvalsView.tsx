@@ -6,12 +6,14 @@ import { roleLabel, type BaseRole } from "../lib/roleLabels";
 
 type ModelTier = "fast" | "default" | "strong";
 type EvalRunStatus = "queued" | "running" | "succeeded" | "failed";
+type EvalSuccessMode = "response-only" | "diff-generated" | "build-verified" | "test-verified";
 
 interface EvalConfig {
   id: string;
   name: string;
   role: BaseRole;
   enabled: boolean;
+  successMode?: EvalSuccessMode;
   modelTier?: ModelTier;
   provider?: string;
   model?: string;
@@ -189,6 +191,7 @@ const PROVIDER_MODEL_HINTS: Record<string, { fast: string; default: string; stro
 
 const MAX_CONFIG_SKILLS = 6;
 const MAX_CONFIG_CONNECTORS = 6;
+const SUCCESS_MODES: EvalSuccessMode[] = ["response-only", "diff-generated", "build-verified", "test-verified"];
 
 function ModelSelect({
   value,
@@ -239,6 +242,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
 
   const [configName, setConfigName] = useState("");
   const [configRole, setConfigRole] = useState<BaseRole>("implementer");
+  const [configSuccessMode, setConfigSuccessMode] = useState<EvalSuccessMode>("diff-generated");
   const [configTier, setConfigTier] = useState<ModelTier>("default");
   const [configProvider, setConfigProvider] = useState("");
   const [configModel, setConfigModel] = useState("");
@@ -475,6 +479,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
     const payload = {
       name: configName.trim(),
       role: configRole,
+      successMode: configSuccessMode,
       modelTier: configTier,
       provider: configProvider.trim() || undefined,
       model: configModel.trim() || undefined,
@@ -489,6 +494,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
     });
     if (!res.ok) throw new Error("Failed to create config");
     setConfigName("");
+    setConfigSuccessMode("diff-generated");
     setConfigProvider("");
     setConfigModel("");
     setSelectedConfigSkills([]);
@@ -505,6 +511,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
     const payload = {
       name: `${source.name} copy`,
       role: source.role,
+      successMode: source.successMode ?? (source.role === "implementer" ? "diff-generated" : "response-only"),
       modelTier: source.modelTier ?? "default",
       provider: source.provider,
       model: source.model,
@@ -910,7 +917,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                 className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200"
               />
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <div className="space-y-1">
                   <p className="text-[11px] text-zinc-500 uppercase tracking-wide">Role</p>
                   <select
@@ -923,6 +930,18 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                     <option value="planner">{roleLabel("planner")}</option>
                     <option value="implementer">{roleLabel("implementer")}</option>
                     <option value="reviewer">{roleLabel("reviewer")}</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[11px] text-zinc-500 uppercase tracking-wide">Success mode</p>
+                  <select
+                    value={configSuccessMode}
+                    onChange={(e) => setConfigSuccessMode(e.target.value as EvalSuccessMode)}
+                    className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+                  >
+                    {SUCCESS_MODES.map((mode) => (
+                      <option key={mode} value={mode}>{mode}</option>
+                    ))}
                   </select>
                 </div>
                 <div className="space-y-1">
@@ -1103,6 +1122,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                     </div>
                   </div>
                   <p className="text-[11px] text-zinc-500">{roleLabel(config.role)} · {config.modelTier ?? "default"}</p>
+                  <p className="text-[11px] text-zinc-600">Success mode: {config.successMode ?? "response-only"}</p>
                   <p className="text-[11px] text-zinc-600">{config.provider || "default provider"} / {config.model || "tier model"}</p>
                   {!!config.pinnedSkills?.length && (
                     <p className="text-[11px] text-zinc-600">Skills: {config.pinnedSkills.join(", ")}</p>

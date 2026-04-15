@@ -88,7 +88,9 @@ describe("api /tasks/append", () => {
     expect(secondBody.taskId).toBe(2);
 
     const taskPlanPath = join(tempProject, ".bender", "tasks", "current.md");
+    const taskPlanJsonPath = join(tempProject, ".bender", "tasks", "current.json");
     expect(existsSync(taskPlanPath)).toBe(true);
+    expect(existsSync(taskPlanJsonPath)).toBe(true);
     const markdown = await readFile(taskPlanPath, "utf-8");
 
     const parsed = parseTaskPlan(markdown);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { StateManager, formatContextForPrompt } from "../../src/state/manager.js";
 import { createTempDir } from "../helpers/temp-env.js";
@@ -48,6 +48,69 @@ describe("state/manager", () => {
     expect(await state.readFlows()).toContain("flowchart");
     expect((await state.readDecisions()).length).toBe(1);
     expect((await state.readSessions()).length).toBe(1);
+  });
+
+  it("uses current.json as canonical task plan store while keeping markdown", async () => {
+    await state.writeCurrentTasks([
+      "### Task 1: Ship",
+      "- **Description**: done",
+      "- **Files to create/modify**:",
+      "  - `src/index.ts`",
+      "- **Dependencies**: None",
+      "- **Acceptance criteria**: works",
+    ].join("\n"));
+
+    const jsonPath = join(projectRoot, ".bender", "tasks", "current.json");
+    const mdPath = join(projectRoot, ".bender", "tasks", "current.md");
+    expect(existsSync(jsonPath)).toBe(true);
+    expect(existsSync(mdPath)).toBe(true);
+
+    const json = JSON.parse(await readFile(jsonPath, "utf-8")) as { tasks?: Array<{ id?: number }> };
+    expect(json.tasks?.[0]?.id).toBe(1);
+    expect(await state.readCurrentTasks()).toContain("### Task 1: Ship");
+  });
+
+  it("migrates markdown-only task plan into canonical current.json", async () => {
+    const tasksDir = join(projectRoot, ".bender", "tasks");
+    const mdPath = join(tasksDir, "current.md");
+    const jsonPath = join(tasksDir, "current.json");
+    await writeFile(mdPath, [
+      "### Task 4: Legacy plan",
+      "- **Description**: from markdown",
+      "- **Files to create/modify**:",
+      "  - `legacy/file.ts`",
+      "- **Dependencies**: None",
+      "- **Acceptance criteria**: migrated",
+    ].join("\n"), "utf-8");
+
+    expect(existsSync(jsonPath)).toBe(false);
+    const markdown = await state.readCurrentTasks();
+    expect(markdown).toContain("Legacy plan");
+    expect(existsSync(jsonPath)).toBe(true);
+
+    const json = JSON.parse(await readFile(jsonPath, "utf-8")) as { tasks?: Array<{ id?: number; title?: string }> };
+    expect(json.tasks?.[0]).toMatchObject({ id: 4, title: "Legacy plan" });
+  });
+
+  it("recovers from corrupted current.json by falling back to markdown", async () => {
+    const tasksDir = join(projectRoot, ".bender", "tasks");
+    const mdPath = join(tasksDir, "current.md");
+    const jsonPath = join(tasksDir, "current.json");
+    await writeFile(mdPath, [
+      "### Task 2: Markdown fallback",
+      "- **Description**: valid markdown source",
+      "- **Files to create/modify**:",
+      "  - `src/fallback.ts`",
+      "- **Dependencies**: None",
+      "- **Acceptance criteria**: recovered",
+    ].join("\n"), "utf-8");
+    await writeFile(jsonPath, "{ invalid json", "utf-8");
+
+    const markdown = await state.readCurrentTasks();
+    expect(markdown).toContain("Markdown fallback");
+
+    const repaired = JSON.parse(await readFile(jsonPath, "utf-8")) as { tasks?: Array<{ id?: number; title?: string }> };
+    expect(repaired.tasks?.[0]).toMatchObject({ id: 2, title: "Markdown fallback" });
   });
 
   it("manages per-task agent assignments", async () => {

@@ -1,9 +1,9 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { LogLevel, SinkLevel } from "../logger.js";
+import { getBenderHomePath } from "./paths.js";
 
 export type ModelTier = "fast" | "default" | "strong";
 
@@ -80,6 +80,14 @@ export interface BenderConfig {
     /** Minimum level mirrored into the live console stream, or "none". */
     consoleLevel?: SinkLevel;
   };
+  security?: {
+    terminalExec?: {
+      /** Allow terminal execution from the dashboard terminal panel. */
+      enabled?: boolean;
+      /** Require explicit confirmation when commands match dangerous patterns. */
+      requireDangerousConfirmation?: boolean;
+    };
+  };
 }
 
 export const DEFAULT_CONFIG: BenderConfig = {
@@ -121,6 +129,12 @@ export const DEFAULT_CONFIG: BenderConfig = {
     level: "info",
     consoleLevel: "warn",
   },
+  security: {
+    terminalExec: {
+      enabled: true,
+      requireDangerousConfirmation: true,
+    },
+  },
 };
 
 export function getBenderDir(projectRoot: string): string {
@@ -142,7 +156,7 @@ export async function writeConfig(projectRoot: string, config: BenderConfig): Pr
 }
 
 export function getGlobalConfigPath(): string {
-  return join(homedir(), ".bender", "global-config.yaml");
+  return getBenderHomePath("global-config.yaml");
 }
 
 export async function readGlobalConfig(): Promise<BenderConfig> {
@@ -226,5 +240,13 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
     test: { ...defaults.test, ...overrides.test },
     reanalyze: { ...defaults.reanalyze, ...overrides.reanalyze },
     logging: { ...defaults.logging, ...overrides.logging },
+    security: {
+      ...defaults.security,
+      ...overrides.security,
+      terminalExec: {
+        ...defaults.security?.terminalExec,
+        ...overrides.security?.terminalExec,
+      },
+    },
   };
 }

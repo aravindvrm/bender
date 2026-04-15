@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, basename } from "node:path";
-import { homedir } from "node:os";
+import { getBenderHomeDir } from "./paths.js";
 
 export interface ProjectEntry {
   path: string;
@@ -9,7 +9,7 @@ export interface ProjectEntry {
   lastOpened: string; // ISO date
 }
 
-const REGISTRY_DIR = process.env.BENDER_HOME_DIR?.trim() || join(homedir(), ".bender");
+const REGISTRY_DIR = getBenderHomeDir();
 const REGISTRY_FILE = join(REGISTRY_DIR, "projects.json");
 
 export async function readRegistry(): Promise<ProjectEntry[]> {

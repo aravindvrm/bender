@@ -42,6 +42,12 @@ describe("state/config", () => {
       paths: ["./docs/skills"],
       maxChars: 9000,
     };
+    next.security = {
+      terminalExec: {
+        enabled: false,
+        requireDangerousConfirmation: true,
+      },
+    };
 
     await writeConfig(projectRoot, next);
     const readBack = await readConfig(projectRoot);
@@ -52,6 +58,7 @@ describe("state/config", () => {
     expect(readBack.skills?.enabledSkills).toEqual(["security-best-practices"]);
     expect(readBack.skills?.paths).toEqual(["./docs/skills"]);
     expect(readBack.skills?.maxChars).toBe(9000);
+    expect(readBack.security?.terminalExec?.enabled).toBe(false);
   });
 
   it("merges global config with project overrides for effective config", async () => {
