@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -130,6 +130,41 @@ describe("api route edge validations (project selected)", () => {
     expect(commitMissingMessage.status).toBe(400);
     const commitBody = await commitMissingMessage.json() as { error?: string };
     expect(commitBody.error).toBe("message is required");
+
+    const diffNoHistory = await fetch(`${baseUrl}/api/git/diff?commits=1`);
+    expect(diffNoHistory.ok).toBe(true);
+    const diffNoHistoryBody = await diffNoHistory.json() as { diff?: string | null };
+    expect(typeof diffNoHistoryBody.diff).toBe("string");
+
+    const setIdentity = await fetch(`${baseUrl}/api/git/identity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Bender Test", email: "bender-test@example.com" }),
+    });
+    expect(setIdentity.ok).toBe(true);
+
+    const seedFile = join(tempProject, "hello.txt");
+    await writeFile(seedFile, "hello from bender\n", "utf-8");
+
+    const stageAll = await fetch(`${baseUrl}/api/git/stage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ all: true }),
+    });
+    expect(stageAll.ok).toBe(true);
+
+    const commitFirst = await fetch(`${baseUrl}/api/git/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "chore: first commit" }),
+    });
+    expect(commitFirst.ok).toBe(true);
+
+    const diffSingleCommit = await fetch(`${baseUrl}/api/git/diff?commits=1`);
+    expect(diffSingleCommit.ok).toBe(true);
+    const diffSingleCommitBody = await diffSingleCommit.json() as { diff?: string | null };
+    expect(typeof diffSingleCommitBody.diff).toBe("string");
+    expect(diffSingleCommitBody.diff).toContain("hello.txt");
   });
 
   it("returns uninitialized state shape for project without .bender", async () => {
@@ -189,4 +224,3 @@ describe("api route edge validations (no project selected)", () => {
     expect(taskIssueBody.error).toBe("No project selected");
   });
 });
-

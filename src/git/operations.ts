@@ -81,6 +81,14 @@ export class GitOperations {
     return this.git.diff([range]);
   }
 
+  async getDiffWithArgs(args: string[]): Promise<string> {
+    return this.git.diff(args);
+  }
+
+  async getCommitPatch(ref: string): Promise<string> {
+    return this.git.show([ref, "--format=", "--patch"]);
+  }
+
   async getDiffStat(): Promise<string> {
     return this.git.diff(["--stat"]);
   }
