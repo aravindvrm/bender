@@ -106,6 +106,10 @@ interface GitHubWorkItemDeps {
   githubApi: <T>(path: string, token: string, init?: RequestInit) => Promise<T>;
 }
 
+const MAX_STORED_ISSUE_BODY_CHARS = 40_000;
+const MAX_PROMPT_ISSUE_BODY_CHARS = 12_000;
+const MAX_RUNTIME_TASK_DESCRIPTION_CHARS = 4_000;
+
 export class GitHubWorkItemsServiceError extends Error {
   status: number;
 
@@ -169,7 +173,7 @@ function normalizeGitHubIssue(
     repoFullName,
     issueNumber,
     title,
-    body: (issue.body ?? "").trim(),
+    body: trimForBudget(issue.body ?? "", MAX_STORED_ISSUE_BODY_CHARS),
     state: (issue.state ?? "open").trim() || "open",
     url: (issue.html_url ?? "").trim(),
     labels: normalizeIssueLabels(issue.labels),
@@ -244,6 +248,16 @@ function truncateForNotes(text: string, maxChars: number): string {
   const normalized = text.trim();
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function trimForBudget(input: string, maxChars: number): string {
+  const normalized = input.trim();
+  if (normalized.length <= maxChars) return normalized;
+  const marker = "\n\n[... trimmed for token budget ...]\n\n";
+  const budget = Math.max(0, maxChars - marker.length);
+  const head = Math.ceil(budget * 0.75);
+  const tail = Math.max(0, budget - head);
+  return `${normalized.slice(0, head)}${marker}${normalized.slice(normalized.length - tail)}`;
 }
 
 async function resolveProjectRepoFullName(projectRoot: string, state: StateManager): Promise<string> {
@@ -344,7 +358,7 @@ function parseSelectedWorkItems(input: ExtractGitHubWorkItemsInput): GitHubWorkI
       repoFullName,
       issueNumber,
       title,
-      body: (raw.body ?? "").trim(),
+      body: trimForBudget(String(raw.body ?? ""), MAX_STORED_ISSUE_BODY_CHARS),
       state: (raw.state ?? "open").trim() || "open",
       url: (raw.url ?? "").trim(),
       labels: Array.isArray(raw.labels) ? raw.labels.map((value) => value.trim()).filter(Boolean) : [],
@@ -451,6 +465,7 @@ async function resolveWorkItemWithFallback(
 }
 
 function buildRolePrompts(workItem: GitHubWorkItem): RuntimeRoleInputs {
+  const issueBody = trimForBudget(workItem.body || "(no body provided)", MAX_PROMPT_ISSUE_BODY_CHARS);
   const issueHeader = [
     `GitHub Issue #${workItem.issueNumber}: ${workItem.title}`,
     `Repo: ${workItem.repoFullName}`,
@@ -460,7 +475,7 @@ function buildRolePrompts(workItem: GitHubWorkItem): RuntimeRoleInputs {
     `Milestone: ${workItem.milestone ?? "none"}`,
     "",
     "Issue body:",
-    workItem.body || "(no body provided)",
+    issueBody,
   ].join("\n");
 
   return {
@@ -542,7 +557,10 @@ async function runRolePipelineForWorkItem(
       config,
       {
         role,
-        taskDescription: `${workItem.title}\n${workItem.body}`,
+        taskDescription: trimForBudget(
+          `${workItem.title}\n${workItem.body || ""}`,
+          MAX_RUNTIME_TASK_DESCRIPTION_CHARS,
+        ),
         pinnedSkills: agent.pinnedSkills,
         mcpServerIds: agent.mcpServerIds,
         capabilityPolicy: agent.capabilityPolicy,

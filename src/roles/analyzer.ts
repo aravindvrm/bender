@@ -149,8 +149,8 @@ function prioritiseFiles(
 /** Read up to `maxFiles` files, staying within `maxTotalChars` */
 async function readKeyFiles(
   files: { path: string; relPath: string; size: number }[],
-  maxFiles = 60,
-  maxTotalChars = 120_000,
+  maxFiles = 40,
+  maxTotalChars = 70_000,
 ): Promise<{ path: string; content: string }[]> {
   const result: { path: string; content: string }[] = [];
   let total = 0;
@@ -158,7 +158,7 @@ async function readKeyFiles(
     if (total >= maxTotalChars) break;
     try {
       const raw = await readFile(f.path, "utf-8");
-      const snippet = raw.slice(0, 8000); // cap per-file
+      const snippet = raw.slice(0, 4000); // cap per-file
       result.push({ path: f.relPath, content: snippet });
       total += snippet.length;
     } catch { /* binary or unreadable */ }
