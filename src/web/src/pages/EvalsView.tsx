@@ -25,6 +25,7 @@ interface SkillMeta {
   name: string;
   description: string;
   size: number;
+  source?: "curated" | "user" | "project";
 }
 
 interface McpConnector {
@@ -310,16 +311,48 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
     return !!llmStatus?.providers?.[provider]?.configured;
   }, [llmStatus]);
 
+  const loadSkillsCatalog = useCallback(async (forceCuratedRefresh = false): Promise<SkillMeta[]> => {
+    try {
+      const catalogRes = await fetch("/api/skills/catalog");
+      const catalogBody = await catalogRes.json() as { skills?: SkillMeta[]; error?: string };
+      if (catalogRes.ok) {
+        return Array.isArray(catalogBody.skills) ? catalogBody.skills : [];
+      }
+    } catch {
+      // Fallback to legacy endpoint below.
+    }
+
+    const registryRes = await fetch("/api/skills/registry");
+    const registryBody = await registryRes.json() as { skills?: SkillMeta[]; needsRefresh?: boolean; error?: string };
+    if (!registryRes.ok) {
+      throw new Error(registryBody.error ?? "Failed to load skills");
+    }
+
+    let registrySkills = Array.isArray(registryBody.skills) ? registryBody.skills : [];
+    if (forceCuratedRefresh || registrySkills.length === 0 || registryBody.needsRefresh) {
+      try {
+        const refreshed = await fetch("/api/skills/refresh", { method: "POST" });
+        if (refreshed.ok) {
+          const body = await refreshed.json() as { skills?: SkillMeta[] };
+          registrySkills = Array.isArray(body.skills) ? body.skills : registrySkills;
+        }
+      } catch {
+        // Keep initial data if refresh fails.
+      }
+    }
+    return registrySkills;
+  }, []);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [configsRes, suitesRes, compareRunsRes, suiteRunsRes, skillsRes, connectorsRes, llmStatusRes] = await Promise.all([
+      const [configsRes, suitesRes, compareRunsRes, suiteRunsRes, skillsCatalog, connectorsRes, llmStatusRes] = await Promise.all([
         fetch("/api/evals/configs"),
         fetch("/api/evals/suites"),
         fetch("/api/evals/runs/compare?limit=30"),
         fetch("/api/evals/runs/suites?limit=30"),
-        fetch("/api/skills/registry"),
+        loadSkillsCatalog(),
         fetch("/api/mcp/connectors"),
         fetch("/api/llm/status"),
       ]);
@@ -334,23 +367,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
       setSuites(suitesJson.suites);
       setCompareRuns(compareRunsJson.runs);
       setSuiteRuns(suiteRunsJson.runs);
-
-      if (skillsRes.ok) {
-        const skillsJson = await skillsRes.json() as { skills?: SkillMeta[]; needsRefresh?: boolean };
-        let registrySkills = Array.isArray(skillsJson.skills) ? skillsJson.skills : [];
-        if (registrySkills.length === 0 || skillsJson.needsRefresh) {
-          try {
-            const refreshed = await fetch("/api/skills/refresh", { method: "POST" });
-            if (refreshed.ok) {
-              const body = await refreshed.json() as { skills?: SkillMeta[] };
-              registrySkills = Array.isArray(body.skills) ? body.skills : registrySkills;
-            }
-          } catch {
-            // keep initial registry result
-          }
-        }
-        setSkills(registrySkills);
-      }
+      setSkills(skillsCatalog);
 
       if (connectorsRes.ok) {
         const connectorsJson = await connectorsRes.json() as { connectors?: McpConnector[] };
@@ -365,7 +382,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadSkillsCatalog]);
 
   const loadCompareDetail = useCallback(async (runId: string) => {
     const res = await fetch(`/api/evals/runs/compare/${encodeURIComponent(runId)}`);
@@ -432,10 +449,9 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
   async function refreshSkills() {
     setSkillsRefreshing(true);
     try {
-      const res = await fetch("/api/skills/refresh", { method: "POST" });
-      const body = await res.json() as { skills?: SkillMeta[]; error?: string };
-      if (!res.ok) throw new Error(body.error ?? "Failed to refresh skills");
-      setSkills(Array.isArray(body.skills) ? body.skills : []);
+      await fetch("/api/skills/refresh", { method: "POST" });
+      const catalog = await loadSkillsCatalog(true);
+      setSkills(catalog);
     } catch (err) {
       setMessage((err as Error).message);
     } finally {
@@ -1060,6 +1076,9 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                         />
                         <span className="leading-4">
                           <span className="text-zinc-200">{skill.name}</span>
+                          <span className="ml-1 text-[10px] uppercase tracking-wide text-zinc-500">
+                            [{skill.source ?? "curated"}]
+                          </span>
                           <span className="block text-zinc-500">{skill.description}</span>
                         </span>
                       </label>

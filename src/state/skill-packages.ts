@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   fetchRegistry,
+  readRegistry as readSkillsRegistry,
   fetchSkillContent,
   type SkillMeta,
 } from "./skills.js";
@@ -211,11 +212,14 @@ function fromCuratedSkill(meta: SkillMeta): SkillPackageMeta {
 }
 
 export async function fetchSkillPackages(options: SkillPackageFetchOptions = {}): Promise<SkillPackageRegistry> {
-  const curated = await fetchRegistry(Boolean(options.forceRemote));
+  let curated = await fetchRegistry(Boolean(options.forceRemote)).catch(() => null);
+  if (!curated) {
+    curated = await readSkillsRegistry();
+  }
   const local = await buildLocalPackages(options.projectRoot);
   return {
     fetchedAt: Date.now(),
-    packages: [...curated.skills.map(fromCuratedSkill), ...local]
+    packages: [...(curated?.skills ?? []).map(fromCuratedSkill), ...local]
       .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }

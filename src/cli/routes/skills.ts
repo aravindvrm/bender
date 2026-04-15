@@ -1,7 +1,10 @@
 import type { Express } from "express";
 import type { SkillEvalCase } from "../../state/skill-workbench.js";
 import {
+  createSkillPackage,
+  getSkillsCatalog,
   getSkillsRegistrySnapshot,
+  importSkillPackage,
   readSkillWorkbench,
   refreshSkillsRegistrySnapshot,
   runSkillWorkbenchEval,
@@ -34,6 +37,35 @@ export function registerSkillRoutes(app: Express, deps: SkillsRouteDeps): void {
   app.post("/api/skills/refresh", async (_req, res) => {
     try {
       res.json(await refreshSkillsRegistrySnapshot());
+    } catch (err) {
+      const mapped = toHttpError(err);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
+  app.get("/api/skills/catalog", async (_req, res) => {
+    try {
+      res.json(await getSkillsCatalog(deps.getCurrentProject()));
+    } catch (err) {
+      const mapped = toHttpError(err);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
+  app.post("/api/skills/library/create", async (req, res) => {
+    try {
+      const body = (req.body ?? {}) as { scope?: "user" | "project"; name?: string; description?: string };
+      res.json(await createSkillPackage(deps.getCurrentProject(), body));
+    } catch (err) {
+      const mapped = toHttpError(err);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
+  app.post("/api/skills/library/import", async (req, res) => {
+    try {
+      const body = (req.body ?? {}) as { scope?: "user" | "project"; sourcePath?: string; name?: string };
+      res.json(await importSkillPackage(deps.getCurrentProject(), body));
     } catch (err) {
       const mapped = toHttpError(err);
       res.status(mapped.status).json({ error: mapped.message });

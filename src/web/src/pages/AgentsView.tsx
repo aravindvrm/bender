@@ -36,6 +36,18 @@ interface SkillMeta {
   name: string;
   description: string;
   size: number;
+  source?: "curated" | "user" | "project";
+  defaultPinnedRoles?: BaseRole[];
+  runtimeBaselineRoles?: BaseRole[];
+  defaultRuntimeEnabled?: boolean;
+}
+
+interface SkillLibrarySummary {
+  total: number;
+  curated: number;
+  user: number;
+  project: number;
+  runtimeCuratedPool: number;
 }
 
 const BASE_ROLES: BaseRole[] = ["analyzer", "architect", "planner", "implementer", "reviewer"];
@@ -55,10 +67,11 @@ const CAPABILITY_CHOICES: Array<{ id: CapabilityId; label: string }> = [
   { id: "connector.neon.use", label: "Neon Connector" },
   { id: "connector.vercel.use", label: "Vercel Connector" },
 ];
-type AgentSectionId = "role-defaults" | "create-agent" | "builtin-agents" | "custom-agents";
+type AgentSectionId = "role-defaults" | "skill-library" | "create-agent" | "builtin-agents" | "custom-agents";
 const AGENT_SECTIONS_STORAGE_KEY = "bender.agents.openSections.v1";
 const DEFAULT_OPEN_SECTIONS: Record<AgentSectionId, boolean> = {
   "role-defaults": false,
+  "skill-library": false,
   "create-agent": false,
   "builtin-agents": false,
   "custom-agents": false,
@@ -76,6 +89,7 @@ function readOpenSections(): Record<AgentSectionId, boolean> {
     const parsed = JSON.parse(raw) as Partial<Record<AgentSectionId, unknown>>;
     return {
       "role-defaults": typeof parsed["role-defaults"] === "boolean" ? parsed["role-defaults"] : DEFAULT_OPEN_SECTIONS["role-defaults"],
+      "skill-library": typeof parsed["skill-library"] === "boolean" ? parsed["skill-library"] : DEFAULT_OPEN_SECTIONS["skill-library"],
       "create-agent": typeof parsed["create-agent"] === "boolean" ? parsed["create-agent"] : DEFAULT_OPEN_SECTIONS["create-agent"],
       "builtin-agents": typeof parsed["builtin-agents"] === "boolean" ? parsed["builtin-agents"] : DEFAULT_OPEN_SECTIONS["builtin-agents"],
       "custom-agents": typeof parsed["custom-agents"] === "boolean" ? parsed["custom-agents"] : DEFAULT_OPEN_SECTIONS["custom-agents"],
@@ -129,9 +143,22 @@ function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+function sourceTone(source?: SkillMeta["source"]): string {
+  if (source === "project") return "bg-cyan-950/70 text-cyan-300 border-cyan-900/60";
+  if (source === "user") return "bg-emerald-950/70 text-emerald-300 border-emerald-900/60";
+  return "bg-zinc-800 text-zinc-300 border-zinc-700";
+}
+
+function sourceLabel(source?: SkillMeta["source"]): string {
+  if (source === "project") return "Project";
+  if (source === "user") return "User";
+  return "Curated";
+}
+
 export function AgentsView() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [skills, setSkills] = useState<SkillMeta[]>([]);
+  const [skillLibrarySummary, setSkillLibrarySummary] = useState<SkillLibrarySummary | null>(null);
   const [selectedByRole, setSelectedByRole] = useState<Partial<Record<BaseRole, string>>>({});
   const [promptSnippets, setPromptSnippets] = useState<Partial<Record<BaseRole, string>>>({});
   const [skillsRefreshing, setSkillsRefreshing] = useState(false);
@@ -143,6 +170,13 @@ export function AgentsView() {
   const [skillSearch, setSkillSearch] = useState("");
   const [createSkillSearch, setCreateSkillSearch] = useState("");
   const [openSections, setOpenSections] = useState<Record<AgentSectionId, boolean>>(() => readOpenSections());
+  const [skillLibraryScope, setSkillLibraryScope] = useState<"user" | "project">("project");
+  const [newSkillName, setNewSkillName] = useState("");
+  const [newSkillDescription, setNewSkillDescription] = useState("");
+  const [importSkillScope, setImportSkillScope] = useState<"user" | "project">("project");
+  const [importSkillPath, setImportSkillPath] = useState("");
+  const [importSkillName, setImportSkillName] = useState("");
+  const [skillLibraryBusy, setSkillLibraryBusy] = useState<"create" | "import" | null>(null);
 
   const [draft, setDraft] = useState<AgentConfig>({
     id: "",
@@ -157,18 +191,52 @@ export function AgentsView() {
 
   const [customEdits, setCustomEdits] = useState<Record<string, AgentConfig>>({});
 
+  async function loadSkillsCatalog(options?: { forceCuratedRefresh?: boolean }): Promise<{ skills: SkillMeta[]; summary: SkillLibrarySummary | null }> {
+    const forceCuratedRefresh = !!options?.forceCuratedRefresh;
+    try {
+      const catalogRes = await fetch("/api/skills/catalog");
+      const catalogBody = await catalogRes.json() as { skills?: SkillMeta[]; summary?: SkillLibrarySummary; error?: string };
+      if (catalogRes.ok) {
+        return {
+          skills: Array.isArray(catalogBody.skills) ? catalogBody.skills : [],
+          summary: catalogBody.summary ?? null,
+        };
+      }
+    } catch {
+      // Fallback to legacy registry endpoint below.
+    }
+
+    const registryRes = await fetch("/api/skills/registry");
+    const registryBody = await registryRes.json() as { skills?: SkillMeta[]; needsRefresh?: boolean; error?: string };
+    if (!registryRes.ok) {
+      throw new Error(registryBody.error ?? "Failed to load skills");
+    }
+    let resolvedSkills: SkillMeta[] = Array.isArray(registryBody.skills) ? registryBody.skills : [];
+    if (forceCuratedRefresh || registryBody.needsRefresh || resolvedSkills.length === 0) {
+      try {
+        const refreshRes = await fetch("/api/skills/refresh", { method: "POST" });
+        const refreshBody = await refreshRes.json() as { skills?: SkillMeta[] };
+        if (refreshRes.ok && Array.isArray(refreshBody.skills)) {
+          resolvedSkills = refreshBody.skills;
+        }
+      } catch {
+        // Keep initial result on refresh failure.
+      }
+    }
+    return { skills: resolvedSkills, summary: null };
+  }
+
   async function loadData() {
     setLoading(true);
     setError(null);
     try {
-      const [agentsRes, skillsRes, selectionsRes, snippetsRes] = await Promise.all([
+      const [agentsRes, skillsCatalog, selectionsRes, snippetsRes] = await Promise.all([
         fetch("/api/agents"),
-        fetch("/api/skills/registry"),
+        loadSkillsCatalog(),
         fetch("/api/agents/selection"),
         fetch("/api/agents/prompt-snippets"),
       ]);
       const agentsBody = await agentsRes.json();
-      const skillsBody = await skillsRes.json();
       const selectionsBody = await selectionsRes.json();
       const snippetsBody = await snippetsRes.json();
       if (!agentsRes.ok) throw new Error(agentsBody.error ?? "Failed to load agents");
@@ -183,19 +251,8 @@ export function AgentsView() {
           },
         })),
       );
-      let resolvedSkills: SkillMeta[] = Array.isArray(skillsBody.skills) ? skillsBody.skills : [];
-      if ((skillsBody.needsRefresh || resolvedSkills.length === 0) && skillsRes.ok) {
-        try {
-          const refreshRes = await fetch("/api/skills/refresh", { method: "POST" });
-          const refreshBody = await refreshRes.json();
-          if (refreshRes.ok && Array.isArray(refreshBody.skills)) {
-            resolvedSkills = refreshBody.skills;
-          }
-        } catch {
-          // Keep initial result on refresh failure.
-        }
-      }
-      setSkills(resolvedSkills);
+      setSkills(skillsCatalog.skills);
+      setSkillLibrarySummary(skillsCatalog.summary);
       setSelectedByRole(selectionsBody.selectedByRole ?? {});
       setPromptSnippets(snippetsBody.snippets ?? {});
 
@@ -447,16 +504,84 @@ export function AgentsView() {
     });
   }
 
+  async function createLibrarySkill() {
+    const trimmedName = newSkillName.trim();
+    if (!trimmedName) {
+      setError("Skill name is required.");
+      return;
+    }
+    setSkillLibraryBusy("create");
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/skills/library/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: skillLibraryScope,
+          name: trimmedName,
+          description: newSkillDescription.trim() || undefined,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to create skill package");
+      setNewSkillName("");
+      setNewSkillDescription("");
+      const catalog = await loadSkillsCatalog();
+      setSkills(catalog.skills);
+      setSkillLibrarySummary(catalog.summary);
+      setNotice(`Created skill package: ${body.name ?? trimmedName}`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSkillLibraryBusy(null);
+    }
+  }
+
+  async function importLibrarySkill() {
+    const trimmedPath = importSkillPath.trim();
+    if (!trimmedPath) {
+      setError("Skill source path is required.");
+      return;
+    }
+    setSkillLibraryBusy("import");
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/skills/library/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: importSkillScope,
+          sourcePath: trimmedPath,
+          name: importSkillName.trim() || undefined,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to import skill package");
+      setImportSkillPath("");
+      setImportSkillName("");
+      const catalog = await loadSkillsCatalog();
+      setSkills(catalog.skills);
+      setSkillLibrarySummary(catalog.summary);
+      setNotice(`Imported skill package: ${body.name ?? "skill"}`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSkillLibraryBusy(null);
+    }
+  }
+
   async function refreshSkillsRegistry() {
     setSkillsRefreshing(true);
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch("/api/skills/refresh", { method: "POST" });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Failed to refresh skills registry");
-      setSkills(body.skills ?? []);
-      setNotice("Skills registry refreshed.");
+      await fetch("/api/skills/refresh", { method: "POST" });
+      const catalog = await loadSkillsCatalog({ forceCuratedRefresh: true });
+      setSkills(catalog.skills);
+      setSkillLibrarySummary(catalog.summary);
+      setNotice("Skills refreshed.");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -482,7 +607,7 @@ export function AgentsView() {
             disabled={skillsRefreshing}
             className="ml-auto px-2.5 py-1 rounded-md text-[11px] border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {skillsRefreshing ? "Refreshing skills..." : "Refresh skills"}
+            {skillsRefreshing ? "Refreshing skills..." : "Refresh catalog"}
           </button>
         </div>
         <p className="text-xs text-zinc-600">Default agents are read-only. Create custom agents and assign them per role (global) or per task (implementer).</p>
@@ -523,6 +648,111 @@ export function AgentsView() {
               </label>
             );
           })}
+        </div>
+      </AccordionSection>
+
+      <AccordionSection
+        title="Skill Library"
+        description="Curated defaults stay lean; extend the user/project library for custom agents."
+        count={skills.length}
+        open={openSections["skill-library"]}
+        onToggle={() => toggleSection("skill-library")}
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 text-xs">
+            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
+              <p className="text-zinc-600">Total</p>
+              <p className="text-zinc-300 mt-0.5">{skillLibrarySummary?.total ?? skills.length}</p>
+            </div>
+            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
+              <p className="text-zinc-600">Curated</p>
+              <p className="text-zinc-300 mt-0.5">{skillLibrarySummary?.curated ?? skills.filter((s) => s.source === "curated").length}</p>
+            </div>
+            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
+              <p className="text-zinc-600">User</p>
+              <p className="text-zinc-300 mt-0.5">{skillLibrarySummary?.user ?? skills.filter((s) => s.source === "user").length}</p>
+            </div>
+            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
+              <p className="text-zinc-600">Project</p>
+              <p className="text-zinc-300 mt-0.5">{skillLibrarySummary?.project ?? skills.filter((s) => s.source === "project").length}</p>
+            </div>
+            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
+              <p className="text-zinc-600">Runtime curated pool</p>
+              <p className="text-zinc-300 mt-0.5">{skillLibrarySummary?.runtimeCuratedPool ?? "—"}</p>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3 space-y-2">
+            <p className="text-xs text-zinc-500">Create skill package</p>
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-2">
+              <div className="relative">
+                <select
+                  value={skillLibraryScope}
+                  onChange={(e) => setSkillLibraryScope(e.target.value as "user" | "project")}
+                  className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+                >
+                  <option value="project">Project library</option>
+                  <option value="user">User library</option>
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+              </div>
+              <input
+                value={newSkillName}
+                onChange={(e) => setNewSkillName(e.target.value)}
+                placeholder="Skill name (e.g. api-contract-qa)"
+                className="bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
+              />
+              <input
+                value={newSkillDescription}
+                onChange={(e) => setNewSkillDescription(e.target.value)}
+                placeholder="Short description (optional)"
+                className="bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
+              />
+              <button
+                onClick={() => void createLibrarySkill()}
+                disabled={skillLibraryBusy === "create"}
+                className="px-3 py-2 rounded-md text-xs border border-zinc-700 text-zinc-300 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {skillLibraryBusy === "create" ? "Creating..." : "Create"}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3 space-y-2">
+            <p className="text-xs text-zinc-500">Import skill package from local path</p>
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-2">
+              <div className="relative">
+                <select
+                  value={importSkillScope}
+                  onChange={(e) => setImportSkillScope(e.target.value as "user" | "project")}
+                  className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+                >
+                  <option value="project">Project library</option>
+                  <option value="user">User library</option>
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+              </div>
+              <input
+                value={importSkillPath}
+                onChange={(e) => setImportSkillPath(e.target.value)}
+                placeholder="Source directory path"
+                className="bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
+              />
+              <input
+                value={importSkillName}
+                onChange={(e) => setImportSkillName(e.target.value)}
+                placeholder="Override name (optional)"
+                className="bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
+              />
+              <button
+                onClick={() => void importLibrarySkill()}
+                disabled={skillLibraryBusy === "import"}
+                className="px-3 py-2 rounded-md text-xs border border-zinc-700 text-zinc-300 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {skillLibraryBusy === "import" ? "Importing..." : "Import"}
+              </button>
+            </div>
+          </div>
         </div>
       </AccordionSection>
 
@@ -599,14 +829,25 @@ export function AgentsView() {
                   const enabled = draft.pinnedSkills.includes(skill.name);
                   const atLimit = !enabled && draft.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT;
                   return (
-                    <label key={skill.name} className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-zinc-300 border-b border-zinc-800/60 last:border-b-0">
+                    <label key={skill.name} className="flex items-start gap-2 px-2.5 py-1.5 text-xs text-zinc-300 border-b border-zinc-800/60 last:border-b-0">
                       <input
                         type="checkbox"
                         checked={enabled}
                         disabled={atLimit}
                         onChange={(e) => toggleDraftSkill(skill.name, e.target.checked)}
                       />
-                      <span className="font-mono">{skill.name}</span>
+                      <span className="leading-4">
+                        <span className="font-mono text-zinc-200">{skill.name}</span>
+                        <span className={`ml-1 inline-flex items-center rounded border px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide ${sourceTone(skill.source)}`}>
+                          {sourceLabel(skill.source)}
+                        </span>
+                        {skill.defaultRuntimeEnabled && (
+                          <span className="ml-1 text-[10px] text-amber-300">runtime baseline</span>
+                        )}
+                        {skill.description && (
+                          <span className="block text-zinc-500">{skill.description}</span>
+                        )}
+                      </span>
                     </label>
                   );
                 })
@@ -801,14 +1042,25 @@ export function AgentsView() {
                           const enabled = edit.pinnedSkills.includes(skill.name);
                           const atLimit = !enabled && edit.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT;
                           return (
-                            <label key={skill.name} className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-zinc-300 border-b border-zinc-800/60 last:border-b-0">
+                            <label key={skill.name} className="flex items-start gap-2 px-2.5 py-1.5 text-xs text-zinc-300 border-b border-zinc-800/60 last:border-b-0">
                               <input
                                 type="checkbox"
                                 checked={enabled}
                                 disabled={atLimit}
                                 onChange={(e) => toggleSkill(agent.id, skill.name, e.target.checked)}
                               />
-                              <span className="font-mono">{skill.name}</span>
+                              <span className="leading-4">
+                                <span className="font-mono text-zinc-200">{skill.name}</span>
+                                <span className={`ml-1 inline-flex items-center rounded border px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide ${sourceTone(skill.source)}`}>
+                                  {sourceLabel(skill.source)}
+                                </span>
+                                {skill.defaultRuntimeEnabled && (
+                                  <span className="ml-1 text-[10px] text-amber-300">runtime baseline</span>
+                                )}
+                                {skill.description && (
+                                  <span className="block text-zinc-500">{skill.description}</span>
+                                )}
+                              </span>
                             </label>
                           );
                         })

@@ -19,7 +19,11 @@
     "test:unit": "vitest run --config vitest.config.ts tests/unit",
     "test:integration": "vitest run --config vitest.config.ts tests/integration",
     "test:harness": "npm run build:cli && npm run test:unit && npm run test:integration",
-    "test:e2e:smoke": "node tests/e2e-smoke.mjs",
+    "test:e2e:smoke": "node tests/e2e-dashboard.mjs",
+    "test:e2e:playwright": "npm run -s build && playwright test",
+    "test:e2e:playwright:headed": "PW_HEADED=1 npm run -s test:e2e:playwright",
+    "test:e2e:llm-smoke": "node tests/e2e-smoke.mjs",
+    "test:harness:full": "npm run test:harness && npm run test:e2e:smoke",
     "test:watch": "vitest --config vitest.config.ts"
   },
   "keywords": [
@@ -51,6 +55,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.2.2",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",

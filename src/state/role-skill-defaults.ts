@@ -78,3 +78,19 @@ export function getRoleRuntimeBaselineSkills(role: RoleName): string[] {
   return [...(ROLE_RUNTIME_BASELINE_SKILLS[role] ?? [])];
 }
 
+export function getRolesWithDefaultPinnedSkill(skillName: string): RoleName[] {
+  const normalized = skillName.trim();
+  return (Object.keys(ROLE_DEFAULT_PINNED_SKILLS) as RoleName[])
+    .filter((role) => ROLE_DEFAULT_PINNED_SKILLS[role].includes(normalized));
+}
+
+export function getRolesWithRuntimeBaselineSkill(skillName: string): RoleName[] {
+  const normalized = skillName.trim();
+  return (Object.keys(ROLE_RUNTIME_BASELINE_SKILLS) as RoleName[])
+    .filter((role) => ROLE_RUNTIME_BASELINE_SKILLS[role].includes(normalized));
+}
+
+export function getRuntimeCuratedSkillPool(): string[] {
+  const all = Object.values(ROLE_RUNTIME_BASELINE_SKILLS).flat();
+  return uniq(all).sort((a, b) => a.localeCompare(b));
+}
