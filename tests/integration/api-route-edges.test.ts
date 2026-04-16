@@ -79,6 +79,13 @@ describe("api route edge validations (project selected)", () => {
     expect(planBody.error).toBe("feature is required");
   });
 
+  it("exposes /api/health for desktop readiness checks", async () => {
+    const health = await fetch(`${baseUrl}/api/health`);
+    expect(health.ok).toBe(true);
+    const body = await health.json() as { ok?: boolean };
+    expect(body.ok).toBe(true);
+  });
+
   it("validates /api/fs guardrails", async () => {
     const inspectMissingPath = await fetch(`${baseUrl}/api/fs/inspect`);
     expect(inspectMissingPath.status).toBe(400);

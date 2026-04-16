@@ -163,6 +163,13 @@ function parentPath(path: string | null): string {
   return cleaned.slice(0, idx);
 }
 
+function defaultGitHubRedirectUri(): string {
+  if (typeof window === "undefined" || !window.location?.origin) {
+    return "http://localhost:3142/api/github/auth/callback";
+  }
+  return `${window.location.origin}/api/github/auth/callback`;
+}
+
 export function ProjectSelector({ currentPath, onProjectChange, compact }: ProjectSelectorProps) {
   const [open, setOpen] = useState(false);
   const [sourceTab, setSourceTab] = useState<"local" | "github">("local");
@@ -182,7 +189,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
   const [githubDeviceFlow, setGithubDeviceFlow] = useState<GitHubDeviceFlowStart | null>(null);
   const [githubClientIdInput, setGithubClientIdInput] = useState("");
   const [githubClientSecretInput, setGithubClientSecretInput] = useState("");
-  const [githubRedirectUriInput, setGithubRedirectUriInput] = useState("http://localhost:3142/api/github/auth/callback");
+  const [githubRedirectUriInput, setGithubRedirectUriInput] = useState(defaultGitHubRedirectUri());
   const [githubInstallations, setGithubInstallations] = useState<GitHubInstallation[]>([]);
   const [githubRepos, setGithubRepos] = useState<GitHubRepository[]>([]);
   const [githubInstallationId, setGithubInstallationId] = useState<number | null>(null);
@@ -308,7 +315,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
       const cfg = await fetchGitHubAuthConfig();
       setGithubConfig(cfg);
       setGithubClientIdInput(cfg.clientId ?? "");
-      setGithubRedirectUriInput(cfg.redirectUri ?? "http://localhost:3142/api/github/auth/callback");
+      setGithubRedirectUriInput(cfg.redirectUri ?? defaultGitHubRedirectUri());
 
       const status = await fetchGitHubStatus();
       setGithubStatus(status);

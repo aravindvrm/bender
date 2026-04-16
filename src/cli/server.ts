@@ -40,8 +40,8 @@ import { normalizeUserPath } from "./services/path-utils.js";
 import { createSseOperationRunner } from "./services/sse.js";
 import { CURATED_MCP_CONNECTORS, createConnectorHealthManager } from "./services/connector-health.js";
 import { fetchLiveModels, resolveProviderApiKey } from "./services/llm-models.js";
+import { resolveServerPort } from "./server-config.js";
 
-const API_PORT = 3142;
 const SERVER_SESSION_STARTED_AT = Date.now();
 
 let currentProject: string | null = null;
@@ -51,7 +51,9 @@ function getProject(): string {
   return currentProject;
 }
 
-export async function startServer(initialProject?: string, port = API_PORT): Promise<HttpServer> {
+export async function startServer(initialProject?: string, port?: number): Promise<HttpServer> {
+  const runtimePort = resolveServerPort(port);
+
   if (initialProject) {
     currentProject = initialProject;
     await addToRegistry(initialProject);
@@ -80,12 +82,12 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
     addToRegistry,
     readStoredGitHubAuthConfig,
     writeStoredGitHubAuthConfig,
-    getGithubAuthConfig: () => getGithubAuthConfig(API_PORT),
+    getGithubAuthConfig: () => getGithubAuthConfig(runtimePort),
     readGitHubSession,
     writeGitHubSession,
     clearGitHubSession,
-    startGitHubDeviceFlow: () => startGitHubDeviceFlow(API_PORT),
-    pollGitHubDeviceFlow: (sessionId) => pollGitHubDeviceFlow(sessionId, API_PORT),
+    startGitHubDeviceFlow: () => startGitHubDeviceFlow(runtimePort),
+    pollGitHubDeviceFlow: (sessionId) => pollGitHubDeviceFlow(sessionId, runtimePort),
     githubApi,
     authCloneUrl,
     createAuthState: createGitHubAuthState,
@@ -158,6 +160,10 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
 
   registerAgentRoutes(app);
 
+  app.get("/api/health", (_req, res) => {
+    res.json({ ok: true });
+  });
+
   app.get("/{*path}", (_req, res) => {
     const indexPath = join(webDistDir, "index.html");
     if (existsSync(indexPath)) res.sendFile(indexPath);
@@ -165,7 +171,7 @@ export async function startServer(initialProject?: string, port = API_PORT): Pro
   });
 
   return await new Promise<HttpServer>((resolvePromise, rejectPromise) => {
-    const server = app.listen(port, "127.0.0.1", () => resolvePromise(server));
+    const server = app.listen(runtimePort, "127.0.0.1", () => resolvePromise(server));
     server.once("error", rejectPromise);
   });
 }
