@@ -26,7 +26,7 @@ export async function runInitOperation(
     description?: string;
     path?: string;
     template?: "nextjs-saas" | "express-api" | "auto";
-    llmProvider?: "anthropic" | "openai" | "google" | "groq" | "ollama";
+    llmProvider?: "anthropic" | "openai" | "google" | "groq" | "ollama" | "openai-compatible";
     llmApiKey?: string;
   },
   adapter: UIAdapter,

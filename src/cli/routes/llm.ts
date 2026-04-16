@@ -1,13 +1,26 @@
 import type { Express } from "express";
 import { readEffectiveConfig, type BenderConfig } from "../../state/config.js";
 
-type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
+type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "openai-compatible";
+const LLM_PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "ollama", "openai-compatible"];
 
 interface LlmRouteDeps {
   getCurrentProject: () => string | null;
   normalizeUserPath: (input?: string) => string;
   resolveProviderApiKey: (provider: LlmProvider, config: BenderConfig | null) => string | undefined;
-  fetchLiveModels: (provider: LlmProvider, apiKey?: string) => Promise<string[]>;
+  resolveProviderBaseUrl: (provider: LlmProvider, config: BenderConfig | null) => string | undefined;
+  fetchLiveModels: (provider: LlmProvider, apiKey?: string, baseUrl?: string) => Promise<string[]>;
+  detectOpenAiCompatibleCapabilities: (
+    baseUrl: string,
+    models: string[],
+    apiKey?: string,
+  ) => Promise<Record<string, {
+    supportsTools: boolean;
+    supportsJson: boolean;
+    supportsStreaming: boolean;
+    endpoint?: string;
+    errors?: string[];
+  }>>;
 }
 
 export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
@@ -25,6 +38,7 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         google: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY || !!process.env.GOOGLE_API_KEY,
         groq: !!process.env.GROQ_API_KEY,
         ollama: false,
+        "openai-compatible": false,
       };
 
       const configFlags = {
@@ -33,6 +47,7 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         google: !!config?.providers?.google?.apiKey || (config?.llm.provider === "google" && !!config?.llm.apiKey),
         groq: !!config?.providers?.groq?.apiKey || (config?.llm.provider === "groq" && !!config?.llm.apiKey),
         ollama: config?.llm.provider === "ollama",
+        "openai-compatible": !!config?.providers?.["openai-compatible"]?.baseUrl,
       };
 
       const providers = {
@@ -41,6 +56,7 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         google: { configured: envFlags.google || configFlags.google },
         groq: { configured: envFlags.groq || configFlags.groq },
         ollama: { configured: envFlags.ollama || configFlags.ollama },
+        "openai-compatible": { configured: envFlags["openai-compatible"] || configFlags["openai-compatible"] },
       };
 
       const hasAnyKey =
@@ -48,7 +64,8 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         || providers.openai.configured
         || providers.google.configured
         || providers.groq.configured
-        || providers.ollama.configured;
+        || providers.ollama.configured
+        || providers["openai-compatible"].configured;
 
       const provider = (config?.llm.provider ?? "anthropic") as LlmProvider;
       const activeProviderConfigured = providers[provider]?.configured ?? false;
@@ -69,7 +86,7 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
   app.get("/api/llm/models", async (req, res) => {
     try {
       const provider = String(req.query.provider ?? "").trim() as LlmProvider;
-      if (!provider || !["anthropic", "openai", "google", "groq", "ollama"].includes(provider)) {
+      if (!provider || !LLM_PROVIDERS.includes(provider)) {
         res.status(400).json({ error: "provider query is required" });
         return;
       }
@@ -80,11 +97,42 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         : deps.getCurrentProject();
       const config = await readEffectiveConfig(targetPath).catch(() => null);
       const apiKey = deps.resolveProviderApiKey(provider, config);
-      const models = await deps.fetchLiveModels(provider, apiKey);
+      const baseUrl = deps.resolveProviderBaseUrl(provider, config);
+      const models = await deps.fetchLiveModels(provider, apiKey, baseUrl);
       res.json({ provider, models });
     } catch (err) {
       const message = (err as Error).message;
       res.status(500).json({ error: message });
+    }
+  });
+
+  app.post("/api/llm/capabilities/detect", async (req, res) => {
+    try {
+      const body = (req.body ?? {}) as {
+        provider?: LlmProvider;
+        baseUrl?: string;
+        apiKey?: string;
+        models?: string[];
+      };
+      const provider = body.provider;
+      if (provider !== "openai-compatible") {
+        res.status(400).json({ error: "capability detection currently supports provider=openai-compatible only" });
+        return;
+      }
+      const baseUrl = String(body.baseUrl ?? "").trim();
+      const models = Array.isArray(body.models) ? body.models.map((m) => String(m).trim()).filter(Boolean) : [];
+      if (!baseUrl) {
+        res.status(400).json({ error: "baseUrl is required" });
+        return;
+      }
+      if (models.length === 0) {
+        res.status(400).json({ error: "models must include at least one model id" });
+        return;
+      }
+      const capabilities = await deps.detectOpenAiCompatibleCapabilities(baseUrl, models, body.apiKey);
+      res.json({ provider, capabilities });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 }

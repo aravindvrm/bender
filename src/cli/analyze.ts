@@ -92,13 +92,18 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
 
   // Use the strong model — analysis is a one-shot expensive operation
   let rawOutput: string;
+  let streamedChars = 0;
   try {
     adapter.info(`Using agent: ${analyzerAgent.name} (${analyzerAgent.modelTier})`);
+    const writeChunk = adapter.streamWriter();
     rawOutput = await analyzeCodebase(
       getModelForTier(models, analyzerAgent.modelTier),
       projectRoot,
       summary,
-      adapter.streamWriter(),
+      (chunk) => {
+        streamedChars += chunk.length;
+        writeChunk(chunk);
+      },
       runtime,
     );
   } catch (err: unknown) {
@@ -107,6 +112,19 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
     return;
   } finally {
     await runtime.close();
+  }
+
+  const normalizedOutput = rawOutput.trim();
+  if (!normalizedOutput) {
+    adapter.error("Analysis failed: analyzer returned an empty response.");
+    adapter.error("This usually means the active model/provider did not return usable text. Check provider settings and retry.");
+    adapter.cleanup();
+    return;
+  }
+
+  if (streamedChars === 0) {
+    adapter.info("Analyzer completed without streamed chunks; showing output preview:");
+    adapter.info(`${normalizedOutput.slice(0, 600)}${normalizedOutput.length > 600 ? "…" : ""}`);
   }
 
   const parsed = parseAnalysisOutput(rawOutput);

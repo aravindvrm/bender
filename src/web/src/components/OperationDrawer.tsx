@@ -9,15 +9,17 @@ import {
   Terminal as TerminalIcon,
   GitCompare,
   Info,
+  MessageSquare,
 } from "lucide-react";
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
 import { LoadingDots } from "./LoadingDots";
 import { GitDiffViewer } from "./GitDiffViewer";
 import { SecretInput } from "./SecretInput";
+import { ChatPanel } from "./ChatPanel";
 import { roleLabel, roleSummary, type BaseRole } from "../lib/roleLabels";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
-type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
+type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "openai-compatible";
 
 interface DirEntry {
   name: string;
@@ -259,7 +261,7 @@ export function OperationDrawer({
   onSubmitInit,
   onSubmitPlan,
 }: OperationDrawerProps) {
-  const [activeTab, setActiveTab] = useState<"console" | "diff" | "terminal">("console");
+  const [activeTab, setActiveTab] = useState<"console" | "diff" | "terminal" | "chat">("console");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(288);
   const [isResizing, setIsResizing] = useState(false);
@@ -448,6 +450,17 @@ export function OperationDrawer({
               <TerminalIcon className="h-3 w-3" />
               Terminal
             </button>
+            <button
+              onClick={() => setActiveTab("chat")}
+              className={`px-3 h-full rounded-none text-[11px] transition-colors flex items-center gap-1 ${
+                activeTab === "chat"
+                  ? "text-zinc-100 bg-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
+              }`}
+            >
+              <MessageSquare className="h-3 w-3" />
+              Chat
+            </button>
           </div>
 
           <div className="flex-1" />
@@ -490,6 +503,10 @@ export function OperationDrawer({
 
         {!collapsed && activeTab === "terminal" && (
           <TerminalPanel projectPath={currentProjectPath} />
+        )}
+
+        {!collapsed && activeTab === "chat" && (
+          <ChatPanel projectPath={currentProjectPath} />
         )}
 
         {!collapsed && activeTab === "console" && (
@@ -641,7 +658,7 @@ function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewProjectM
   }, [pathInput]);
 
   const showLlmSetup = llmStatus ? !llmStatus.hasAnyKey : true;
-  const providerNeedsApiKey = selectedProvider !== "ollama";
+  const providerNeedsApiKey = selectedProvider !== "ollama" && selectedProvider !== "openai-compatible";
 
   const canSubmit =
     pathInput.trim().length > 0
@@ -830,7 +847,7 @@ function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewProjectM
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {(["anthropic", "openai", "google", "groq", "ollama"] as LlmProvider[]).map((provider) => (
+                {(["anthropic", "openai", "google", "groq", "ollama", "openai-compatible"] as LlmProvider[]).map((provider) => (
                   <button
                     key={provider}
                     onClick={() => setSelectedProvider(provider)}

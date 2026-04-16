@@ -25,7 +25,14 @@ export interface ProjectState {
   apiContracts: string | null;
   flows: string | null;
   config: {
-    llm: { provider: string; models: { fast: string; default: string; strong: string } };
+    llm: {
+      provider: string;
+      models: {
+        fast: string | { provider: string; model: string };
+        default: string | { provider: string; model: string };
+        strong: string | { provider: string; model: string };
+      };
+    };
     stack: { framework: string; database: string; orm: string; auth: string; styling: string; language: string };
   };
   git: {

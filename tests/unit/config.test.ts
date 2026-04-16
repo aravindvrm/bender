@@ -99,4 +99,44 @@ describe("state/config", () => {
     expect(readBack.llm.provider).toBe("groq");
     expect(readBack.providers?.groq?.apiKey).toBe("gsk-test");
   });
+
+  it("persists openai-compatible provider fields", async () => {
+    const next = structuredClone(DEFAULT_CONFIG);
+    next.llm.provider = "openai-compatible";
+    next.llm.models = {
+      fast: "local-model",
+      default: "local-model",
+      strong: "local-model",
+    };
+    next.providers = {
+      "openai-compatible": {
+        baseUrl: "http://localhost:1234/v1",
+        model: "local-model",
+        apiKey: "local-token",
+        supportsTools: true,
+        supportsJson: false,
+        supportsStreaming: true,
+        modelCapabilities: {
+          "local-model": {
+            supportsTools: false,
+            supportsJson: true,
+            supportsStreaming: true,
+          },
+        },
+      },
+    };
+
+    await writeGlobalConfig(next);
+    const readBack = await readGlobalConfig();
+
+    expect(readBack.llm.provider).toBe("openai-compatible");
+    expect(readBack.providers?.["openai-compatible"]?.baseUrl).toBe("http://localhost:1234/v1");
+    expect(readBack.providers?.["openai-compatible"]?.model).toBe("local-model");
+    expect(readBack.providers?.["openai-compatible"]?.apiKey).toBe("local-token");
+    expect(readBack.providers?.["openai-compatible"]?.supportsTools).toBe(true);
+    expect(readBack.providers?.["openai-compatible"]?.supportsJson).toBe(false);
+    expect(readBack.providers?.["openai-compatible"]?.supportsStreaming).toBe(true);
+    expect(readBack.providers?.["openai-compatible"]?.modelCapabilities?.["local-model"]?.supportsTools).toBe(false);
+    expect(readBack.providers?.["openai-compatible"]?.modelCapabilities?.["local-model"]?.supportsJson).toBe(true);
+  });
 });

@@ -22,19 +22,31 @@ export function SecretInput({
 }: SecretInputProps) {
   const [show, setShow] = useState(false);
   const looksBackendMasked = value.length > 0 && /^•+$/.test(value);
-  const revealMaskedLabel = "stored secret (re-enter to replace)";
-  const displayValue = show && looksBackendMasked ? revealMaskedLabel : value;
-  const readOnlyMaskedReveal = show && looksBackendMasked;
+  const displayingMaskedPlaceholder = show && looksBackendMasked;
+  const helpText = displayingMaskedPlaceholder
+    ? "Stored value cannot be revealed. Paste/type a new value to replace it."
+    : "Stored value is masked by backend; paste/type a new value to replace it.";
+  const displayValue = displayingMaskedPlaceholder ? "" : value;
 
   return (
     <div className={className ?? "relative"}>
       <input
         type={show ? "text" : "password"}
         value={displayValue}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
+        onChange={(e) => {
+          const next = e.target.value;
+          if (displayingMaskedPlaceholder) {
+            onChange(next);
+            return;
+          }
+          if (looksBackendMasked && /^•+/.test(next)) {
+            onChange(next.replace(/^•+/, ""));
+            return;
+          }
+          onChange(next);
+        }}
+        placeholder={displayingMaskedPlaceholder ? "Enter new secret" : placeholder}
         disabled={disabled}
-        readOnly={readOnlyMaskedReveal}
         autoComplete={autoComplete}
         className={inputClassName ?? "w-full bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 pr-10 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"}
       />
@@ -47,9 +59,9 @@ export function SecretInput({
       >
         {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
       </button>
-      {readOnlyMaskedReveal && (
+      {looksBackendMasked && (
         <p className="mt-1 text-[11px] text-zinc-500">
-          Stored value is masked by backend; type a new value to replace it.
+          {helpText}
         </p>
       )}
     </div>

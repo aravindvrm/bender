@@ -7,6 +7,7 @@ import { addToRegistry } from "../state/registry.js";
 import { registerAgentRoutes } from "./routes/agents.js";
 import { registerAuditRoutes } from "./routes/audits.js";
 import { registerConfigRoutes } from "./routes/config.js";
+import { registerChatRoutes } from "./routes/chat.js";
 import { registerConnectorRoutes } from "./routes/connectors.js";
 import { registerEvalRoutes } from "./routes/evals.js";
 import { registerFilesystemRoutes } from "./routes/filesystem.js";
@@ -39,7 +40,12 @@ import {
 import { normalizeUserPath } from "./services/path-utils.js";
 import { createSseOperationRunner } from "./services/sse.js";
 import { CURATED_MCP_CONNECTORS, createConnectorHealthManager } from "./services/connector-health.js";
-import { fetchLiveModels, resolveProviderApiKey } from "./services/llm-models.js";
+import {
+  detectOpenAiCompatibleCapabilities,
+  fetchLiveModels,
+  resolveProviderApiKey,
+  resolveProviderBaseUrl,
+} from "./services/llm-models.js";
 import { resolveServerPort } from "./server-config.js";
 
 const SERVER_SESSION_STARTED_AT = Date.now();
@@ -105,11 +111,17 @@ export async function startServer(initialProject?: string, port?: number): Promi
     getCurrentProject: () => currentProject,
     normalizeUserPath,
     resolveProviderApiKey,
+    resolveProviderBaseUrl,
     fetchLiveModels,
+    detectOpenAiCompatibleCapabilities,
   });
 
   registerStateRoutes(app, {
     getCurrentProject: () => currentProject,
+    getProject,
+  });
+
+  registerChatRoutes(app, {
     getProject,
   });
 
@@ -118,6 +130,7 @@ export async function startServer(initialProject?: string, port?: number): Promi
   });
 
   registerConnectorRoutes(app, {
+    getCurrentProject: () => currentProject,
     curatedConnectors: CURATED_MCP_CONNECTORS,
     getConnectorHealthStatus: connectorHealth.getConnectorHealthStatus,
     clearConnectorHealthCache: connectorHealth.clearConnectorHealthCache,

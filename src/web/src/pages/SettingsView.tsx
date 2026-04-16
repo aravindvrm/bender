@@ -4,14 +4,36 @@ import { LoadingDots } from "../components/LoadingDots";
 import { SecretInput } from "../components/SecretInput";
 
 type ConfigScope = "global" | "project";
+type ModelTier = "fast" | "default" | "strong";
+
+interface TierModelConfig {
+  provider: string;
+  model: string;
+}
+
+const MODEL_TIERS: ModelTier[] = ["fast", "default", "strong"];
 
 interface FullConfig {
   llm: {
     provider: string;
     apiKey?: string;
-    models: { fast: string; default: string; strong: string };
+    models: {
+      fast: string | TierModelConfig;
+      default: string | TierModelConfig;
+      strong: string | TierModelConfig;
+    };
   };
-  providers: { [name: string]: { apiKey?: string } };
+  providers: {
+    [name: string]: {
+      apiKey?: string;
+      baseUrl?: string;
+      model?: string;
+      supportsTools?: boolean;
+      supportsJson?: boolean;
+      supportsStreaming?: boolean;
+      modelCapabilities?: Record<string, OpenAiCompatibleModelCapabilities>;
+    };
+  };
   mcp?: {
     enabled?: boolean;
     servers?: Array<{
@@ -47,6 +69,15 @@ interface LlmStatus {
   providers: Record<string, { configured: boolean }>;
 }
 
+interface OpenAiCompatibleModelCapabilities {
+  supportsTools: boolean;
+  supportsJson: boolean;
+  supportsStreaming: boolean;
+  endpoint?: string;
+  apiStyle?: "chat" | "responses" | "auto";
+  errors?: string[];
+}
+
 interface GitHubAuthStatus {
   configured: boolean;
   connected: boolean;
@@ -79,7 +110,7 @@ interface GitHubDeviceFlowPoll {
   login?: string;
 }
 
-const PROVIDERS = ["anthropic", "openai", "google", "groq", "ollama"];
+const PROVIDERS = ["anthropic", "openai", "google", "groq", "ollama", "openai-compatible"] as const;
 
 // ── MCP curated server definitions ────────────────────────────────────────────
 
@@ -158,6 +189,7 @@ const PROVIDER_MODEL_HINTS: Record<string, { fast: string; default: string; stro
   google: { fast: "gemini-2.0-flash", default: "gemini-2.5-pro", strong: "gemini-2.5-pro" },
   groq: { fast: "llama-3.3-70b-versatile", default: "llama-3.3-70b-versatile", strong: "llama-3.3-70b-versatile" },
   ollama: { fast: "llama3.2", default: "llama3.1:70b", strong: "llama3.1:70b" },
+  "openai-compatible": { fast: "local-model", default: "local-model", strong: "local-model" },
 };
 
 const PROVIDER_MODEL_OPTIONS: Record<string, string[]> = {
@@ -190,7 +222,66 @@ const PROVIDER_MODEL_OPTIONS: Record<string, string[]> = {
     "llama3.1:70b",
     "llama3.2",
   ],
+  "openai-compatible": [
+    "local-model",
+  ],
 };
+
+const OPENAI_MODEL_NAME_PATTERN = /^(gpt-|chatgpt|o[1-9](?:-|$))/i;
+
+function looksLikeHostedOpenAiModel(model: string): boolean {
+  const value = model.trim();
+  if (!value) return false;
+  return OPENAI_MODEL_NAME_PATTERN.test(value);
+}
+
+function isTierModelConfig(value: unknown): value is TierModelConfig {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<TierModelConfig>;
+  return typeof candidate.provider === "string" && typeof candidate.model === "string";
+}
+
+function getDefaultModelForProviderTier(
+  provider: string,
+  tier: ModelTier,
+  providers?: FullConfig["providers"],
+): string {
+  const providerDefault = providers?.[provider]?.model?.trim();
+  if (providerDefault) return providerDefault;
+  return PROVIDER_MODEL_HINTS[provider]?.[tier] ?? PROVIDER_MODEL_HINTS.anthropic[tier];
+}
+
+function normalizeTierModelValue(
+  value: string | TierModelConfig | undefined,
+  tier: ModelTier,
+  fallbackProvider: string,
+  providers?: FullConfig["providers"],
+): TierModelConfig {
+  if (isTierModelConfig(value)) {
+    const provider = value.provider.trim() || fallbackProvider;
+    const model = value.model.trim() || getDefaultModelForProviderTier(provider, tier, providers);
+    return { provider, model };
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    return { provider: fallbackProvider, model: value.trim() };
+  }
+  return {
+    provider: fallbackProvider,
+    model: getDefaultModelForProviderTier(fallbackProvider, tier, providers),
+  };
+}
+
+function normalizeTierModels(
+  models: FullConfig["llm"]["models"],
+  fallbackProvider: string,
+  providers?: FullConfig["providers"],
+): Record<ModelTier, TierModelConfig> {
+  return {
+    fast: normalizeTierModelValue(models.fast, "fast", fallbackProvider, providers),
+    default: normalizeTierModelValue(models.default, "default", fallbackProvider, providers),
+    strong: normalizeTierModelValue(models.strong, "strong", fallbackProvider, providers),
+  };
+}
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -289,7 +380,7 @@ export function SettingsView() {
   const [configScope, setConfigScope] = useState<ConfigScope>("global");
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [liveModelOptions, setLiveModelOptions] = useState<Record<string, string[]>>({});
-  const [refreshingModels, setRefreshingModels] = useState(false);
+  const [refreshingProvider, setRefreshingProvider] = useState<string | null>(null);
   const [modelRefreshError, setModelRefreshError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -317,6 +408,28 @@ export function SettingsView() {
   const [connectorsError, setConnectorsError] = useState<string | null>(null);
   const [connectorExpanded, setConnectorExpanded] = useState<Record<string, boolean>>({});
 
+  async function persistConfig(nextConfig: FullConfig, silent = false): Promise<boolean> {
+    try {
+      const res = await fetch("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextConfig),
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error ?? "Save failed");
+      }
+      if (!silent) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
+      return true;
+    } catch (err) {
+      setError((err as Error).message);
+      return false;
+    }
+  }
+
   useEffect(() => {
     fetch("/api/config")
       .then(async (r) => {
@@ -327,12 +440,35 @@ export function SettingsView() {
       .then((data) => {
         const providers: FullConfig["providers"] = {};
         for (const p of PROVIDERS) {
-          providers[p] = { apiKey: data.providers?.[p]?.apiKey ?? "" };
+          providers[p] = {
+            apiKey: data.providers?.[p]?.apiKey ?? "",
+            baseUrl: data.providers?.[p]?.baseUrl ?? "",
+            model: data.providers?.[p]?.model ?? "",
+            supportsTools: data.providers?.[p]?.supportsTools,
+            supportsJson: data.providers?.[p]?.supportsJson,
+            supportsStreaming: data.providers?.[p]?.supportsStreaming,
+            modelCapabilities: data.providers?.[p]?.modelCapabilities ?? {},
+          };
         }
         setConfigScope(data.scope ?? "global");
         if (data.projectRoot) setProjectRoot(data.projectRoot);
+        const fallbackProvider = data.llm?.provider?.trim() || "anthropic";
+        const normalizedModels = normalizeTierModels(data.llm.models, fallbackProvider, providers);
+        for (const tier of MODEL_TIERS) {
+          const entry = normalizedModels[tier];
+          if (entry.provider === "openai-compatible" && looksLikeHostedOpenAiModel(entry.model)) {
+            normalizedModels[tier] = {
+              ...entry,
+              model: getDefaultModelForProviderTier("openai-compatible", tier, providers),
+            };
+          }
+        }
         setConfig({
-          llm: data.llm,
+          llm: {
+            ...data.llm,
+            provider: normalizedModels.default.provider || fallbackProvider,
+            models: normalizedModels,
+          },
           providers,
           mcp: {
             enabled: data.mcp?.enabled ?? false,
@@ -394,17 +530,7 @@ export function SettingsView() {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch("/api/config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
-      });
-      if (!res.ok) {
-        const body = await res.json();
-        throw new Error(body.error ?? "Save failed");
-      }
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      await persistConfig(config, false);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -412,27 +538,118 @@ export function SettingsView() {
     }
   }
 
-  function setProvider(provider: string) {
-    if (!config) return;
-    const hints = PROVIDER_MODEL_HINTS[provider] ?? config.llm.models;
-    setConfig((c) => c ? { ...c, llm: { ...c.llm, provider, models: { ...hints } } } : c);
-    setModelRefreshError(null);
-    void refreshModels(provider, true);
+  function resolveTierModelConfig(tier: ModelTier, source: FullConfig): TierModelConfig {
+    return normalizeTierModelValue(source.llm.models[tier], tier, source.llm.provider, source.providers);
   }
 
-  function setModel(tier: "fast" | "default" | "strong", value: string) {
-    setConfig((c) => c ? { ...c, llm: { ...c.llm, models: { ...c.llm.models, [tier]: value } } } : c);
+  function setTierProvider(tier: ModelTier, provider: string) {
+    if (!provider) return;
+    setConfig((c) => {
+      if (!c) return c;
+      const options = getModelOptions(provider, c);
+      const current = resolveTierModelConfig(tier, c);
+      const configuredDefault = (c.providers?.[provider]?.model ?? "").trim();
+      let model = current.provider === provider ? current.model.trim() : "";
+      if (!model || !options.includes(model)) {
+        model = configuredDefault || options[0] || getDefaultModelForProviderTier(provider, tier, c.providers);
+      }
+      const nextModels = { ...c.llm.models, [tier]: { provider, model } };
+      const nextConfig: FullConfig = {
+        ...c,
+        llm: {
+          ...c.llm,
+          provider: normalizeTierModelValue(nextModels.default, "default", c.llm.provider, c.providers).provider,
+          models: nextModels,
+        },
+      };
+      void persistConfig(nextConfig, true);
+      return nextConfig;
+    });
   }
 
-  function getModelOptions(provider: string): string[] {
+  function setTierModel(tier: ModelTier, value: string) {
+    setConfig((c) => {
+      if (!c) return c;
+      const tierConfig = resolveTierModelConfig(tier, c);
+      const nextModels = { ...c.llm.models, [tier]: { ...tierConfig, model: value } };
+      const nextConfig: FullConfig = {
+        ...c,
+        llm: {
+          ...c.llm,
+          provider: normalizeTierModelValue(nextModels.default, "default", c.llm.provider, c.providers).provider,
+          models: nextModels,
+        },
+      };
+      void persistConfig(nextConfig, true);
+      return nextConfig;
+    });
+  }
+
+  function getModelOptions(provider: string, source = config): string[] {
+    if (!source) return PROVIDER_MODEL_OPTIONS[provider] ?? PROVIDER_MODEL_OPTIONS.anthropic;
     const live = liveModelOptions[provider];
-    if (live && live.length > 0) return live;
-    return PROVIDER_MODEL_OPTIONS[provider] ?? PROVIDER_MODEL_OPTIONS.anthropic;
+    if (Array.isArray(live) && live.length > 0) {
+      if (provider === "openai-compatible") {
+        const filtered = live.filter((model) => !looksLikeHostedOpenAiModel(model));
+        if (filtered.length > 0) return filtered;
+      } else {
+        return live;
+      }
+    }
+    if (provider === "openai-compatible" && source) {
+      const persisted = Object.keys(source.providers["openai-compatible"]?.modelCapabilities ?? {});
+      const configuredDefault = (source.providers["openai-compatible"]?.model ?? "").trim();
+      const merged = [...new Set([...(configuredDefault ? [configuredDefault] : []), ...persisted])]
+        .filter((model) => !looksLikeHostedOpenAiModel(model));
+      if (merged.length > 0) return merged;
+    }
+    const configuredDefault = (source.providers[provider]?.model ?? "").trim();
+    const seeded = configuredDefault ? [configuredDefault] : [];
+    return [...new Set([...seeded, ...(PROVIDER_MODEL_OPTIONS[provider] ?? PROVIDER_MODEL_OPTIONS.anthropic)])];
+  }
+
+  async function refreshModels(provider: string): Promise<void> {
+    if (!config || !provider) return;
+    if (!providerHasConfiguredKey(provider)) {
+      setModelRefreshError(
+        provider === "openai-compatible"
+          ? "Set an openai-compatible base URL before refreshing models."
+          : `Configure a valid ${provider} API key before refreshing models.`,
+      );
+      return;
+    }
+    setRefreshingProvider(provider);
+    setModelRefreshError(null);
+    try {
+      const res = await fetch(`/api/llm/models?provider=${encodeURIComponent(provider)}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to refresh models");
+      const models = (Array.isArray(body.models) ? body.models : []).map((item) => String(item).trim()).filter(Boolean);
+      if (models.length === 0) throw new Error("No models returned by provider");
+      const sanitized = provider === "openai-compatible"
+        ? models.filter((model) => !looksLikeHostedOpenAiModel(model))
+        : models;
+      const fallbackLocalModel = getDefaultModelForProviderTier("openai-compatible", "default", config.providers);
+      setLiveModelOptions((prev) => ({
+        ...prev,
+        [provider]: provider === "openai-compatible"
+          ? (sanitized.length > 0 ? sanitized : [fallbackLocalModel])
+          : sanitized,
+      }));
+    } catch (err) {
+      setModelRefreshError((err as Error).message);
+    } finally {
+      setRefreshingProvider((current) => (current === provider ? null : current));
+    }
   }
 
   function providerHasConfiguredKey(provider: string): boolean {
     if (!config) return false;
     if (provider === "ollama") return true;
+    if (provider === "openai-compatible") {
+      const baseUrl = (config.providers?.[provider]?.baseUrl ?? "").trim();
+      return baseUrl.length > 0;
+    }
 
     const explicit = (config.providers?.[provider]?.apiKey ?? "").trim();
     if (explicit.length > 0) return true;
@@ -445,32 +662,28 @@ export function SettingsView() {
     return !!llmStatus?.providers?.[provider]?.configured;
   }
 
-  async function refreshModels(provider = config?.llm.provider, silent = false) {
-    if (!provider) return;
-    if (!providerHasConfiguredKey(provider)) {
-      if (!silent) setModelRefreshError(`Configure a valid ${provider} API key first.`);
-      return;
-    }
-
-    setRefreshingModels(true);
-    if (!silent) setModelRefreshError(null);
-
-    try {
-      const res = await fetch(`/api/llm/models?provider=${encodeURIComponent(provider)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to refresh models");
-      const models: string[] = Array.isArray(data.models) ? data.models : [];
-      if (models.length === 0) throw new Error("No models returned by provider");
-      setLiveModelOptions((prev) => ({ ...prev, [provider]: models }));
-    } catch (err) {
-      if (!silent) setModelRefreshError((err as Error).message);
-    } finally {
-      setRefreshingModels(false);
-    }
+  function setProviderKey(name: string, value: string) {
+    setConfig((c) => c ? {
+      ...c,
+      providers: { ...c.providers, [name]: { ...c.providers[name], apiKey: value } },
+    } : c);
   }
 
-  function setProviderKey(name: string, value: string) {
-    setConfig((c) => c ? { ...c, providers: { ...c.providers, [name]: { apiKey: value } } } : c);
+  function setProviderConfigValue(
+    name: string,
+    key: "baseUrl" | "model",
+    value: string,
+  ) {
+    setConfig((c) => c ? {
+      ...c,
+      providers: {
+        ...c.providers,
+        [name]: {
+          ...c.providers[name],
+          [key]: value,
+        },
+      },
+    } : c);
   }
 
   function clearGitHubAuthPolling() {
@@ -739,7 +952,8 @@ export function SettingsView() {
 
   if (!config) return <p className="text-sm text-zinc-500">Could not load config. {error}</p>;
 
-  const activeProviderReady = providerHasConfiguredKey(config.llm.provider);
+  const configuredProviders = PROVIDERS.filter((provider) => providerHasConfiguredKey(provider));
+  const getProviderOptionsForTier = (_tier: ModelTier): string[] => configuredProviders;
   const githubConnected = !!githubStatus?.connected;
   const githubConfigured = !!githubStatus?.configured;
   const githubClientIdLocked = !!githubConfig?.usingEnvClientId;
@@ -961,23 +1175,40 @@ export function SettingsView() {
       <section>
         <h3 className="text-sm font-semibold text-zinc-300 mb-1">API Keys</h3>
         <p className="text-xs text-zinc-600 mb-4">
-          Enter provider keys here first. Model controls stay disabled until the active provider is configured.
+          Configure provider credentials/endpoints first. Provider dropdowns only list configured providers.
         </p>
         <div className="space-y-3">
-          {PROVIDERS.filter((p) => p !== "ollama").map((p) => (
+          {PROVIDERS.filter((p) => p !== "ollama" && p !== "openai-compatible").map((p) => (
             <Field key={p} label={p}>
               <TextInput
                 value={config.providers[p]?.apiKey ?? ""}
-                onChange={(v) => {
-                  setProviderKey(p, v);
-                  if (p === config.llm.provider) setModelRefreshError(null);
-                }}
+                onChange={(v) => setProviderKey(p, v)}
                 placeholder={`${p.toUpperCase()}_API_KEY or blank`}
                 password
                 mono
               />
             </Field>
           ))}
+          <Field label="openai-compatible">
+            <div className="space-y-2">
+              <TextInput
+                value={config.providers["openai-compatible"]?.apiKey ?? ""}
+                onChange={(v) => setProviderKey("openai-compatible", v)}
+                placeholder="Optional bearer token"
+                password
+                mono
+              />
+              <TextInput
+                value={config.providers["openai-compatible"]?.baseUrl ?? ""}
+                onChange={(v) => setProviderConfigValue("openai-compatible", "baseUrl", v)}
+                placeholder="http://localhost:1234/v1"
+                mono
+              />
+              <p className="text-[11px] text-zinc-500">
+                Use an OpenAI-compatible endpoint. Model capabilities are handled internally.
+              </p>
+            </div>
+          </Field>
         </div>
       </section>
 
@@ -987,48 +1218,81 @@ export function SettingsView() {
       <section>
         <h3 className="text-sm font-semibold text-zinc-300 mb-4">LLM Provider & Models</h3>
         <div className="space-y-4">
-          <Field label="Active provider">
-            <div className="flex gap-2 flex-wrap">
-              {PROVIDERS.map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setProvider(p)}
-                  className={`px-3 py-1.5 rounded-md text-xs border transition-colors ${
-                    config.llm.provider === p
-                      ? "bg-zinc-700 border-zinc-500 text-zinc-100"
-                      : "bg-transparent border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
-                  }`}
-                >
-                  {p}
-                </button>
-              ))}
-              <button
-                onClick={() => void refreshModels(config.llm.provider)}
-                disabled={refreshingModels || !activeProviderReady}
-                className="ml-auto px-2.5 py-1.5 rounded-md text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                {refreshingModels ? "Refreshing..." : "Refresh models"}
-              </button>
-            </div>
-          </Field>
-
-          {!activeProviderReady && (
-            <p className="text-xs text-amber-400">
-              Add a valid {config.llm.provider} API key (or matching env var) to enable model selection.
-            </p>
-          )}
           {modelRefreshError && (
             <p className="text-xs text-red-400">{modelRefreshError}</p>
           )}
-
-          {(["fast", "default", "strong"] as const).map((tier) => (
+          {MODEL_TIERS.map((tier) => (
             <Field key={tier} label={tier} hint={tier === "fast" ? "clarify" : tier === "default" ? "plan/review" : "architect/code"}>
-              <ModelSelect
-                value={typeof config.llm.models[tier] === "string" ? config.llm.models[tier] : ""}
-                options={getModelOptions(config.llm.provider)}
-                onChange={(v) => setModel(tier, v)}
-                disabled={!activeProviderReady}
-              />
+              <div className="space-y-2">
+                {(() => {
+                  const tierConfig = resolveTierModelConfig(tier, config);
+                  const providerOptions = getProviderOptionsForTier(tier);
+                  const providerInOptions = providerOptions.includes(tierConfig.provider);
+                  const selectedProvider = providerInOptions ? tierConfig.provider : "";
+                  const providerReady = selectedProvider ? providerHasConfiguredKey(selectedProvider) : false;
+                  const modelOptions = selectedProvider ? getModelOptions(selectedProvider) : [];
+                  return (
+                    <div className="grid grid-cols-[160px_1fr_auto] gap-2 items-end">
+                      <div className="space-y-1">
+                        <p className="text-[11px] text-zinc-500 uppercase tracking-wide">Provider</p>
+                        <div className="relative">
+                          <select
+                            value={selectedProvider}
+                            onChange={(e) => setTierProvider(tier, e.target.value)}
+                            className="select-flat w-full pl-3 pr-8 py-2 text-[13px] transition-colors"
+                          >
+                            {!providerInOptions && (
+                              <option value="">Configure provider</option>
+                            )}
+                            {providerOptions.map((provider) => (
+                              <option key={provider} value={provider} className="bg-zinc-900 text-zinc-200">
+                                {provider}
+                                {provider === "openai-compatible" ? " (experimental)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-600">
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          </span>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[11px] text-zinc-500 uppercase tracking-wide">Model</p>
+                        <ModelSelect
+                          value={tierConfig.model}
+                          options={modelOptions}
+                          onChange={(v) => setTierModel(tier, v)}
+                          disabled={!tierConfig.provider || !providerReady}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void refreshModels(selectedProvider)}
+                        disabled={!selectedProvider || !providerReady || refreshingProvider === selectedProvider}
+                        className="px-2.5 py-2 rounded-md text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                      >
+                        {refreshingProvider === selectedProvider ? "Refreshing..." : "Refresh models"}
+                      </button>
+                    </div>
+                  );
+                })()}
+                {configuredProviders.length === 0 && (
+                  <p className="text-[11px] text-zinc-600">
+                    Add at least one API key (or a local base URL) to enable provider selection.
+                  </p>
+                )}
+                {(() => {
+                  const tierConfig = resolveTierModelConfig(tier, config);
+                  if (!tierConfig.provider || providerHasConfiguredKey(tierConfig.provider)) return null;
+                  return (
+                    <p className="text-[11px] text-amber-400">
+                      {tierConfig.provider === "openai-compatible"
+                        ? "Set an openai-compatible base URL to enable this tier."
+                        : `Add a valid ${tierConfig.provider} API key (or env var) to enable this tier.`}
+                    </p>
+                  );
+                })()}
+              </div>
             </Field>
           ))}
         </div>

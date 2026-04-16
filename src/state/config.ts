@@ -27,6 +27,27 @@ export interface McpServerConfig {
   headers?: Record<string, string>;
 }
 
+export interface ProviderConfig {
+  apiKey?: string;
+  /** Override base URL for OpenAI-compatible providers. */
+  baseUrl?: string;
+  /** Optional default model hint for provider-specific flows. */
+  model?: string;
+  /** Capability flags used for graceful feature gating. */
+  supportsTools?: boolean;
+  supportsJson?: boolean;
+  supportsStreaming?: boolean;
+  /** Optional capability overrides keyed by model id (for mixed-model local setups). */
+  modelCapabilities?: Record<string, {
+    supportsTools?: boolean;
+    supportsJson?: boolean;
+    supportsStreaming?: boolean;
+    endpoint?: string;
+    apiStyle?: "chat" | "responses" | "auto";
+    errors?: string[];
+  }>;
+}
+
 export interface BenderConfig {
   llm: {
     provider: string;
@@ -39,7 +60,7 @@ export interface BenderConfig {
   };
   /** Per-provider API keys. Key wins over llm.apiKey for the matching provider. */
   providers?: {
-    [name: string]: { apiKey?: string };
+    [name: string]: ProviderConfig;
   };
   mcp?: {
     enabled?: boolean;
@@ -261,14 +282,30 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
   ]);
   const mergedProviders = Object.fromEntries(
     [...providerNames].map((name) => {
-      const defaultKey = defaultProviders[name]?.apiKey;
-      const overrideKey = overrideProviders[name]?.apiKey;
-      const resolved = typeof overrideKey === "string" && overrideKey.trim().length > 0
-        ? overrideKey
-        : defaultKey;
-      return [name, resolved ? { apiKey: resolved } : {}];
+      const defaultEntry = defaultProviders[name] ?? {};
+      const overrideEntry = overrideProviders[name] ?? {};
+      const mergeString = (overrideValue?: string, defaultValue?: string): string | undefined => {
+        if (typeof overrideValue === "string" && overrideValue.trim().length > 0) return overrideValue;
+        if (typeof defaultValue === "string" && defaultValue.trim().length > 0) return defaultValue;
+        return undefined;
+      };
+      return [
+        name,
+        {
+          apiKey: mergeString(overrideEntry.apiKey, defaultEntry.apiKey),
+          baseUrl: mergeString(overrideEntry.baseUrl, defaultEntry.baseUrl),
+          model: mergeString(overrideEntry.model, defaultEntry.model),
+          supportsTools: overrideEntry.supportsTools ?? defaultEntry.supportsTools,
+          supportsJson: overrideEntry.supportsJson ?? defaultEntry.supportsJson,
+          supportsStreaming: overrideEntry.supportsStreaming ?? defaultEntry.supportsStreaming,
+          modelCapabilities: {
+            ...(defaultEntry.modelCapabilities ?? {}),
+            ...(overrideEntry.modelCapabilities ?? {}),
+          },
+        },
+      ];
     }),
-  ) as { [name: string]: { apiKey?: string } };
+  ) as { [name: string]: ProviderConfig };
   const providers = providerNames.size > 0 ? mergedProviders : undefined;
 
   return {

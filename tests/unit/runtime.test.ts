@@ -105,5 +105,96 @@ describe("llm/runtime", () => {
     ).toBe(1);
     await runtime.close();
   });
-});
 
+  it("disables MCP for openai-compatible by default capability policy", async () => {
+    const config = buildConfig();
+    config.llm.provider = "openai-compatible";
+    config.providers = {
+      "openai-compatible": {
+        baseUrl: "http://localhost:1234/v1",
+      },
+    };
+    config.mcp = {
+      enabled: true,
+      servers: [
+        { id: "github", name: "GitHub", url: "https://api.githubcopilot.com/mcp/", enabled: true },
+      ],
+    };
+
+    const runtime = await createRoleRuntime("/tmp/bender-runtime", config, {
+      role: "planner",
+    });
+
+    expect(runtime.summary.mcpEnabled).toBe(false);
+    expect(runtime.summary.mcpTools).toBe(0);
+    expect(runtime.tools).toBeUndefined();
+    await runtime.close();
+  });
+
+  it("enables MCP for openai-compatible when supportsTools=true and baseUrl is set", async () => {
+    const config = buildConfig();
+    config.llm.provider = "openai-compatible";
+    config.providers = {
+      "openai-compatible": {
+        baseUrl: "http://localhost:1234/v1",
+        supportsTools: true,
+      },
+    };
+    config.mcp = {
+      enabled: true,
+      servers: [
+        { id: "github", name: "GitHub", url: "https://api.githubcopilot.com/mcp/", enabled: true },
+      ],
+    };
+
+    const runtime = await createRoleRuntime("/tmp/bender-runtime", config, {
+      role: "planner",
+    });
+
+    expect(runtime.summary.mcpEnabled).toBe(true);
+    expect(runtime.summary.mcpTools).toBe(1);
+    expect(Object.keys(runtime.tools ?? {})).toHaveLength(1);
+    await runtime.close();
+  });
+
+  it("uses per-model capability overrides for tool support", async () => {
+    const config = buildConfig();
+    config.llm.provider = "openai-compatible";
+    config.llm.models = {
+      fast: "model-fast",
+      default: "model-default",
+      strong: "model-strong",
+    };
+    config.providers = {
+      "openai-compatible": {
+        baseUrl: "http://localhost:1234/v1",
+        supportsTools: true,
+        modelCapabilities: {
+          "model-strong": { supportsTools: false },
+          "model-default": { supportsTools: true },
+        },
+      },
+    };
+    config.mcp = {
+      enabled: true,
+      servers: [
+        { id: "github", name: "GitHub", url: "https://api.githubcopilot.com/mcp/", enabled: true },
+      ],
+    };
+
+    const strongRuntime = await createRoleRuntime("/tmp/bender-runtime", config, {
+      role: "architect",
+      modelTier: "strong",
+    });
+    expect(strongRuntime.summary.mcpEnabled).toBe(false);
+    await strongRuntime.close();
+
+    const defaultRuntime = await createRoleRuntime("/tmp/bender-runtime", config, {
+      role: "planner",
+      modelTier: "default",
+    });
+    expect(defaultRuntime.summary.mcpEnabled).toBe(true);
+    expect(defaultRuntime.summary.mcpTools).toBe(1);
+    await defaultRuntime.close();
+  });
+});

@@ -16,8 +16,9 @@ export function registerConfigRoutes(app: Express, deps: ConfigRouteDeps): void 
 
   app.put("/api/config", async (req, res) => {
     try {
-      await updateGlobalConfig((req.body ?? {}) as Record<string, unknown>);
-      res.json({ ok: true, scope: "global" });
+      const projectRoot = deps.getCurrentProject();
+      await updateGlobalConfig((req.body ?? {}) as Record<string, unknown>, projectRoot);
+      res.json({ ok: true, scope: projectRoot ? "project" : "global" });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

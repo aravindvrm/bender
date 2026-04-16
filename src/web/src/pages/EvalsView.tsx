@@ -201,7 +201,7 @@ function fmtCost(value?: number | null): string {
   return `$${value.toFixed(4)}`;
 }
 
-const PROVIDERS = ["anthropic", "openai", "google", "groq", "ollama"] as const;
+const PROVIDERS = ["anthropic", "openai", "google", "groq", "ollama", "openai-compatible"] as const;
 
 const PROVIDER_MODEL_HINTS: Record<string, { fast: string; default: string; strong: string }> = {
   anthropic: { fast: "claude-haiku-4-5-20251001", default: "claude-sonnet-4-6-20250514", strong: "claude-opus-4-6-20250514" },
@@ -209,6 +209,7 @@ const PROVIDER_MODEL_HINTS: Record<string, { fast: string; default: string; stro
   google: { fast: "gemini-2.0-flash", default: "gemini-2.5-pro", strong: "gemini-2.5-pro" },
   groq: { fast: "llama-3.3-70b-versatile", default: "llama-3.3-70b-versatile", strong: "llama-3.3-70b-versatile" },
   ollama: { fast: "llama3.2", default: "llama3.1:70b", strong: "llama3.1:70b" },
+  "openai-compatible": { fast: "local-model", default: "local-model", strong: "local-model" },
 };
 
 const MAX_CONFIG_SKILLS = 6;
@@ -329,8 +330,18 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
 
   const providerHasConfiguredKey = useCallback((provider: string): boolean => {
     if (provider === "ollama") return true;
+    if (provider === "openai-compatible") return !!llmStatus?.providers?.[provider]?.configured;
     return !!llmStatus?.providers?.[provider]?.configured;
   }, [llmStatus]);
+  const configuredProviders = useMemo(
+    () => PROVIDERS.filter((provider) => providerHasConfiguredKey(provider)),
+    [providerHasConfiguredKey],
+  );
+  const configProviderOptions = useMemo(() => {
+    if (!configProvider) return configuredProviders;
+    if (configuredProviders.includes(configProvider as typeof configuredProviders[number])) return configuredProviders;
+    return [...configuredProviders, configProvider];
+  }, [configuredProviders, configProvider]);
 
   const loadSkillsCatalog = useCallback(async (forceCuratedRefresh = false): Promise<SkillMeta[]> => {
     try {
@@ -1054,9 +1065,11 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                     className="select-flat w-full pl-3 pr-8 py-2 text-sm"
                   >
                     <option value="">project default</option>
-                    {PROVIDERS.map((provider) => (
+                    {configProviderOptions.map((provider) => (
                       <option key={provider} value={provider}>
-                        {provider}{providerHasConfiguredKey(provider) ? "" : " (not configured)"}
+                        {provider}
+                        {provider === "openai-compatible" ? " (experimental)" : ""}
+                        {!providerHasConfiguredKey(provider) ? " (not configured)" : ""}
                       </option>
                     ))}
                   </select>
@@ -1080,6 +1093,11 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                 />
                 {modelRefreshError && <p className="text-[11px] text-red-400">{modelRefreshError}</p>}
                 {!configProvider && <p className="text-[11px] text-zinc-600">Select provider to enable model selection.</p>}
+                {configuredProviders.length === 0 && (
+                  <p className="text-[11px] text-zinc-600">
+                    Configure provider keys/endpoints in Settings to run cross-provider evals.
+                  </p>
+                )}
                 {configProvider && !providerHasConfiguredKey(configProvider) && (
                   <p className="text-[11px] text-zinc-600">
                     Provider key missing. Set {configProvider} API key in Settings to use this provider.

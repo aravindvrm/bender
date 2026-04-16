@@ -125,6 +125,38 @@ describe("api contract baseline", () => {
     expect(badBody.error).toBe("Directory does not exist");
   });
 
+  it("applies /api/config writes to active project scope", async () => {
+    const projectPath = join(tempWorkspace, "project-scope-config");
+    const openRes = await fetch(`${baseUrl}/api/project/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: projectPath }),
+    });
+    expect(openRes.ok).toBe(true);
+
+    const saveRes = await fetch(`${baseUrl}/api/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        llm: {
+          provider: "openai-compatible",
+          models: { fast: "local-model", default: "local-model", strong: "local-model" },
+        },
+        providers: {
+          "openai-compatible": { baseUrl: "http://localhost:1234/v1" },
+        },
+      }),
+    });
+    expect(saveRes.ok).toBe(true);
+    const saveBody = await saveRes.json() as { scope?: string };
+    expect(saveBody.scope).toBe("project");
+
+    const stateRes = await fetch(`${baseUrl}/api/state`);
+    expect(stateRes.ok).toBe(true);
+    const stateBody = await stateRes.json() as { config?: { llm?: { provider?: string } } };
+    expect(stateBody.config?.llm?.provider).toBe("openai-compatible");
+  });
+
   it("preserves /api/terminal/exec validation and output shape", async () => {
     await fetch(`${baseUrl}/api/config`, {
       method: "PUT",

@@ -33,7 +33,29 @@ function displayProviderName(provider?: string): string {
   if (p === "google") return "Google";
   if (p === "groq") return "Groq";
   if (p === "ollama") return "Ollama";
+  if (p === "openai-compatible") return "OpenAI-Compatible (Local)";
   return provider ?? "—";
+}
+
+function resolveTierProvider(
+  value: string | { provider: string; model: string } | undefined,
+  fallback: string,
+): string {
+  if (typeof value === "string") return fallback;
+  const provider = value?.provider?.trim();
+  return provider || fallback;
+}
+
+function llmProviderLabel(llm: ProjectState["config"]["llm"] | null | undefined): string {
+  if (!llm) return "—";
+  const fallback = llm.provider;
+  const providers = new Set([
+    resolveTierProvider(llm.models.fast, fallback),
+    resolveTierProvider(llm.models.default, fallback),
+    resolveTierProvider(llm.models.strong, fallback),
+  ].filter(Boolean));
+  if (providers.size > 1) return "Mixed";
+  return displayProviderName([...providers][0] ?? fallback);
 }
 
 function deriveFrameworkFromArchitecture(architecture: string | null | undefined): string | null {
@@ -85,7 +107,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
   const completedCount = Math.max(completedFromFiles, completedFromCurrent);
   const decisionCount = state?.decisions?.length ?? 0;
   const framework = deriveFrameworkFromArchitecture(state?.architecture) ?? state?.config?.stack?.framework ?? "—";
-  const llmProvider = displayProviderName(state?.config?.llm?.provider);
+  const llmProvider = llmProviderLabel(state?.config?.llm);
   const projectName = state?.projectRoot?.split(/[\\/]/).filter(Boolean).pop() ?? "No Project";
   const hasProject = !!state?.projectRoot;
   const isRunning = operationStatus === "running";
