@@ -1,136 +1,65 @@
 # Bender
 
-Bender is a local AI agent workspace for planning, implementing, and tracking software work.
+Bender is a local AI software execution workspace for planning, implementing, reviewing, and evaluating real project work.
 
-It combines a CLI, a browser dashboard, and an optional Electron desktop shell to analyze codebases, persist project context in `.bender/`, and execute work through custom agents, reusable skills, and MCP-connected tools.
+It supports three first-class interfaces:
 
-## Why Bender
+- CLI
+- Browser WebUI
+- Electron desktop app (thin wrapper over the same backend + WebUI)
 
-Bender is built for project-aware execution, not one-off code generation.
+## What Bender Includes
 
-It helps you work against a real codebase by combining:
+- Project-aware planning and implementation workflows (`init`, `analyze`, `plan`, `implement`, `status`)
+- Role-based agent system (analyzer, architect, planner, implementer, reviewer) with custom agent overrides
+- Skills system with curated catalog + local project/user library extension
+- MCP connector configuration and capability policy controls
+- Git and GitHub integration:
+  - GitHub auth/session + repo workflows
+  - project-scoped GitHub issue ingestion
+  - role-based extraction (analyzer/architect/planner)
+  - review-and-import into task plan with task↔issue linking
+- Evals system backed by Promptfoo (single compares + saved suites + CI gating)
+- Local-first persistence using embedded SQLite (no Docker/Postgres required)
 
-- persistent local project memory
-- task planning and implementation workflows
-- custom agents that can be assigned to tasks
-- reusable skills
-- MCP server integration for external tools and systems
-- a local dashboard for visibility, review, and control
+## Architecture (Current)
 
-The result is a workspace where AI agents can operate with more structure, more context, and better tool access.
+### Interfaces
 
-## Core Concepts
+- CLI: `bender ...`
+- Browser: `bender bend` (or `open` / `review`)
+- Desktop: `npm run desktop:start`
 
-### Persistent Project State
+### Backend
 
-Bender stores structured project state under `.bender/`, including architecture, conventions, flows, decisions, contracts, tasks, and session history. This gives agents durable context across runs.
+- Express API server (`src/cli/server.ts`) shared by browser and Electron
+- Health endpoint: `GET /api/health` → `{ ok: true }`
+- Port resolution:
+  - `BENDER_PORT`
+  - fallback `PORT`
+  - default `3142`
 
-### Custom Agents
+### Desktop Wrapper
 
-Bender lets you build custom agents from providers, models, skills, MCP connectors, and prompts, then save and assign them to specific tasks.
+Electron wrapper behavior:
 
-### Skills
+- starts backend as child process
+- waits for `/api/health` before loading UI
+- handles backend startup failure/crash with visible status screens
+- handles port conflicts pragmatically (auto-pick for default-port conflicts, explicit-port conflicts fail clearly)
+- kills backend on quit to avoid orphans
+- uses cross-platform process APIs
 
-Bender can inject reusable skill context from configured markdown or text sources. Skills let you package instructions, workflows, and domain-specific guidance so agents can execute tasks consistently.
+## Persistence
 
-### MCP Integration
+Bender persists data locally in two SQLite stores:
 
-Bender supports MCP server configuration so agents can access external tools and systems at runtime. This creates a path for integrating things like filesystem access, GitHub, databases, or other tool servers into task execution.
+- Project-scoped: `.bender/bender.db`
+- Home/global-scoped: `~/.bender/bender-home.db`
 
-## What Bender Does
+Legacy file compatibility is preserved where needed, but SQLite is the primary persistence layer.
 
-Bender helps you work against a real project directory by maintaining structured project state, including:
-
-- project brief
-- architecture and conventions
-- schema and flows
-- decisions and API contracts
-- active and completed tasks
-- session history and runtime config
-
-All project state is stored locally under `.bender/`.
-
-## Core Commands
-
-- `bender bend`  
-  Open the local dashboard.
-
-- `bender open` / `bender review`  
-  Aliases for `bender bend`.
-
-- `bender init -d <dir>`  
-  Initialize `.bender/` state for a project.
-
-- `bender analyze -d <dir>`  
-  Analyze an existing codebase and generate project state.
-
-- `bender plan "<description>" -d <dir>`  
-  Create a new task plan.
-
-- `bender implement -d <dir>`  
-  Execute the active task plan.
-
-- `bender status -d <dir>`  
-  Show current project status.
-
-- `bender eval-ci --suite <suite-id> -d <dir>`  
-  Run a saved eval suite as a CI gate (Promptfoo-backed), with optional thresholds for success rate, latency, and cost.
-
-## Dashboard
-
-The local dashboard is organized around project execution:
-
-- **Overview** — high-level project status
-- **Tasks** — active and completed work
-- **Architecture** — architecture, schema, flows, decisions, and conventions
-- **Changes** — tracked project modifications
-- **Console** — streamed execution output, prompts, and confirmations
-
-## Project Initialization
-
-`bender init` supports a guided new-project flow with:
-
-- target directory selection and validation
-- required project description
-- optional stack quick-pick:
-  - `Next.js SaaS`
-  - `Express API`
-  - `Let AI Decide`
-- provider/API key setup when required
-
-## Architecture Support
-
-Bender can persist and render project architecture artifacts, including:
-
-- architecture documentation
-- conventions
-- SQL schema
-- Mermaid ERD generation from SQL
-- Mermaid flow generation
-- architectural decisions
-- API contracts
-
-Generated flows are persisted to `.bender/flows.md`.
-
-## Runtime and Integrations
-
-Bender supports:
-
-- per-provider API key configuration for:
-  - `anthropic`
-  - `openai`
-  - `google`
-  - `groq`
-  - `ollama`
-- environment variable fallback for provider credentials
-- MCP server configuration in Settings
-- provider-specific MCP tool wiring
-- skills context injection from configured markdown or text files
-- custom agent composition and task assignment
-
-## Project State
-
-Bender stores project state under `.bender/`, including:
+Typical project state under `.bender/`:
 
 ```text
 .bender/
@@ -147,67 +76,119 @@ Bender stores project state under `.bender/`, including:
   sessions/
 ```
 
-`bender.db` is the embedded local SQLite store used for project-scoped state/query persistence.
-Global/home-scoped state is stored in `~/.bender/bender-home.db`.
-No external server (Docker/Postgres) is required.
+## Core CLI Commands
 
-## Installation
+- `bender bend`  
+  Start local server and open dashboard flow.
+
+- `bender open` / `bender review`  
+  Aliases for `bender bend`.
+
+- `bender stop`  
+  Stop local dashboard server.
+
+- `bender init -d <dir>`  
+  Initialize new project state.
+
+- `bender analyze -d <dir>`  
+  Analyze existing codebase into Bender state.
+
+- `bender plan "<description>" -d <dir>`  
+  Create/update task plan.
+
+- `bender implement -d <dir>`  
+  Execute active task plan.
+
+- `bender status -d <dir>`  
+  Show project/task status.
+
+- `bender eval-ci --suite <suite-id> -d <dir>`  
+  Run saved eval suite as CI quality gate.
+
+## WebUI Areas
+
+- Overview / Plan
+- Architecture (docs, schema, flows, decisions, API contracts)
+- Changes (git + GitHub helpers)
+- Evals (Promptfoo-backed compare/suite runs)
+- Agents (builtin + custom agent configuration)
+- Settings (providers, GitHub auth/config, MCP connectors, skills)
+- Console (streamed operation output)
+
+## Setup
 
 ### Requirements
 
 - Node.js `>=20`
 - npm
 
-### Install and Build
+### Install
 
 ```bash
 npm install
+```
+
+### Build
+
+```bash
 npm run build
 ```
 
-### Run the Dashboard
+### Run (Browser)
 
 ```bash
 npm run bend
 ```
 
-### Run the Desktop App (Electron Wrapper)
+### Run (Electron Desktop)
 
 ```bash
 npm run desktop:start
 ```
 
-The Electron app is a thin shell over the same local backend + WebUI used by CLI/browser workflows.
-CLI and browser usage remain fully supported.
-Desktop lifecycle uses cross-platform Node/Electron APIs for backend spawn/shutdown.
-Installer/signing/notarization workflow is intentionally out of scope for now.
-
-### Install the CLI Globally
+### Install CLI Globally
 
 ```bash
 npm link
 bender bend
 ```
 
-## Development Scripts
+## Environment Variables
 
-- `npm run build` — build CLI and web
+- `BENDER_PORT`  
+  Preferred backend port.
+
+- `PORT`  
+  Secondary backend port fallback.
+
+- `BENDER_PROJECT_DIR`  
+  Optional initial project path for desktop backend entrypoint.
+
+- `BENDER_NODE_BIN`  
+  Optional Node executable path used by Electron to spawn backend (useful when Node is not on PATH in desktop envs).
+
+## NPM Scripts
+
+- `npm run build` — build CLI + web
 - `npm run build:cli` — build CLI only
 - `npm run build:web` — build web only
-- `npm run dev` — TypeScript watch mode
+- `npm run dev` — TypeScript watch
 - `npm run dev:web` — Vite dev server
-- `npm run bend` — build CLI and run `bender bend`
-- `npm run desktop:start` — build CLI/web and launch Electron desktop wrapper
-- `npm run desktop:dev` — alias for `desktop:start`
-- `npm run desktop:backend` — build CLI and run desktop backend entrypoint only
-- `npm run test` — full test suite
+- `npm run bend` — build CLI + run dashboard server
+- `npm run desktop:start` — build + launch Electron wrapper
+- `npm run desktop:dev` — alias for desktop start
+- `npm run desktop:backend` — run desktop backend entrypoint only
+- `npm run test` — harness tests
 - `npm run test:unit` — unit tests
-- `npm run test:integration` — CLI integration smoke tests
-- `npm run test:e2e:smoke` — end-to-end LLM smoke test (requires API key)
+- `npm run test:integration` — integration tests
+- `npm run test:harness` — build CLI + unit + integration
+- `npm run test:harness:full` — harness + dashboard smoke
+- `npm run test:e2e:smoke` — dashboard smoke
+- `npm run test:e2e:playwright` — Playwright E2E
+- `npm run test:e2e:playwright:headed` — headed Playwright
+- `npm run test:e2e:llm-smoke` — LLM smoke
 
-## Eval CI Gate
-
-Use saved eval suites as repeatable quality gates in CI:
+## Eval CI Example
 
 ```bash
 bender eval-ci \
@@ -218,13 +199,4 @@ bender eval-ci \
   -d .
 ```
 
-This command exits non-zero when thresholds are violated.
-
-## Backend Port Configuration
-
-Bender backend port can be configured with:
-
-- `BENDER_PORT`
-- `PORT` (fallback)
-
-If neither is set, Bender defaults to `3142`.
+Exits non-zero when thresholds are violated.
