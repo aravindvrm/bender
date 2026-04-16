@@ -1,121 +1,58 @@
 # Bender
 
-Bender is a local AI software execution workspace for planning, implementing, reviewing, and evaluating real project work.
+Bender is a local AI software execution workspace for planning, implementation, review, and evaluation across real codebases.
 
-It supports three first-class interfaces:
+Bender supports three first-class interfaces:
 
 - CLI
 - Browser WebUI
-- Electron desktop app (thin wrapper over the same backend + WebUI)
+- Electron desktop app (thin shell over the same backend + WebUI)
 
 ## What Bender Includes
 
-- Project-aware planning and implementation workflows (`init`, `analyze`, `plan`, `implement`, `status`)
-- Role-based agent system (analyzer, architect, planner, implementer, reviewer) with custom agent overrides
-- Skills system with curated catalog + local project/user library extension
-- MCP connector configuration and capability policy controls
-- Git and GitHub integration:
-  - GitHub auth/session + repo workflows
-  - project-scoped GitHub issue ingestion
-  - role-based extraction (analyzer/architect/planner)
-  - review-and-import into task plan with task↔issue linking
-- Evals system backed by Promptfoo (single compares + saved suites + CI gating)
-- Local-first persistence using embedded SQLite (no Docker/Postgres required)
+- Project workflows: `init`, `analyze`, `plan`, `implement`, `status`
+- Role-based agents: analyzer, architect, planner, implementer, reviewer
+- Custom agent overrides and role skill curation
+- Skills system with curated catalog plus project/user extensions
+- MCP connector configuration with capability-aware runtime behavior
+- Git and GitHub integration, including project-scoped issue ingestion and task linking
+- Promptfoo-backed eval compare/suite execution with CI gating
+- Project chat panel with a fixed `Bender Operator` role, tool-backed actions, and deterministic command fallbacks
+- Local-first embedded SQLite persistence (no Docker/Postgres requirement)
 
-## Architecture (Current)
-
-### Interfaces
+## Interfaces
 
 - CLI: `bender ...`
-- Browser: `bender bend` (or `open` / `review`)
+- Browser dashboard: `bender bend` (aliases: `bender open`, `bender review`)
 - Desktop: `npm run desktop:start`
+
+## Architecture
 
 ### Backend
 
-- Express API server (`src/cli/server.ts`) shared by browser and Electron
-- Health endpoint: `GET /api/health` → `{ ok: true }`
-- Port resolution:
-  - `BENDER_PORT`
-  - fallback `PORT`
-  - default `3142`
+- Express server: [server.ts](/Volumes/SD3.2_256/Repos/bender/src/cli/server.ts)
+- Health endpoint: `GET /api/health` returns `{ ok: true }`
+- Port resolution order: `BENDER_PORT` → `PORT` → `3142` (default)
 
-### Desktop Wrapper
+### Desktop wrapper
 
-Electron wrapper behavior:
-
-- starts backend as child process
-- waits for `/api/health` before loading UI
-- handles backend startup failure/crash with visible status screens
-- handles port conflicts pragmatically (auto-pick for default-port conflicts, explicit-port conflicts fail clearly)
-- kills backend on quit to avoid orphans
-- uses cross-platform process APIs
+- Starts backend as a child process
+- Waits for `/api/health` before loading UI
+- Surfaces startup/crash errors in-app
+- Handles default-port conflicts pragmatically
+- Shuts down backend on app exit to avoid orphan processes
+- Uses cross-platform process APIs (macOS/Windows/Linux)
 
 ## Persistence
 
-Bender persists data locally in two SQLite stores:
+Bender stores state locally in SQLite:
 
-- Project-scoped: `.bender/bender.db`
-- Home/global-scoped: `~/.bender/bender-home.db`
+- Project DB: `.bender/bender.db`
+- Home/global DB: `~/.bender/bender-home.db`
 
-Legacy file compatibility is preserved where needed, but SQLite is the primary persistence layer.
+Project files under `.bender/` still include artifacts like `brief.md`, `architecture.md`, task files, and logs for reviewability/compatibility.
 
-Typical project state under `.bender/`:
-
-```text
-.bender/
-  bender.db
-  brief.md
-  architecture.md
-  conventions.md
-  schema.sql
-  flows.md
-  config.yaml
-  decisions/
-  tasks/
-  api-contracts/
-  sessions/
-```
-
-## Core CLI Commands
-
-- `bender bend`  
-  Start local server and open dashboard flow.
-
-- `bender open` / `bender review`  
-  Aliases for `bender bend`.
-
-- `bender stop`  
-  Stop local dashboard server.
-
-- `bender init -d <dir>`  
-  Initialize new project state.
-
-- `bender analyze -d <dir>`  
-  Analyze existing codebase into Bender state.
-
-- `bender plan "<description>" -d <dir>`  
-  Create/update task plan.
-
-- `bender implement -d <dir>`  
-  Execute active task plan.
-
-- `bender status -d <dir>`  
-  Show project/task status.
-
-- `bender eval-ci --suite <suite-id> -d <dir>`  
-  Run saved eval suite as CI quality gate.
-
-## WebUI Areas
-
-- Overview / Plan
-- Architecture (docs, schema, flows, decisions, API contracts)
-- Changes (git + GitHub helpers)
-- Evals (Promptfoo-backed compare/suite runs)
-- Agents (builtin + custom agent configuration)
-- Settings (providers, GitHub auth/config, MCP connectors, skills)
-- Console (streamed operation output)
-
-## Setup
+## Quick Start
 
 ### Requirements
 
@@ -134,108 +71,147 @@ npm install
 npm run build
 ```
 
-### Run (Browser)
+### Run in browser
 
 ```bash
 npm run bend
 ```
 
-### Run (Electron Desktop)
+### Run desktop app
 
 ```bash
 npm run desktop:start
 ```
 
-### Install CLI Globally
+### Install CLI globally (optional)
 
 ```bash
 npm link
 bender bend
 ```
 
-## Environment Variables
+## Core CLI Commands
 
-- `BENDER_PORT`  
-  Preferred backend port.
+- `bender bend` starts local backend/dashboard
+- `bender stop` stops local dashboard server
+- `bender init -d <dir>` initializes project state
+- `bender analyze -d <dir>` analyzes existing repository state
+- `bender plan "<description>" -d <dir>` generates/updates task plan
+- `bender implement -d <dir>` executes active plan
+- `bender status -d <dir>` prints project/task status
+- `bender eval-ci --suite <suite-id> -d <dir>` runs saved eval suite as CI gate
 
-- `PORT`  
-  Secondary backend port fallback.
+## WebUI Areas
 
-- `BENDER_PROJECT_DIR`  
-  Optional initial project path for desktop backend entrypoint.
+- Overview / Plan
+- Architecture
+- Changes (Git/GitHub helpers)
+- Evals
+- Agents
+- Settings
+- Console
+- Chat (Bender Operator)
 
-- `BENDER_NODE_BIN`  
-  Optional Node executable path used by Electron to spawn backend (useful when Node is not on PATH in desktop envs).
+## Chat Operator
 
-## OpenAI-Compatible Local Provider (Experimental)
+The chat panel is project-scoped and uses a fixed operator role. It supports:
 
-Bender includes a generic `openai-compatible` provider for local/self-hosted servers that expose an OpenAI-style API (for example LM Studio and similar tools).
+- Normal conversational guidance
+- Tool-backed actions (task list/add/update/delete/run, audits, analyze)
+- Deterministic fallback commands when tool-calling is unavailable
 
-Configure it in **Settings → API Keys**:
+Examples:
+
+- `/task list`
+- `/task add title: ...; description: ...`
+- `/task update 3 title: ...`
+- `/task run 3`
+- `/audit security`
+- `/analyze`
+
+## LLM Providers
+
+Bender is provider-agnostic and supports:
+
+- `anthropic`
+- `openai`
+- `google`
+- `groq`
+- `ollama`
+- `openai-compatible` (experimental)
+
+Provider/model tiers (`fast`, `default`, `strong`) are configured in Settings and persisted per project/global scope.
+
+### OpenAI-compatible local provider (experimental)
+
+Use this for local/self-hosted OpenAI-shaped servers (for example LM Studio-compatible endpoints).
+
+Settings fields:
 
 - `provider`: `openai-compatible`
-- `baseUrl`: required (example: `http://localhost:1234/v1`)
+- `baseUrl`: required, e.g. `http://localhost:1234/v1`
 - `model`: optional default model hint
 - `apiKey`: optional bearer token
-- `supportsTools`: optional (default `false`)
-- `supportsJson`: optional (default `false`)
-- `supportsStreaming`: optional (default `true`)
+- `supportsTools`: optional capability override
+- `supportsJson`: optional capability override
+- `supportsStreaming`: optional capability override
 
-Example config snippet:
+Behavior notes:
 
-```yaml
-llm:
-  provider: openai-compatible
-  models:
-    fast: local-model
-    default: local-model
-    strong: local-model
-providers:
-  openai-compatible:
-    baseUrl: http://localhost:1234/v1
-    model: local-model
-    apiKey: ""
-    supportsTools: false
-    supportsJson: false
-    supportsStreaming: true
-```
+- Bender normalizes host-only URLs (for example `100.102.218.63:7070` to `http://100.102.218.63:7070`)
+- For compatibility, Bender can fall back between `/chat/completions` and `/responses` paths when server behavior is inconsistent
+- Local capabilities are conservatively gated; unsupported features fail soft
 
-Current limitations:
+## GitHub Integration
 
-- Feature support depends on your local server implementation.
-- Tools/MCP are off by default for safety; enable `supportsTools` only if your server supports it.
-- First-party cloud providers (`openai`, `anthropic`, etc.) remain unchanged.
+GitHub flows are project-scoped. Bender uses the currently open project and its linked repo.
 
-## NPM Scripts
+Current capabilities include:
 
-- `npm run build` — build CLI + web
-- `npm run build:cli` — build CLI only
-- `npm run build:web` — build web only
-- `npm run dev` — TypeScript watch
-- `npm run dev:web` — Vite dev server
-- `npm run bend` — build CLI + run dashboard server
-- `npm run desktop:start` — build + launch Electron wrapper
-- `npm run desktop:dev` — alias for desktop start
-- `npm run desktop:backend` — run desktop backend entrypoint only
-- `npm run test` — harness tests
-- `npm run test:unit` — unit tests
-- `npm run test:integration` — integration tests
-- `npm run test:harness` — build CLI + unit + integration
-- `npm run test:harness:full` — harness + dashboard smoke
-- `npm run test:e2e:smoke` — dashboard smoke
-- `npm run test:e2e:playwright` — Playwright E2E
-- `npm run test:e2e:playwright:headed` — headed Playwright
-- `npm run test:e2e:llm-smoke` — LLM smoke
+- Auth/linkage setup in Settings
+- Issue listing/filtering for linked repo
+- Role-based extraction (analyzer/architect/planner) into candidate tasks
+- Review-and-import into task plan
+- Task-to-issue linkage persistence
 
-## Eval CI Example
+## Evals
 
-```bash
-bender eval-ci \
-  --suite <suite-id> \
-  --min-success-rate 0.9 \
-  --max-median-latency-ms 2000 \
-  --max-average-cost-usd 0.01 \
-  -d .
-```
+Evals are backed by Promptfoo while preserving Bender-native entities and UI.
 
-Exits non-zero when thresholds are violated.
+Supported now:
+
+- Single task compare across multiple configs
+- Saved suite execution/reports
+- CI gating via `bender eval-ci`
+
+## Environment Variables
+
+- `BENDER_PORT`: preferred backend port
+- `PORT`: secondary port fallback
+- `BENDER_PROJECT_DIR`: optional initial project path for desktop backend entrypoint
+- `BENDER_NODE_BIN`: optional Node executable path for Electron backend spawn
+
+## Scripts
+
+- `npm run build` build CLI + web
+- `npm run build:cli` build CLI only
+- `npm run build:web` build web only
+- `npm run bend` build CLI + run dashboard
+- `npm run desktop:start` build + launch desktop app
+- `npm run desktop:backend` run desktop backend entrypoint only
+- `npm run test` run harness tests
+- `npm run test:unit` run unit tests
+- `npm run test:integration` run integration tests
+- `npm run test:harness` build CLI + unit + integration
+- `npm run test:harness:full` harness + dashboard smoke
+- `npm run test:e2e:smoke` dashboard smoke
+- `npm run test:e2e:playwright` Playwright E2E
+- `npm run test:e2e:playwright:headed` headed Playwright
+- `npm run test:e2e:llm-smoke` LLM smoke
+
+## Troubleshooting
+
+- `Missing API key for provider ...`: verify provider keys in Settings for the active tier/provider
+- Local provider URL errors (`Invalid URL`): include protocol or use host:port and let Bender normalize it
+- Desktop native module mismatch (`better-sqlite3`): run `npm rebuild` after Node/Electron version changes
+- GitHub MCP `401 Unauthorized`: refresh token/config in Settings
