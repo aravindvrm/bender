@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { join } from "node:path";
@@ -6,6 +6,8 @@ import { join } from "node:path";
 const STARTUP_TIMEOUT_MS = 30_000;
 const HEALTH_POLL_INTERVAL_MS = 250;
 const DEFAULT_PORT = 3142;
+const DOCS_URL = "https://github.com/aravindvrm/bender";
+const IS_MAC = process.platform === "darwin";
 
 let mainWindow: BrowserWindow | null = null;
 let backendProcess: ChildProcess | null = null;
@@ -80,9 +82,72 @@ function createStatusHtml(title: string, body: string): string {
 </html>`;
 }
 
+function createStartupHtml(): string {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Bender</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0b0b0b;
+        color: #f4f4f5;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+      }
+      .stack {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .label {
+        font-size: 13px;
+        color: #a1a1aa;
+      }
+      .bender-loader {
+        width: var(--loader-size, 18px);
+        aspect-ratio: 1;
+        --loader-color: #fff;
+        --g1: conic-gradient(from 90deg at top 5.45% left 5.45%, #0000 90deg, var(--loader-color) 0);
+        --g2: conic-gradient(from -90deg at bottom 5.45% right 5.45%, #0000 90deg, var(--loader-color) 0);
+        background:
+          var(--g1), var(--g1), var(--g1), var(--g1),
+          var(--g2), var(--g2), var(--g2), var(--g2);
+        background-position: 0 0, 100% 0, 100% 100%, 0 100%;
+        background-size: 45.45% 45.45%;
+        background-repeat: no-repeat;
+        animation: bender-loader-frames 1.5s infinite;
+      }
+      @keyframes bender-loader-frames {
+        0%   { background-size: 63.64% 27.27%, 27.27% 27.27%, 27.27% 63.64%, 63.64% 63.64%; }
+        25%  { background-size: 63.64% 63.64%, 27.27% 63.64%, 27.27% 27.27%, 63.64% 27.27%; }
+        50%  { background-size: 27.27% 63.64%, 63.64% 63.64%, 63.64% 27.27%, 27.27% 27.27%; }
+        75%  { background-size: 27.27% 27.27%, 63.64% 27.27%, 63.64% 63.64%, 27.27% 63.64%; }
+        100% { background-size: 63.64% 27.27%, 27.27% 27.27%, 27.27% 63.64%, 63.64% 63.64%; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stack">
+      <div class="bender-loader" aria-hidden="true"></div>
+      <div class="label">Starting up...</div>
+    </div>
+  </body>
+</html>`;
+}
+
 async function loadStatusPage(title: string, message: string): Promise<void> {
   if (!mainWindow) return;
   await mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(createStatusHtml(title, message))}`);
+}
+
+async function loadStartupPage(): Promise<void> {
+  if (!mainWindow) return;
+  await mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(createStartupHtml())}`);
 }
 
 async function isPortAvailable(port: number): Promise<boolean> {
@@ -228,7 +293,7 @@ async function bootDesktop(): Promise<void> {
     title: "Bender",
   });
 
-  await loadStatusPage("Starting Bender", "Launching backend and waiting for health check...");
+  await loadStartupPage();
 
   try {
     backendPort = await pickBackendPort();
@@ -247,6 +312,94 @@ async function bootDesktop(): Promise<void> {
   }
 }
 
+function openDashboardInBrowser(): void {
+  if (!backendPort) return;
+  void shell.openExternal(`http://127.0.0.1:${backendPort}`);
+}
+
+function setAppMenu(): void {
+  const appSubmenuMac: MenuItemConstructorOptions[] = [
+    { role: "about" },
+    { type: "separator" },
+    { role: "services" },
+    { type: "separator" },
+    { role: "hide" },
+    { role: "hideOthers" },
+    { role: "unhide" },
+    { type: "separator" },
+    { role: "quit" },
+  ];
+  const appSubmenuOther: MenuItemConstructorOptions[] = [
+    { role: "about" },
+    { type: "separator" },
+    { role: "quit" },
+  ];
+
+  const fileSubmenu: MenuItemConstructorOptions[] = [
+    {
+      label: "Open Dashboard in Browser",
+      accelerator: "CmdOrCtrl+Shift+O",
+      click: openDashboardInBrowser,
+    },
+    ...(IS_MAC ? [] : [{ type: "separator" as const }, { role: "quit" as const }]),
+  ];
+  const viewSubmenu: MenuItemConstructorOptions[] = [
+    { role: "reload" },
+    { role: "forceReload" },
+    { type: "separator" },
+    { role: "toggleDevTools" },
+    { type: "separator" },
+    { role: "resetZoom" },
+    { role: "zoomIn" },
+    { role: "zoomOut" },
+    { type: "separator" },
+    { role: "togglefullscreen" },
+  ];
+  const windowSubmenu: MenuItemConstructorOptions[] = [
+    { role: "minimize" },
+    { role: "zoom" },
+    ...(IS_MAC
+      ? [{ type: "separator" as const }, { role: "front" as const }, { role: "window" as const }]
+      : [{ role: "close" as const }]),
+  ];
+  const helpSubmenu: MenuItemConstructorOptions[] = [
+    {
+      label: "Bender Documentation",
+      click: () => { void shell.openExternal(DOCS_URL); },
+    },
+  ];
+
+  const template: MenuItemConstructorOptions[] = [
+    ...(IS_MAC
+      ? [{
+          label: "Bender",
+          submenu: appSubmenuMac,
+        }]
+      : [{
+          label: "Bender",
+          submenu: appSubmenuOther,
+        }]),
+    {
+      label: "File",
+      submenu: fileSubmenu,
+    },
+    {
+      label: "View",
+      submenu: viewSubmenu,
+    },
+    {
+      label: "Window",
+      submenu: windowSubmenu,
+    },
+    {
+      label: "Help",
+      submenu: helpSubmenu,
+    },
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.on("before-quit", () => {
   shuttingDown = true;
   stopBackendProcess();
@@ -257,5 +410,11 @@ app.on("window-all-closed", () => {
 });
 
 app.whenReady().then(() => {
+  app.setName("Bender");
+  app.setAboutPanelOptions({
+    applicationName: "Bender",
+    applicationVersion: app.getVersion(),
+  });
+  setAppMenu();
   void bootDesktop();
 });
