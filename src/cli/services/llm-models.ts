@@ -1,9 +1,314 @@
 import type { BenderConfig } from "../../state/config.js";
 
-export type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama";
+export type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "openai-compatible";
+
+const MODEL_LIST_TIMEOUT_MS = 15_000;
+const CAPABILITY_PROBE_TIMEOUT_MS = 20_000;
+
+function withTimeoutFetch(url: string, init?: RequestInit): Promise<Response> {
+  const timeoutSignal = AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS);
+  if (init?.signal) return fetch(url, init);
+  return fetch(url, { ...init, signal: timeoutSignal });
+}
 
 function uniqueSorted(items: string[]): string[] {
   return [...new Set(items.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function normalizeOpenAiCompatibleBaseUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  if (!trimmed) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `http://${trimmed}`;
+}
+
+function openAiCompatibleBaseCandidates(baseUrl: string): string[] {
+  const normalized = normalizeOpenAiCompatibleBaseUrl(baseUrl);
+  if (!normalized) return [];
+  return normalized.endsWith("/v1")
+    ? [normalized]
+    : [normalized, `${normalized}/v1`];
+}
+
+interface OpenAiCompatibleChatResponse {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      tool_calls?: Array<{ function?: { name?: string } }>;
+    };
+  }>;
+  error?: unknown;
+}
+
+export interface ModelCapabilityResult {
+  supportsTools: boolean;
+  supportsJson: boolean;
+  supportsStreaming: boolean;
+  endpoint?: string;
+  apiStyle?: "chat" | "responses" | "auto";
+  errors?: string[];
+}
+
+type OpenAiCompatibleApiStyle = "chat" | "responses";
+
+function authHeaders(apiKey?: string): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey?.trim()) headers.Authorization = `Bearer ${apiKey.trim()}`;
+  return headers;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasErrorEnvelope(value: unknown): boolean {
+  if (!isObjectRecord(value)) return false;
+  return Object.prototype.hasOwnProperty.call(value, "error");
+}
+
+function isChatSuccessPayload(value: unknown): value is OpenAiCompatibleChatResponse {
+  if (!isObjectRecord(value)) return false;
+  if (hasErrorEnvelope(value)) return false;
+  return Array.isArray((value as OpenAiCompatibleChatResponse).choices);
+}
+
+function isResponsesSuccessPayload(value: unknown): boolean {
+  if (!isObjectRecord(value)) return false;
+  if (hasErrorEnvelope(value)) return false;
+  return (
+    Object.prototype.hasOwnProperty.call(value, "output")
+    || Object.prototype.hasOwnProperty.call(value, "id")
+    || Object.prototype.hasOwnProperty.call(value, "output_text")
+  );
+}
+
+async function postJsonWithTimeout(
+  url: string,
+  body: Record<string, unknown>,
+  apiKey?: string,
+  timeoutMs = CAPABILITY_PROBE_TIMEOUT_MS,
+): Promise<Response> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  return await fetch(url, {
+    method: "POST",
+    headers: authHeaders(apiKey),
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+async function resolveCompatibleEndpoint(
+  baseUrl: string,
+  model: string,
+  apiKey?: string,
+): Promise<{ endpoint: string; apiStyle: OpenAiCompatibleApiStyle }> {
+  const bases = openAiCompatibleBaseCandidates(baseUrl);
+  let lastError = "Unable to resolve OpenAI-compatible endpoint";
+  for (const base of bases) {
+    const chatEndpoint = `${base}/chat/completions`;
+    try {
+      const res = await postJsonWithTimeout(chatEndpoint, {
+        model,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 8,
+        stream: false,
+      }, apiKey);
+      if (!res.ok) {
+        lastError = `Chat endpoint probe failed (${res.status}) at ${chatEndpoint}`;
+      } else {
+        const body = await res.json() as unknown;
+        if (isChatSuccessPayload(body)) {
+          return { endpoint: chatEndpoint, apiStyle: "chat" };
+        }
+        const shape = hasErrorEnvelope(body) ? "error envelope" : "unexpected shape";
+        lastError = `Chat endpoint probe returned ${shape} at ${chatEndpoint}`;
+      }
+    } catch (err) {
+      lastError = `${(err as Error).message} at ${chatEndpoint}`;
+    }
+
+    const responsesEndpoint = `${base}/responses`;
+    try {
+      const res = await postJsonWithTimeout(responsesEndpoint, {
+        model,
+        input: "ping",
+        max_output_tokens: 8,
+        stream: false,
+      }, apiKey);
+      if (!res.ok) {
+        lastError = `Responses endpoint probe failed (${res.status}) at ${responsesEndpoint}`;
+      } else {
+        const body = await res.json() as unknown;
+        if (isResponsesSuccessPayload(body)) {
+          return { endpoint: responsesEndpoint, apiStyle: "responses" };
+        }
+        const shape = hasErrorEnvelope(body) ? "error envelope" : "unexpected shape";
+        lastError = `Responses endpoint probe returned ${shape} at ${responsesEndpoint}`;
+      }
+    } catch (err) {
+      lastError = `${(err as Error).message} at ${responsesEndpoint}`;
+    }
+  }
+  throw new Error(lastError);
+}
+
+async function probeStreaming(
+  endpoint: string,
+  model: string,
+  apiStyle: OpenAiCompatibleApiStyle,
+  apiKey?: string,
+): Promise<boolean> {
+  const payload = apiStyle === "chat"
+    ? {
+        model,
+        messages: [{ role: "user", content: "Return a short one-word answer." }],
+        max_tokens: 8,
+        stream: true,
+      }
+    : {
+        model,
+        input: "Return a short one-word answer.",
+        max_output_tokens: 8,
+        stream: true,
+      };
+  const res = await postJsonWithTimeout(endpoint, payload, apiKey, CAPABILITY_PROBE_TIMEOUT_MS);
+  if (!res.ok) return false;
+  if (!res.body) return false;
+  const reader = res.body.getReader();
+  try {
+    await reader.read();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
+async function probeJsonMode(
+  endpoint: string,
+  model: string,
+  apiStyle: OpenAiCompatibleApiStyle,
+  apiKey?: string,
+): Promise<boolean> {
+  if (apiStyle !== "chat") return false;
+  const res = await postJsonWithTimeout(endpoint, {
+    model,
+    messages: [{ role: "user", content: "Return {\"ok\":true}." }],
+    max_tokens: 32,
+    stream: false,
+    response_format: { type: "json_object" },
+  }, apiKey);
+  if (!res.ok) return false;
+  const body = await res.json() as OpenAiCompatibleChatResponse;
+  const text = body.choices?.[0]?.message?.content ?? "";
+  if (!text) return false;
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function probeTools(
+  endpoint: string,
+  model: string,
+  apiStyle: OpenAiCompatibleApiStyle,
+  apiKey?: string,
+): Promise<boolean> {
+  if (apiStyle !== "chat") return false;
+  const res = await postJsonWithTimeout(endpoint, {
+    model,
+    messages: [{ role: "user", content: "Call the echo function with value=test." }],
+    max_tokens: 48,
+    stream: false,
+    tools: [{
+      type: "function",
+      function: {
+        name: "echo",
+        description: "Echoes the provided value",
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        },
+      },
+    }],
+    tool_choice: {
+      type: "function",
+      function: { name: "echo" },
+    },
+  }, apiKey);
+  if (!res.ok) return false;
+  const body = await res.json() as OpenAiCompatibleChatResponse;
+  const calls = body.choices?.[0]?.message?.tool_calls ?? [];
+  return calls.some((call) => call.function?.name === "echo");
+}
+
+export async function detectOpenAiCompatibleCapabilities(
+  baseUrl: string,
+  models: string[],
+  apiKey?: string,
+): Promise<Record<string, ModelCapabilityResult>> {
+  if (!baseUrl.trim()) throw new Error("baseUrl is required for capability detection");
+  const uniqueModels = [...new Set(models.map((m) => m.trim()).filter(Boolean))];
+  if (uniqueModels.length === 0) throw new Error("At least one model is required for capability detection");
+
+  const results: Record<string, ModelCapabilityResult> = {};
+
+  for (const model of uniqueModels) {
+    const errors: string[] = [];
+    let endpoint = "";
+    let apiStyle: OpenAiCompatibleApiStyle = "chat";
+    try {
+      const resolved = await resolveCompatibleEndpoint(baseUrl, model, apiKey);
+      endpoint = resolved.endpoint;
+      apiStyle = resolved.apiStyle;
+    } catch (err) {
+      results[model] = {
+        supportsTools: false,
+        supportsJson: false,
+        supportsStreaming: false,
+        apiStyle: "auto",
+        errors: [(err as Error).message],
+      };
+      continue;
+    }
+
+    let supportsStreaming = false;
+    let supportsJson = false;
+    let supportsTools = false;
+
+    try {
+      supportsStreaming = await probeStreaming(endpoint, model, apiStyle, apiKey);
+    } catch (err) {
+      errors.push(`streaming: ${(err as Error).message}`);
+    }
+
+    try {
+      supportsJson = await probeJsonMode(endpoint, model, apiStyle, apiKey);
+    } catch (err) {
+      errors.push(`json: ${(err as Error).message}`);
+    }
+
+    try {
+      supportsTools = await probeTools(endpoint, model, apiStyle, apiKey);
+    } catch (err) {
+      errors.push(`tools: ${(err as Error).message}`);
+    }
+
+    results[model] = {
+      supportsTools,
+      supportsJson,
+      supportsStreaming,
+      endpoint,
+      apiStyle,
+      ...(errors.length > 0 ? { errors } : {}),
+    };
+  }
+
+  return results;
 }
 
 export function resolveProviderApiKey(
@@ -31,13 +336,24 @@ export function resolveProviderApiKey(
       ?? (config?.llm.provider === "groq" ? config.llm.apiKey : undefined)
       ?? process.env.GROQ_API_KEY;
   }
+  if (provider === "openai-compatible") {
+    return config?.providers?.["openai-compatible"]?.apiKey
+      ?? (config?.llm.provider === "openai-compatible" ? config.llm.apiKey : undefined);
+  }
   return "ollama";
 }
 
-export async function fetchLiveModels(provider: LlmProvider, apiKey?: string): Promise<string[]> {
+export function resolveProviderBaseUrl(provider: LlmProvider, config: BenderConfig | null): string | undefined {
+  if (provider !== "openai-compatible") return undefined;
+  const explicit = config?.providers?.["openai-compatible"]?.baseUrl?.trim();
+  if (explicit) return normalizeOpenAiCompatibleBaseUrl(explicit);
+  return undefined;
+}
+
+export async function fetchLiveModels(provider: LlmProvider, apiKey?: string, baseUrl?: string): Promise<string[]> {
   if (provider === "openai") {
     if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
-    const res = await fetch("https://api.openai.com/v1/models", {
+    const res = await withTimeoutFetch("https://api.openai.com/v1/models", {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!res.ok) throw new Error(`OpenAI model list failed (${res.status})`);
@@ -53,7 +369,7 @@ export async function fetchLiveModels(provider: LlmProvider, apiKey?: string): P
 
   if (provider === "anthropic") {
     if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
-    const res = await fetch("https://api.anthropic.com/v1/models", {
+    const res = await withTimeoutFetch("https://api.anthropic.com/v1/models", {
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
@@ -67,7 +383,7 @@ export async function fetchLiveModels(provider: LlmProvider, apiKey?: string): P
   if (provider === "google") {
     if (!apiKey) throw new Error("Missing GOOGLE_GENERATIVE_AI_API_KEY");
     const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`;
-    const res = await fetch(url);
+    const res = await withTimeoutFetch(url);
     if (!res.ok) throw new Error(`Google model list failed (${res.status})`);
     const body = await res.json() as { models?: Array<{ name?: string }> };
     const ids = (body.models ?? [])
@@ -78,7 +394,7 @@ export async function fetchLiveModels(provider: LlmProvider, apiKey?: string): P
 
   if (provider === "groq") {
     if (!apiKey) throw new Error("Missing GROQ_API_KEY");
-    const res = await fetch("https://api.groq.com/openai/v1/models", {
+    const res = await withTimeoutFetch("https://api.groq.com/openai/v1/models", {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (!res.ok) throw new Error(`Groq model list failed (${res.status})`);
@@ -86,9 +402,35 @@ export async function fetchLiveModels(provider: LlmProvider, apiKey?: string): P
     return uniqueSorted((body.data ?? []).map((m) => m.id ?? "")).reverse();
   }
 
-  const res = await fetch("http://localhost:11434/api/tags");
+  if (provider === "openai-compatible") {
+    if (!baseUrl) throw new Error("Missing baseUrl for openai-compatible provider");
+    const candidates = openAiCompatibleBaseCandidates(baseUrl);
+    const headers: Record<string, string> = {};
+    if (apiKey?.trim()) {
+      headers.Authorization = `Bearer ${apiKey.trim()}`;
+    }
+    let lastError = "OpenAI-compatible model list failed";
+    for (const base of candidates) {
+      const endpoint = `${base}/models`;
+      try {
+        const res = await withTimeoutFetch(endpoint, { headers });
+        if (!res.ok) {
+          lastError = `OpenAI-compatible model list failed (${res.status}) at ${endpoint}`;
+          continue;
+        }
+        const body = await res.json() as { data?: Array<{ id?: string }> };
+        const models = uniqueSorted((body.data ?? []).map((m) => m.id ?? "")).reverse();
+        if (models.length > 0) return models;
+        lastError = `OpenAI-compatible endpoint returned no models at ${endpoint}`;
+      } catch (err) {
+        lastError = `${(err as Error).message} (${endpoint})`;
+      }
+    }
+    throw new Error(lastError);
+  }
+
+  const res = await withTimeoutFetch("http://localhost:11434/api/tags");
   if (!res.ok) throw new Error(`Ollama model list failed (${res.status})`);
   const body = await res.json() as { models?: Array<{ name?: string }> };
   return uniqueSorted((body.models ?? []).map((m) => m.name ?? "")).reverse();
 }
-

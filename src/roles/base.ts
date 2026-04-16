@@ -37,6 +37,11 @@ type RunProviderOptions = Parameters<typeof generateText>[0]["providerOptions"];
 export interface RoleExecutionOptions {
   tools?: ToolSet;
   providerOptions?: RunProviderOptions;
+  capabilities?: {
+    supportsTools?: boolean;
+    supportsJson?: boolean;
+    supportsStreaming?: boolean;
+  };
   additionalSystemContext?: string;
   maxOutputTokens?: number;
   logger?: Logger;
@@ -122,6 +127,15 @@ function isTokenBudgetError(error: unknown): boolean {
   );
 }
 
+function isMcpConnectorError(error: unknown): boolean {
+  const text = stringifyError(error).toLowerCase();
+  return (
+    text.includes("external_connector_error")
+    || text.includes("error retrieving tool list from mcp server")
+    || (text.includes("mcp") && text.includes("unauthorized"))
+  );
+}
+
 function formatRoleFailure(roleName: string, error: unknown): string {
   const message = stringifyError(error).trim();
   if (isTokenBudgetError(error)) {
@@ -175,6 +189,12 @@ export async function runRoleStreaming(
 
   logger.debug(`Starting role: ${roleName}`, { streaming: true });
 
+  const tools = options?.capabilities?.supportsTools === false ? undefined : options?.tools;
+  if (options?.tools && options?.capabilities?.supportsTools === false) {
+    logger.warn(`Provider for role '${roleName}' does not support tools. Continuing without tools.`);
+  }
+  const canDisableMcp = !!tools || !!options?.providerOptions;
+
   const attempts = [
     { system: baseSystem, prompt: userMessage, maxOutputTokens },
     {
@@ -189,40 +209,92 @@ export async function runRoleStreaming(
     || attempts[1].maxOutputTokens !== attempts[0].maxOutputTokens
   );
 
+  attemptLoop:
   for (let attempt = 0; attempt < attempts.length; attempt += 1) {
     const current = attempts[attempt];
-    try {
-      const stream = streamText({
-        model,
-        system: current.system,
-        prompt: current.prompt,
-        tools: options?.tools,
-        providerOptions: options?.providerOptions,
-        maxOutputTokens: current.maxOutputTokens,
-      });
-
-      if (onChunk) {
-        for await (const chunk of stream.textStream) {
-          onChunk(chunk);
+    const modes = canDisableMcp ? [false, true] : [false];
+    for (const disableMcp of modes) {
+      const activeTools = disableMcp ? undefined : tools;
+      const activeProviderOptions = disableMcp ? undefined : options?.providerOptions;
+      try {
+        if (options?.capabilities?.supportsStreaming === false) {
+          const result = await generateText({
+            model,
+            system: current.system,
+            prompt: current.prompt,
+            tools: activeTools,
+            providerOptions: activeProviderOptions,
+            maxOutputTokens: current.maxOutputTokens,
+          });
+          if (onChunk) onChunk(result.text);
+          logger.info(`Role complete: ${roleName}`, {
+            elapsedMs: Date.now() - start,
+            inputTokens: result.usage?.inputTokens,
+            outputTokens: result.usage?.outputTokens,
+            outputChars: result.text.length,
+          });
+          return result.text;
         }
-      }
 
-      const result = await stream.text;
-      const usage = await stream.usage;
-      logger.info(`Role complete: ${roleName}`, {
-        elapsedMs: Date.now() - start,
-        inputTokens: usage?.inputTokens,
-        outputTokens: usage?.outputTokens,
-        outputChars: result.length,
-      });
-      return result;
-    } catch (error: unknown) {
-      const isFirstAttempt = attempt === 0;
-      if (isFirstAttempt && canRetryCompacted && isTokenBudgetError(error)) {
-        logger.warn(`Role ${roleName} hit token budget. Retrying with compacted context.`);
-        continue;
+        const stream = streamText({
+          model,
+          system: current.system,
+          prompt: current.prompt,
+          tools: activeTools,
+          providerOptions: activeProviderOptions,
+          maxOutputTokens: current.maxOutputTokens,
+        });
+
+        if (onChunk) {
+          for await (const chunk of stream.textStream) {
+            onChunk(chunk);
+          }
+        }
+
+        const result = await stream.text;
+        const usage = await stream.usage;
+        if (!result.trim()) {
+          logger.warn(`Role ${roleName} returned empty streamed output. Retrying once without streaming.`);
+          const fallback = await generateText({
+            model,
+            system: current.system,
+            prompt: current.prompt,
+            tools: activeTools,
+            providerOptions: activeProviderOptions,
+            maxOutputTokens: current.maxOutputTokens,
+          });
+          if (!fallback.text.trim()) {
+            throw new Error(`Role '${roleName}' returned an empty response`);
+          }
+          if (onChunk) onChunk(fallback.text);
+          logger.info(`Role complete: ${roleName}`, {
+            elapsedMs: Date.now() - start,
+            inputTokens: fallback.usage?.inputTokens,
+            outputTokens: fallback.usage?.outputTokens,
+            outputChars: fallback.text.length,
+            streamFallback: true,
+          });
+          return fallback.text;
+        }
+        logger.info(`Role complete: ${roleName}`, {
+          elapsedMs: Date.now() - start,
+          inputTokens: usage?.inputTokens,
+          outputTokens: usage?.outputTokens,
+          outputChars: result.length,
+        });
+        return result;
+      } catch (error: unknown) {
+        if (!disableMcp && canDisableMcp && isMcpConnectorError(error)) {
+          logger.warn(`Role ${roleName} hit MCP connector error. Retrying without MCP tools.`);
+          continue;
+        }
+        const isFirstAttempt = attempt === 0;
+        if (isFirstAttempt && canRetryCompacted && isTokenBudgetError(error)) {
+          logger.warn(`Role ${roleName} hit token budget. Retrying with compacted context.`);
+          continue attemptLoop;
+        }
+        throw new Error(formatRoleFailure(roleName, error));
       }
-      throw new Error(formatRoleFailure(roleName, error));
     }
   }
 
@@ -261,6 +333,12 @@ export async function runRoleDetailed(
 
   logger.debug(`Starting role: ${roleName}`);
 
+  const tools = options?.capabilities?.supportsTools === false ? undefined : options?.tools;
+  if (options?.tools && options?.capabilities?.supportsTools === false) {
+    logger.warn(`Provider for role '${roleName}' does not support tools. Continuing without tools.`);
+  }
+  const canDisableMcp = !!tools || !!options?.providerOptions;
+
   const attempts = [
     { system: baseSystem, prompt: userMessage, maxOutputTokens },
     {
@@ -275,40 +353,50 @@ export async function runRoleDetailed(
     || attempts[1].maxOutputTokens !== attempts[0].maxOutputTokens
   );
 
+  attemptLoop:
   for (let attempt = 0; attempt < attempts.length; attempt += 1) {
     const current = attempts[attempt];
-    try {
-      const result = await generateText({
-        model,
-        system: current.system,
-        prompt: current.prompt,
-        tools: options?.tools,
-        providerOptions: options?.providerOptions,
-        maxOutputTokens: current.maxOutputTokens,
-      });
+    const modes = canDisableMcp ? [false, true] : [false];
+    for (const disableMcp of modes) {
+      const activeTools = disableMcp ? undefined : tools;
+      const activeProviderOptions = disableMcp ? undefined : options?.providerOptions;
+      try {
+        const result = await generateText({
+          model,
+          system: current.system,
+          prompt: current.prompt,
+          tools: activeTools,
+          providerOptions: activeProviderOptions,
+          maxOutputTokens: current.maxOutputTokens,
+        });
 
-      logger.info(`Role complete: ${roleName}`, {
-        elapsedMs: Date.now() - start,
-        inputTokens: result.usage?.inputTokens,
-        outputTokens: result.usage?.outputTokens,
-        outputChars: result.text.length,
-      });
-
-      return {
-        text: result.text,
-        usage: {
+        logger.info(`Role complete: ${roleName}`, {
+          elapsedMs: Date.now() - start,
           inputTokens: result.usage?.inputTokens,
           outputTokens: result.usage?.outputTokens,
-          totalTokens: (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0),
-        },
-      };
-    } catch (error: unknown) {
-      const isFirstAttempt = attempt === 0;
-      if (isFirstAttempt && canRetryCompacted && isTokenBudgetError(error)) {
-        logger.warn(`Role ${roleName} hit token budget. Retrying with compacted context.`);
-        continue;
+          outputChars: result.text.length,
+        });
+
+        return {
+          text: result.text,
+          usage: {
+            inputTokens: result.usage?.inputTokens,
+            outputTokens: result.usage?.outputTokens,
+            totalTokens: (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0),
+          },
+        };
+      } catch (error: unknown) {
+        if (!disableMcp && canDisableMcp && isMcpConnectorError(error)) {
+          logger.warn(`Role ${roleName} hit MCP connector error. Retrying without MCP tools.`);
+          continue;
+        }
+        const isFirstAttempt = attempt === 0;
+        if (isFirstAttempt && canRetryCompacted && isTokenBudgetError(error)) {
+          logger.warn(`Role ${roleName} hit token budget. Retrying with compacted context.`);
+          continue attemptLoop;
+        }
+        throw new Error(formatRoleFailure(roleName, error));
       }
-      throw new Error(formatRoleFailure(roleName, error));
     }
   }
 
@@ -331,6 +419,12 @@ export async function runConversationalRole(
   const maxOutputTokens = normalizeMaxOutputTokens(options?.maxOutputTokens);
   const compactedSystem = trimForBudget(baseSystem, MAX_SYSTEM_CHARS_ON_TOKEN_RETRY);
   const compactedMessages = compactConversationMessages(messages);
+  const logger = options?.logger ?? createNullLogger(roleName);
+  const tools = options?.capabilities?.supportsTools === false ? undefined : options?.tools;
+  if (options?.tools && options?.capabilities?.supportsTools === false) {
+    logger.warn(`Provider for role '${roleName}' does not support tools. Continuing without tools.`);
+  }
+  const canDisableMcp = !!tools || !!options?.providerOptions;
   const attempts = [
     {
       system: baseSystem,
@@ -353,33 +447,55 @@ export async function runConversationalRole(
     || attempts[1].maxOutputTokens !== attempts[0].maxOutputTokens
   );
 
+  attemptLoop:
   for (let attempt = 0; attempt < attempts.length; attempt += 1) {
     const current = attempts[attempt];
-    try {
-      const { textStream, text } = streamText({
-        model,
-        system: current.system,
-        messages: current.messages,
-        tools: options?.tools,
-        providerOptions: options?.providerOptions,
-        maxOutputTokens: current.maxOutputTokens,
-      });
-
-      if (onChunk) {
-        for await (const chunk of textStream) {
-          onChunk(chunk);
+    const modes = canDisableMcp ? [false, true] : [false];
+    for (const disableMcp of modes) {
+      const activeTools = disableMcp ? undefined : tools;
+      const activeProviderOptions = disableMcp ? undefined : options?.providerOptions;
+      try {
+        if (options?.capabilities?.supportsStreaming === false) {
+          const result = await generateText({
+            model,
+            system: current.system,
+            messages: current.messages,
+            tools: activeTools,
+            providerOptions: activeProviderOptions,
+            maxOutputTokens: current.maxOutputTokens,
+          });
+          if (onChunk) onChunk(result.text);
+          return result.text;
         }
-      }
 
-      return await text;
-    } catch (error: unknown) {
-      const isFirstAttempt = attempt === 0;
-      if (isFirstAttempt && canRetryCompacted && isTokenBudgetError(error)) {
-        const logger = options?.logger ?? createNullLogger(roleName);
-        logger.warn(`Role ${roleName} hit token budget in conversation. Retrying with compacted context.`);
-        continue;
+        const { textStream, text } = streamText({
+          model,
+          system: current.system,
+          messages: current.messages,
+          tools: activeTools,
+          providerOptions: activeProviderOptions,
+          maxOutputTokens: current.maxOutputTokens,
+        });
+
+        if (onChunk) {
+          for await (const chunk of textStream) {
+            onChunk(chunk);
+          }
+        }
+
+        return await text;
+      } catch (error: unknown) {
+        if (!disableMcp && canDisableMcp && isMcpConnectorError(error)) {
+          logger.warn(`Role ${roleName} hit MCP connector error. Retrying without MCP tools.`);
+          continue;
+        }
+        const isFirstAttempt = attempt === 0;
+        if (isFirstAttempt && canRetryCompacted && isTokenBudgetError(error)) {
+          logger.warn(`Role ${roleName} hit token budget in conversation. Retrying with compacted context.`);
+          continue attemptLoop;
+        }
+        throw new Error(formatRoleFailure(roleName, error));
       }
-      throw new Error(formatRoleFailure(roleName, error));
     }
   }
 

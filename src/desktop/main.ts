@@ -343,6 +343,17 @@ function setAppMenu(): void {
     },
     ...(IS_MAC ? [] : [{ type: "separator" as const }, { role: "quit" as const }]),
   ];
+  const editSubmenu: MenuItemConstructorOptions[] = [
+    { role: "undo" },
+    { role: "redo" },
+    { type: "separator" },
+    { role: "cut" },
+    { role: "copy" },
+    { role: "paste" },
+    { role: "delete" },
+    { type: "separator" },
+    { role: "selectAll" },
+  ];
   const viewSubmenu: MenuItemConstructorOptions[] = [
     { role: "reload" },
     { role: "forceReload" },
@@ -382,6 +393,10 @@ function setAppMenu(): void {
     {
       label: "File",
       submenu: fileSubmenu,
+    },
+    {
+      label: "Edit",
+      submenu: editSubmenu,
     },
     {
       label: "View",

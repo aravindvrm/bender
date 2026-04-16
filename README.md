@@ -167,6 +167,45 @@ bender bend
 - `BENDER_NODE_BIN`  
   Optional Node executable path used by Electron to spawn backend (useful when Node is not on PATH in desktop envs).
 
+## OpenAI-Compatible Local Provider (Experimental)
+
+Bender includes a generic `openai-compatible` provider for local/self-hosted servers that expose an OpenAI-style API (for example LM Studio and similar tools).
+
+Configure it in **Settings → API Keys**:
+
+- `provider`: `openai-compatible`
+- `baseUrl`: required (example: `http://localhost:1234/v1`)
+- `model`: optional default model hint
+- `apiKey`: optional bearer token
+- `supportsTools`: optional (default `false`)
+- `supportsJson`: optional (default `false`)
+- `supportsStreaming`: optional (default `true`)
+
+Example config snippet:
+
+```yaml
+llm:
+  provider: openai-compatible
+  models:
+    fast: local-model
+    default: local-model
+    strong: local-model
+providers:
+  openai-compatible:
+    baseUrl: http://localhost:1234/v1
+    model: local-model
+    apiKey: ""
+    supportsTools: false
+    supportsJson: false
+    supportsStreaming: true
+```
+
+Current limitations:
+
+- Feature support depends on your local server implementation.
+- Tools/MCP are off by default for safety; enable `supportsTools` only if your server supports it.
+- First-party cloud providers (`openai`, `anthropic`, etc.) remain unchanged.
+
 ## NPM Scripts
 
 - `npm run build` — build CLI + web

@@ -1,5 +1,5 @@
 import type { Express } from "express";
-import { readGlobalConfig, writeGlobalConfig } from "../../state/config.js";
+import { readEffectiveConfig, readGlobalConfig, writeGlobalConfig } from "../../state/config.js";
 
 interface CuratedMcpServerDefinition {
   id: string;
@@ -20,6 +20,7 @@ interface ConnectorHealthStatus {
 }
 
 interface ConnectorsRouteDeps {
+  getCurrentProject: () => string | null;
   curatedConnectors: CuratedMcpServerDefinition[];
   getConnectorHealthStatus: (
     def: CuratedMcpServerDefinition,
@@ -34,7 +35,7 @@ const MASKED_VALUE = "••••••••";
 export function registerConnectorRoutes(app: Express, deps: ConnectorsRouteDeps): void {
   app.get("/api/mcp/connectors", async (_req, res) => {
     try {
-      const cfg = await readGlobalConfig();
+      const cfg = await readEffectiveConfig(deps.getCurrentProject());
       const servers = cfg.mcp?.servers ?? [];
       const connectors = deps.curatedConnectors.map((def) => {
         const existing = servers.find((s) => (s.id ?? "").trim() === def.id) ?? null;
@@ -54,7 +55,7 @@ export function registerConnectorRoutes(app: Express, deps: ConnectorsRouteDeps)
   app.get("/api/connectors/status", async (req, res) => {
     try {
       const force = String(req.query.force ?? req.query.refresh ?? "").toLowerCase() === "true";
-      const cfg = await readGlobalConfig();
+      const cfg = await readEffectiveConfig(deps.getCurrentProject());
       const servers = cfg.mcp?.servers ?? [];
       const statuses = await Promise.all(
         deps.curatedConnectors.map(async (def) => {

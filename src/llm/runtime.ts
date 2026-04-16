@@ -6,6 +6,7 @@ import type { ToolSet } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { BenderConfig, McpServerConfig } from "../state/config.js";
 import type { RoleExecutionOptions } from "../roles/base.js";
+import { getProviderCapabilities } from "./provider.js";
 import type { BaseRole } from "../state/agents.js";
 import { BUILTIN_AGENTS } from "../state/agents.js";
 import type { CapabilityPolicy } from "../state/capabilities.js";
@@ -116,6 +117,10 @@ export interface RoleRuntime extends RoleExecutionOptions {
 /** Options for building a runtime for a specific role + task. */
 export interface RuntimeOptions {
   role: BaseRole;
+  /** Explicit provider override for runtime calls (used by chat/evals). */
+  provider?: string;
+  /** Explicit model override paired with provider. */
+  model?: string;
   taskDescription?: string;
   /** Override pinned skills (from agent config). Falls back to builtin agent defaults. */
   pinnedSkills?: string[];
@@ -129,10 +134,47 @@ export interface RuntimeOptions {
   systemPromptAddition?: string;
 }
 
+function resolveRoleTier(roleOpts: RuntimeOptions): "fast" | "default" | "strong" {
+  const requested = (roleOpts.modelTier ?? "").trim();
+  if (requested === "fast" || requested === "default" || requested === "strong") return requested;
+  return BUILTIN_AGENTS.find((agent) => agent.baseRole === roleOpts.role)?.modelTier ?? "default";
+}
+
+function resolveProviderAndModelForRole(
+  config: BenderConfig,
+  roleOpts: RuntimeOptions,
+): { provider: string; model: string | undefined } {
+  const explicitProvider = roleOpts.provider?.trim();
+  if (explicitProvider) {
+    return {
+      provider: explicitProvider,
+      model: roleOpts.model?.trim() || undefined,
+    };
+  }
+
+  const tier = resolveRoleTier(roleOpts);
+  const tierConfig = config.llm.models[tier];
+  if (typeof tierConfig === "string") {
+    return { provider: config.llm.provider, model: tierConfig.trim() || undefined };
+  }
+  return {
+    provider: tierConfig.provider || config.llm.provider,
+    model: tierConfig.model?.trim() || undefined,
+  };
+}
+
 // ── Provider helpers ──────────────────────────────────────────────────────────
 
 function getProviderApiKey(config: BenderConfig, provider: string): string | undefined {
   return config.providers?.[provider]?.apiKey ?? config.llm.apiKey;
+}
+
+function getProviderBaseUrl(config: BenderConfig, provider: string): string | undefined {
+  const raw = config.providers?.[provider]?.baseUrl?.trim();
+  if (!raw) return undefined;
+  const normalized = raw.replace(/\/+$/, "");
+  if (/^https?:\/\//i.test(normalized)) return normalized;
+  return `http://${normalized}`;
 }
 
 function hasEnvApiKey(provider: string): boolean {
@@ -425,6 +467,10 @@ export async function createRoleRuntime(
   architectureText?: string,
   logger?: RuntimeLogAdapter,
 ): Promise<RoleRuntime> {
+  const resolvedProviderModel = resolveProviderAndModelForRole(config, roleOpts);
+  const effectiveProvider = resolvedProviderModel.provider;
+  const effectiveModel = resolvedProviderModel.model;
+
   // Build skills context (registry-based takes priority, falls back to legacy paths)
   const hasRegistrySkills = config.skills?.enabled || (roleOpts.pinnedSkills?.length ?? 0) > 0;
 
@@ -435,6 +481,7 @@ export async function createRoleRuntime(
   const runtime: RoleRuntime = {
     tools: undefined,
     providerOptions: undefined,
+    capabilities: getProviderCapabilities(config, effectiveProvider, effectiveModel),
     additionalSystemContext: [
       roleOpts.systemPromptAddition?.trim()
         ? `## Agent-Specific Guidance\n${roleOpts.systemPromptAddition.trim()}`
@@ -480,12 +527,23 @@ export async function createRoleRuntime(
     return runtime;
   }
 
-  const provider = config.llm.provider;
+  const provider = effectiveProvider;
+  const capabilities = runtime.capabilities ?? getProviderCapabilities(config, provider, effectiveModel);
 
-  if (provider === "openai") {
-    const apiKey = getProviderApiKey(config, "openai");
-    if (!apiKey && !hasEnvApiKey("openai")) {
+  if (!capabilities.supportsTools) {
+    logger?.warn?.(`Provider '${provider}' is configured without tool support. MCP tools will be disabled.`);
+    return runtime;
+  }
+
+  if (provider === "openai" || provider === "openai-compatible") {
+    const apiKey = getProviderApiKey(config, provider);
+    if (provider === "openai" && !apiKey && !hasEnvApiKey("openai")) {
       logger?.warn?.("MCP is enabled for OpenAI, but no OPENAI_API_KEY is configured. Skipping MCP tools.");
+      return runtime;
+    }
+    const providerBaseUrl = provider === "openai-compatible" ? getProviderBaseUrl(config, provider) : undefined;
+    if (provider === "openai-compatible" && !providerBaseUrl) {
+      logger?.warn?.("MCP is enabled for openai-compatible, but no providers.openai-compatible.baseUrl is configured. Skipping MCP tools.");
       return runtime;
     }
     const tools: ToolSet = {};
@@ -494,14 +552,26 @@ export async function createRoleRuntime(
       const slug = server.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || `server-${index + 1}`;
       const baseToolName = `mcp_${slug}`;
       const toolName = tools[baseToolName] ? `${baseToolName}_${index + 1}` : baseToolName;
-      tools[toolName] = toOpenAiMcpTool(server, apiKey);
+      if (providerBaseUrl) {
+        const openai = createOpenAI({ baseURL: providerBaseUrl, apiKey: apiKey?.trim() || "not-required" });
+        tools[toolName] = openai.tools.mcp({
+          serverLabel: server.name,
+          serverUrl: server.url,
+          serverDescription: server.description,
+          authorization: server.authorizationToken,
+          headers: server.headers,
+          allowedTools: server.allowedTools,
+        });
+      } else {
+        tools[toolName] = toOpenAiMcpTool(server, apiKey);
+      }
     }
     const toolCount = Object.keys(tools).length;
     runtime.tools = toolCount > 0 ? tools : undefined;
     runtime.summary.mcpEnabled = toolCount > 0;
     runtime.summary.mcpTools = toolCount;
     if (toolCount > 0) {
-      logger?.info?.(`MCP enabled (${toolCount} server tool${toolCount === 1 ? "" : "s"}) via OpenAI provider tools.`);
+      logger?.info?.(`MCP enabled (${toolCount} server tool${toolCount === 1 ? "" : "s"}) via ${provider} provider tools.`);
     }
     return runtime;
   }
