@@ -12,6 +12,7 @@ let backendProcess: ChildProcess | null = null;
 let backendPort: number | null = null;
 let shuttingDown = false;
 let lastBackendLog = "";
+let backendSpawnError: string | null = null;
 
 function parsePort(raw: string | undefined): number | null {
   if (!raw) return null;
@@ -128,6 +129,12 @@ function backendScriptPath(): string {
   return join(import.meta.dirname, "backend.js");
 }
 
+function resolveNodeCommand(): string {
+  const configured = (process.env.BENDER_NODE_BIN ?? "").trim();
+  if (configured.length > 0) return configured;
+  return "node";
+}
+
 function appendBackendLog(chunk: Buffer): void {
   const text = chunk.toString("utf-8");
   if (!text.trim()) return;
@@ -161,6 +168,10 @@ async function waitForHealth(baseUrl: string): Promise<void> {
   const healthUrl = `${baseUrl}/api/health`;
 
   while (Date.now() < deadline) {
+    if (backendSpawnError) {
+      throw new Error(backendSpawnError);
+    }
+
     if (!backendProcess || backendProcess.exitCode !== null) {
       throw new Error("Backend process exited before becoming healthy.");
     }
@@ -182,10 +193,10 @@ async function waitForHealth(baseUrl: string): Promise<void> {
 }
 
 async function startBackend(port: number): Promise<void> {
-  const child = spawn(process.execPath, [backendScriptPath()], {
+  backendSpawnError = null;
+  const child = spawn(resolveNodeCommand(), [backendScriptPath()], {
     env: {
       ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
       BENDER_PORT: String(port),
       BENDER_DESKTOP_MODE: "1",
     },
@@ -196,6 +207,10 @@ async function startBackend(port: number): Promise<void> {
   backendProcess = child;
   child.stdout.on("data", appendBackendLog);
   child.stderr.on("data", appendBackendLog);
+  child.once("error", (error: Error) => {
+    backendSpawnError = `Failed to spawn backend process (${resolveNodeCommand()}): ${error.message}. `
+      + "If Node is not on PATH, set BENDER_NODE_BIN to your Node executable path.";
+  });
   child.once("exit", async (code, signal) => {
     const msg = `Backend exited${code !== null ? ` with code ${code}` : ""}${signal ? ` (${signal})` : ""}.`;
     if (shuttingDown) return;
