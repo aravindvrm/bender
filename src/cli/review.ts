@@ -26,6 +26,8 @@ export async function bendCommand(projectDir?: string): Promise<void> {
   ui.info("Starting local server...\n");
 
   const server = await startServer(initialProject);
+  const address = server.address();
+  const runtimePort = typeof address === "object" && address ? address.port : 3142;
   await writeDashboardPid(process.pid);
 
   const sockets = new Set<Socket>();
@@ -36,7 +38,7 @@ export async function bendCommand(projectDir?: string): Promise<void> {
     });
   });
 
-  ui.success("Server running on http://localhost:3142");
+  ui.success(`Server running on http://localhost:${runtimePort}`);
   console.log();
   if (initialProject) {
     ui.info(`Project: ${initialProject}`);

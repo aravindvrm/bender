@@ -6,8 +6,9 @@ import {
   stopProcessGracefully,
 } from "./serverProcess.js";
 import * as ui from "./ui.js";
+import { resolveServerPort } from "./server-config.js";
 
-const API_PORT = 3142;
+const API_PORT = resolveServerPort();
 
 export async function stopCommand(): Promise<void> {
   const pid = await readDashboardPid();

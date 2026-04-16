@@ -277,6 +277,13 @@ function ModelSelect({
   );
 }
 
+function defaultGitHubRedirectUri(): string {
+  if (typeof window === "undefined" || !window.location?.origin) {
+    return "http://localhost:3142/api/github/auth/callback";
+  }
+  return `${window.location.origin}/api/github/auth/callback`;
+}
+
 export function SettingsView() {
   const [config, setConfig] = useState<FullConfig | null>(null);
   const [configScope, setConfigScope] = useState<ConfigScope>("global");
@@ -293,7 +300,7 @@ export function SettingsView() {
   const [githubConfig, setGithubConfig] = useState<GitHubAuthConfig | null>(null);
   const [githubClientIdInput, setGithubClientIdInput] = useState("");
   const [githubClientSecretInput, setGithubClientSecretInput] = useState("");
-  const [githubRedirectUriInput, setGithubRedirectUriInput] = useState("http://localhost:3142/api/github/auth/callback");
+  const [githubRedirectUriInput, setGithubRedirectUriInput] = useState(defaultGitHubRedirectUri());
   const [githubDeviceFlow, setGithubDeviceFlow] = useState<GitHubDeviceFlowStart | null>(null);
   const [githubLoading, setGithubLoading] = useState(false);
   const [githubSaving, setGithubSaving] = useState(false);
@@ -490,7 +497,7 @@ export function SettingsView() {
       const cfg = cfgBody as GitHubAuthConfig;
       setGithubConfig(cfg);
       setGithubClientIdInput(cfg.storedClientId || cfg.clientId || "");
-      setGithubRedirectUriInput(cfg.redirectUri || "http://localhost:3142/api/github/auth/callback");
+      setGithubRedirectUriInput(cfg.redirectUri || defaultGitHubRedirectUri());
       setGithubStatus(statusBody as GitHubAuthStatus);
     } catch (err) {
       setGithubError((err as Error).message);
@@ -831,7 +838,7 @@ export function SettingsView() {
           <TextInput
             value={githubRedirectUriInput}
             onChange={setGithubRedirectUriInput}
-            placeholder="http://localhost:3142/api/github/auth/callback"
+            placeholder={defaultGitHubRedirectUri()}
             mono
           />
         </Field>

@@ -2,7 +2,7 @@
 
 Bender is a local AI agent workspace for planning, implementing, and tracking software work.
 
-It combines a CLI and a local dashboard to analyze codebases, persist project context in `.bender/`, and execute work through custom agents, reusable skills, and MCP-connected tools.
+It combines a CLI, a browser dashboard, and an optional Electron desktop shell to analyze codebases, persist project context in `.bender/`, and execute work through custom agents, reusable skills, and MCP-connected tools.
 
 ## Why Bender
 
@@ -171,6 +171,17 @@ npm run build
 npm run bend
 ```
 
+### Run the Desktop App (Electron Wrapper)
+
+```bash
+npm run desktop:start
+```
+
+The Electron app is a thin shell over the same local backend + WebUI used by CLI/browser workflows.
+CLI and browser usage remain fully supported.
+Desktop lifecycle uses cross-platform Node/Electron APIs for backend spawn/shutdown.
+Installer/signing/notarization workflow is intentionally out of scope for now.
+
 ### Install the CLI Globally
 
 ```bash
@@ -186,6 +197,9 @@ bender bend
 - `npm run dev` — TypeScript watch mode
 - `npm run dev:web` — Vite dev server
 - `npm run bend` — build CLI and run `bender bend`
+- `npm run desktop:start` — build CLI/web and launch Electron desktop wrapper
+- `npm run desktop:dev` — alias for `desktop:start`
+- `npm run desktop:backend` — build CLI and run desktop backend entrypoint only
 - `npm run test` — full test suite
 - `npm run test:unit` — unit tests
 - `npm run test:integration` — CLI integration smoke tests
@@ -205,3 +219,12 @@ bender eval-ci \
 ```
 
 This command exits non-zero when thresholds are violated.
+
+## Backend Port Configuration
+
+Bender backend port can be configured with:
+
+- `BENDER_PORT`
+- `PORT` (fallback)
+
+If neither is set, Bender defaults to `3142`.
