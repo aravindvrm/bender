@@ -145,7 +145,7 @@ function slugify(value: string): string {
 
 function sourceTone(source?: SkillMeta["source"]): string {
   if (source === "project") return "bg-cyan-950/70 text-cyan-300 border-cyan-900/60";
-  if (source === "user") return "bg-emerald-950/70 text-emerald-300 border-emerald-900/60";
+  if (source === "user") return "bg-zinc-900/70 text-zinc-200 border-zinc-700/60";
   return "bg-zinc-800 text-zinc-300 border-zinc-700";
 }
 

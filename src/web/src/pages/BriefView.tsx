@@ -78,7 +78,7 @@ export function BriefView({ state }: BriefViewProps) {
               return (
                 <div key={i} className="border border-zinc-800 rounded-lg p-3 bg-zinc-900/40">
                   <div className="flex items-start gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 mt-1.5" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-100 shrink-0 mt-1.5" />
                     <div className="min-w-0">
                       <span className="text-sm text-zinc-200 font-medium">{name}</span>
                       {desc && <p className="text-xs text-zinc-500 mt-0.5">{desc}</p>}

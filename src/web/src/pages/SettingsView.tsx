@@ -992,7 +992,7 @@ export function SettingsView() {
 
         <Field label="Connection">
           <div className="space-y-2">
-            <p className={`text-xs ${githubConnected ? "text-emerald-400" : "text-zinc-500"}`}>
+            <p className={`text-xs ${githubConnected ? "text-zinc-100" : "text-zinc-500"}`}>
               {githubConnected ? `Connected${githubStatus?.login ? ` as @${githubStatus.login}` : ""}` : "Not connected"}
             </p>
             {!githubConfigured && (
@@ -1109,16 +1109,16 @@ export function SettingsView() {
                   <ChevronDown className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${expanded ? "rotate-180" : ""}`} />
                 </button>
                 <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-                  <span className={`px-1.5 py-0.5 rounded border ${status?.enabled ? "text-emerald-300 border-emerald-800/60" : "text-zinc-500 border-zinc-700"}`}>
+                  <span className={`px-1.5 py-0.5 rounded border ${status?.enabled ? "text-zinc-200 border-zinc-700/60" : "text-zinc-500 border-zinc-700"}`}>
                     {status?.enabled ? "enabled" : "disabled"}
                   </span>
                   <span className={`px-1.5 py-0.5 rounded border ${status?.configured ? "text-zinc-300 border-zinc-700" : "text-zinc-500 border-zinc-700"}`}>
                     {status?.configured ? "configured" : "no token"}
                   </span>
-                  <span className={`px-1.5 py-0.5 rounded border ${status?.reachable ? "text-emerald-300 border-emerald-800/60" : "text-amber-300 border-amber-800/60"}`}>
+                  <span className={`px-1.5 py-0.5 rounded border ${status?.reachable ? "text-zinc-200 border-zinc-700/60" : "text-amber-300 border-amber-800/60"}`}>
                     {status?.reachable ? "reachable" : "unreachable"}
                   </span>
-                  <span className={`px-1.5 py-0.5 rounded border ${status?.authValid ? "text-emerald-300 border-emerald-800/60" : "text-amber-300 border-amber-800/60"}`}>
+                  <span className={`px-1.5 py-0.5 rounded border ${status?.authValid ? "text-zinc-200 border-zinc-700/60" : "text-amber-300 border-amber-800/60"}`}>
                     {status?.authValid ? "auth valid" : "auth unknown/invalid"}
                   </span>
                 </div>
@@ -1438,7 +1438,7 @@ export function SettingsView() {
         >
           {saving ? "Saving..." : "Save settings"}
         </button>
-        {saved && <span className="text-sm text-emerald-400">Saved</span>}
+        {saved && <span className="text-sm text-zinc-100">Saved</span>}
       </div>
     </div>
   );

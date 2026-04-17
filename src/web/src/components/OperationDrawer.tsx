@@ -334,7 +334,7 @@ export function OperationDrawer({
 
   const statusColor =
     status === "running" ? "text-zinc-400" :
-    status === "done" ? "text-emerald-400" :
+    status === "done" ? "text-zinc-100" :
     status === "error" ? "text-red-400" : "text-zinc-500";
 
   if (!drawerOpen) return null;
@@ -609,7 +609,7 @@ function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewProjectM
       return <p className="text-xs text-amber-400">This directory already contains a <code>.bender</code> state.</p>;
     }
     if (dirInspect.empty) {
-      return <p className="text-xs text-emerald-400">Empty directory. Great for a clean initialization.</p>;
+      return <p className="text-xs text-zinc-100">Empty directory. Great for a clean initialization.</p>;
     }
     return (
       <p className="text-xs text-zinc-400">
@@ -695,7 +695,7 @@ function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewProjectM
                       >
                         <FolderOpen className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
                         <span className="truncate">. (this directory)</span>
-                        {browserRoot.hasBender && <span className="ml-auto text-[10px] text-emerald-500">bender</span>}
+                        {browserRoot.hasBender && <span className="ml-auto text-[10px] text-zinc-100">bender</span>}
                       </button>
 
                       {browserRoot.dirs.map((entry) => (
@@ -781,7 +781,7 @@ function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewProjectM
                     }`}
                   >
                     {provider}
-                    {llmStatus?.providers[provider]?.configured && <span className="ml-1 text-emerald-400">•</span>}
+                    {llmStatus?.providers[provider]?.configured && <span className="ml-1 text-zinc-100">•</span>}
                   </button>
                 ))}
               </div>
@@ -882,7 +882,7 @@ function DirectoryTreeNode({ entry, depth, selectedPath, onChoose }: DirectoryTr
         </span>
         {expanded ? <FolderOpen className="h-3.5 w-3.5 text-zinc-400" /> : <Folder className="h-3.5 w-3.5 text-zinc-400" />}
         <span className="truncate">{entry.name}</span>
-        {entry.hasBender && <span className="ml-auto text-[10px] text-emerald-500">bender</span>}
+        {entry.hasBender && <span className="ml-auto text-[10px] text-zinc-100">bender</span>}
       </button>
 
       {expanded && (
@@ -938,7 +938,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
     case "output": {
       const colors: Record<string, string> = {
         info: "text-zinc-400",
-        success: "text-emerald-400",
+        success: "text-zinc-100",
         warn: "text-amber-400",
         error: "text-red-400",
       };
@@ -952,7 +952,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
       if (!line.done) return null;
       return (
         <div className="flex items-center gap-2 text-zinc-400">
-          <span className={line.success ? "text-emerald-400" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
+          <span className={line.success ? "text-zinc-100" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
           <span>{line.text}</span>
         </div>
       );
@@ -962,7 +962,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
         <div className="pt-1 pb-1 space-y-0.5">
           {line.ops.map((op, i) => (
             <div key={i} className="flex items-center gap-2">
-              <span className={op.action === "create" ? "text-emerald-400 w-8" : "text-amber-400 w-8"}>{op.action.toUpperCase()}</span>
+              <span className={op.action === "create" ? "text-zinc-100 w-8" : "text-amber-400 w-8"}>{op.action.toUpperCase()}</span>
               <span className="text-zinc-300">{op.path}</span>
             </div>
           ))}
@@ -974,7 +974,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
         <div className="my-2 p-3 bg-zinc-800/60 rounded-lg border border-zinc-700 space-y-2">
           <p className="text-zinc-200 font-sans">{line.question}</p>
           {line.answered ? (
-            <p className={`text-xs font-sans ${line.answer ? "text-emerald-400" : "text-red-400"}`}>
+            <p className={`text-xs font-sans ${line.answer ? "text-zinc-100" : "text-red-400"}`}>
               → {line.answer ? "Approved" : "Declined"}
             </p>
           ) : !interactivePrompts ? (
@@ -983,7 +983,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
             <div className="flex gap-2">
               <button
                 onClick={() => onConfirm(line.id, lineIdx, true)}
-                className="px-3 py-1 text-xs rounded bg-emerald-900/50 border border-emerald-700 text-emerald-300 hover:bg-emerald-900 transition-colors font-sans"
+                className="px-3 py-1 text-xs rounded bg-zinc-900/50 border border-zinc-600 text-zinc-200 hover:bg-zinc-900 transition-colors font-sans"
               >
                 Approve
               </button>
@@ -1028,7 +1028,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
 
     case "done":
       return (
-        <div className={`pt-2 font-semibold font-sans ${line.success ? "text-emerald-400" : "text-red-400"}`}>
+        <div className={`pt-2 font-semibold font-sans ${line.success ? "text-zinc-100" : "text-red-400"}`}>
           {line.success ? "✓ Operation completed successfully." : "✗ Operation finished with errors."}
         </div>
       );

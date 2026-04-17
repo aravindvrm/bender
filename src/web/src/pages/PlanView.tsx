@@ -382,7 +382,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       <div className="flex items-center gap-3">
         <div className="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
           <div
-            className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+            className="h-full bg-zinc-100 rounded-full transition-all duration-500"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -516,7 +516,7 @@ function TaskRow({
   onCreatePR,
 }: TaskRowProps) {
   const progress = task.completed ? 100 : 0;
-  const barColor = task.completed ? "bg-emerald-500" : "bg-zinc-700";
+  const barColor = task.completed ? "bg-zinc-100" : "bg-zinc-700";
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draftTitle, setDraftTitle] = useState(task.title);
@@ -532,7 +532,7 @@ function TaskRow({
 
   const statusLabel = task.completed ? "Completed" : "Pending";
   const statusColors: Record<string, string> = {
-    Completed: "text-emerald-400 bg-emerald-500/10",
+    Completed: "text-zinc-100 bg-zinc-100/10",
     Pending: "text-zinc-500 bg-zinc-800",
   };
 

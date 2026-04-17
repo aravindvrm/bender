@@ -683,7 +683,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                         >
                           <FolderOpen className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
                           <span className="truncate">. (this directory)</span>
-                          {browserRoot.hasBender && <span className="ml-auto text-[10px] text-emerald-500">bender</span>}
+                          {browserRoot.hasBender && <span className="ml-auto text-[10px] text-zinc-100">bender</span>}
                         </button>
 
                         {browserRoot.dirs.length === 0 ? (
@@ -739,7 +739,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
               )}
 
               {githubNotice && (
-                <p className="text-xs text-emerald-400">{githubNotice}</p>
+                <p className="text-xs text-zinc-100">{githubNotice}</p>
               )}
 
               {githubStatus && !githubStatus.configured && (
@@ -807,7 +807,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-zinc-400 flex items-center gap-1.5">
-                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-zinc-100" />
                       Connected as <span className="text-zinc-200">@{githubStatus.login}</span>
                     </p>
                     <button
@@ -960,7 +960,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                     <p className="text-sm text-zinc-200 truncate">{p.name}</p>
                     <p className="text-xs text-zinc-500 font-mono truncate">{p.path}</p>
                   </button>
-                  {p.path === currentPath && <span className="text-xs text-emerald-500 shrink-0">active</span>}
+                  {p.path === currentPath && <span className="text-xs text-zinc-100 shrink-0">active</span>}
                   <button
                     onClick={() => void handleRemove(p.path)}
                     disabled={loading}
@@ -1043,7 +1043,7 @@ function DirectoryTreeNode({ entry, depth, selectedPath, onSelect }: DirectoryTr
           <Folder className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
         )}
         <span className="truncate">{entry.name}</span>
-        {entry.hasBender && <span className="ml-auto text-[10px] text-emerald-500">bender</span>}
+        {entry.hasBender && <span className="ml-auto text-[10px] text-zinc-100">bender</span>}
       </button>
 
       {expanded && (

@@ -96,21 +96,19 @@ function createStartupHtml(): string {
         color: #f4f4f5;
         display: flex;
         align-items: center;
-        justify-content: flex-start;
-        padding-left: 28px;
+        justify-content: center;
         min-height: 100vh;
       }
       .stack {
         display: flex;
         align-items: center;
-        justify-content: flex-start;
+        justify-content: center;
         gap: 10px;
-        min-width: 280px;
       }
       .label {
         font-size: 13px;
         color: #a1a1aa;
-        min-width: 220px;
+        width: 220px;
         text-align: left;
       }
       .bender-loader {

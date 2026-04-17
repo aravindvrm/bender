@@ -382,7 +382,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
     case "output": {
       const colors: Record<string, string> = {
         info: "text-zinc-400",
-        success: "text-emerald-400",
+        success: "text-zinc-100",
         warn: "text-amber-400",
         error: "text-red-400",
       };
@@ -396,7 +396,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
       return (
         <div className="flex items-center gap-2 text-zinc-400">
           {line.done ? (
-            <span className={line.success ? "text-emerald-400" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
+            <span className={line.success ? "text-zinc-100" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
           ) : (
             <LoadingDots size={14} />
           )}
@@ -409,7 +409,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
         <div className="pt-1 pb-1 space-y-0.5">
           {line.ops.map((op, i) => (
             <div key={i} className="flex items-center gap-2">
-              <span className={op.action === "create" ? "text-emerald-400 w-8" : "text-amber-400 w-8"}>{op.action.toUpperCase()}</span>
+              <span className={op.action === "create" ? "text-zinc-100 w-8" : "text-amber-400 w-8"}>{op.action.toUpperCase()}</span>
               <span className="text-zinc-300">{op.path}</span>
             </div>
           ))}
@@ -421,14 +421,14 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
         <div className="my-2 p-3 bg-zinc-800/60 rounded-lg border border-zinc-700 space-y-2">
           <p className="text-zinc-200">{line.question}</p>
           {line.answered ? (
-            <p className={`text-xs ${line.answer ? "text-emerald-400" : "text-red-400"}`}>
+            <p className={`text-xs ${line.answer ? "text-zinc-100" : "text-red-400"}`}>
               → {line.answer ? "Approved" : "Declined"}
             </p>
           ) : (
             <div className="flex gap-2">
               <button
                 onClick={() => onConfirm(line.id, lineIdx, true)}
-                className="px-3 py-1 text-xs rounded bg-emerald-900/50 border border-emerald-700 text-emerald-300 hover:bg-emerald-900 transition-colors"
+                className="px-3 py-1 text-xs rounded bg-zinc-900/50 border border-zinc-600 text-zinc-200 hover:bg-zinc-900 transition-colors"
               >
                 Approve
               </button>
@@ -471,7 +471,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit }: LineProps)
 
     case "done":
       return (
-        <div className={`pt-2 font-semibold ${line.success ? "text-emerald-400" : "text-red-400"}`}>
+        <div className={`pt-2 font-semibold ${line.success ? "text-zinc-100" : "text-red-400"}`}>
           {line.success ? "✓ Operation completed successfully." : "✗ Operation finished with errors."}
         </div>
       );

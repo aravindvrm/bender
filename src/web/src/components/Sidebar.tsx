@@ -271,7 +271,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-zinc-600">Tasks done</span>
-                <span className={`text-[11px] font-medium ${completedCount > 0 ? "text-emerald-400/80" : "text-zinc-500"}`}>
+                <span className={`text-[11px] font-medium ${completedCount > 0 ? "text-zinc-100/80" : "text-zinc-500"}`}>
                   {completedCount}
                 </span>
               </div>
@@ -291,7 +291,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
 
           {state?.git && (
             <div className="flex items-center gap-1.5 pt-1 border-t border-zinc-800/60">
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.git.clean ? "bg-emerald-500" : "bg-amber-400"}`} />
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.git.clean ? "bg-zinc-100" : "bg-amber-400"}`} />
               <span className="text-[11px] text-zinc-600 truncate">{state.git.branch || "main"}</span>
             </div>
           )}

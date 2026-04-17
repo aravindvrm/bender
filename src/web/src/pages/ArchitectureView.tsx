@@ -221,7 +221,7 @@ interface ApiRoute {
 }
 
 const METHOD_COLORS: Record<string, string> = {
-  GET:    "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  GET:    "bg-zinc-100/15 text-zinc-100 border-zinc-500/30",
   POST:   "bg-blue-500/15 text-blue-400 border-blue-500/30",
   PUT:    "bg-amber-500/15 text-amber-400 border-amber-500/30",
   PATCH:  "bg-amber-500/15 text-amber-400 border-amber-500/30",
@@ -441,7 +441,7 @@ function AuditIssueCard({ issue, onAddAsTask }: { issue: AuditIssue; onAddAsTask
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {added ? (
-            <span className="flex items-center gap-1 text-[11px] text-emerald-400">
+            <span className="flex items-center gap-1 text-[11px] text-zinc-100">
               <CheckCircle2 className="h-3 w-3" /> Added
             </span>
           ) : (
@@ -563,7 +563,7 @@ function AuditTabContent({
             </>
           ) : (
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-6 text-center">
-              <CheckCircle2 className="h-6 w-6 text-emerald-400 mx-auto mb-2" />
+              <CheckCircle2 className="h-6 w-6 text-zinc-100 mx-auto mb-2" />
               <p className="text-sm text-zinc-400">No issues found.</p>
             </div>
           )}
