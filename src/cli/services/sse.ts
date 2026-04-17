@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Response } from "express";
 import type { SpinnerAdapter, UIAdapter } from "../adapter.js";
+import { createLogger, logError } from "../../logger.js";
 
 export type SSEEvent =
   | { type: "header"; text: string }
@@ -18,7 +19,7 @@ function sendSSE(res: Response, event: SSEEvent): void {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
-export function createSseOperationRunner() {
+export function createSseOperationRunner(deps?: { getCurrentProject?: () => string | null }) {
   const pendingAnswers = new Map<string, (answer: string) => void>();
 
   function resolvePendingAnswer(id: string, answer: string): boolean {
@@ -87,6 +88,14 @@ export function createSseOperationRunner() {
     res: Response,
     operation: (adapter: UIAdapter) => Promise<void>,
   ): Promise<void> {
+    const startedAt = Date.now();
+    const logger = createLogger("api:sse", deps?.getCurrentProject?.() ?? null);
+    const requestPath = res.req?.path ?? "(unknown)";
+    logger.info("SSE operation started", {
+      method: res.req?.method ?? "POST",
+      path: requestPath,
+    });
+
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -97,8 +106,18 @@ export function createSseOperationRunner() {
     const adapter = createWebAdapter(res);
     try {
       await operation(adapter);
+      logger.info("SSE operation completed", {
+        method: res.req?.method ?? "POST",
+        path: requestPath,
+        elapsedMs: Date.now() - startedAt,
+      });
       sendSSE(res, { type: "done", success: true });
     } catch (err) {
+      logError(logger, "SSE operation failed", err, {
+        method: res.req?.method ?? "POST",
+        path: requestPath,
+        elapsedMs: Date.now() - startedAt,
+      });
       sendSSE(res, { type: "error", message: (err as Error).message });
       sendSSE(res, { type: "done", success: false });
     } finally {
@@ -112,4 +131,3 @@ export function createSseOperationRunner() {
     resolvePendingAnswer,
   };
 }
-

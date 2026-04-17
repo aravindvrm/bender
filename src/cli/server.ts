@@ -3,6 +3,7 @@ import cors from "cors";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type { Server as HttpServer } from "node:http";
+import type { Request, Response, NextFunction } from "express";
 import { addToRegistry } from "../state/registry.js";
 import { registerAgentRoutes } from "./routes/agents.js";
 import { registerAuditRoutes } from "./routes/audits.js";
@@ -47,6 +48,12 @@ import {
   resolveProviderBaseUrl,
 } from "./services/llm-models.js";
 import { resolveServerPort } from "./server-config.js";
+import {
+  createLogger,
+  createRequestId,
+  logError,
+  resolveExistingProjectLogRoot,
+} from "../logger.js";
 
 const SERVER_SESSION_STARTED_AT = Date.now();
 
@@ -69,10 +76,63 @@ export async function startServer(initialProject?: string, port?: number): Promi
   app.use(cors());
   app.use(express.json());
 
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (!req.path.startsWith("/api/")) {
+      next();
+      return;
+    }
+
+    const requestId = createRequestId();
+    const startedAt = Date.now();
+    const logger = createLogger("api", resolveExistingProjectLogRoot(currentProject));
+
+    res.setHeader("x-bender-request-id", requestId);
+    res.locals.requestId = requestId;
+
+    logger.info("API request started", {
+      requestId,
+      method: req.method,
+      path: req.path,
+      hasProject: !!currentProject,
+    });
+
+    res.on("finish", () => {
+      const elapsedMs = Date.now() - startedAt;
+      const payload = {
+        requestId,
+        method: req.method,
+        path: req.path,
+        statusCode: res.statusCode,
+        elapsedMs,
+      };
+      if (res.statusCode >= 500) {
+        logger.error("API request failed", payload);
+      } else if (res.statusCode >= 400) {
+        logger.warn("API request completed with client error", payload);
+      } else {
+        logger.info("API request completed", payload);
+      }
+    });
+
+    res.on("close", () => {
+      if (res.writableEnded) return;
+      logger.warn("API request closed before response completed", {
+        requestId,
+        method: req.method,
+        path: req.path,
+        elapsedMs: Date.now() - startedAt,
+      });
+    });
+
+    next();
+  });
+
   const webDistDir = join(import.meta.dirname, "..", "web");
   if (existsSync(webDistDir)) app.use(express.static(webDistDir));
 
-  const sse = createSseOperationRunner();
+  const sse = createSseOperationRunner({
+    getCurrentProject: () => resolveExistingProjectLogRoot(currentProject),
+  });
   const connectorHealth = createConnectorHealthManager();
 
   registerProjectRoutes(app, {
@@ -123,6 +183,7 @@ export async function startServer(initialProject?: string, port?: number): Promi
 
   registerChatRoutes(app, {
     getProject,
+    getCurrentProject: () => currentProject,
   });
 
   registerConfigRoutes(app, {
@@ -158,6 +219,7 @@ export async function startServer(initialProject?: string, port?: number): Promi
 
   registerRunRoutes(app, {
     getProject,
+    getCurrentProject: () => currentProject,
     setCurrentProject: (path) => { currentProject = path; },
     normalizeUserPath,
     resolvePendingAnswer: sse.resolvePendingAnswer,
@@ -181,6 +243,23 @@ export async function startServer(initialProject?: string, port?: number): Promi
     const indexPath = join(webDistDir, "index.html");
     if (existsSync(indexPath)) res.sendFile(indexPath);
     else res.status(404).send("Web UI not built. Run: npm run build:web");
+  });
+
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    const requestId = typeof res.locals.requestId === "string"
+      ? res.locals.requestId
+      : createRequestId();
+    const logger = createLogger("api", resolveExistingProjectLogRoot(currentProject));
+    logError(logger, "Unhandled API error", err, {
+      requestId,
+      method: req.method,
+      path: req.path,
+    });
+    if (res.headersSent) return;
+    res.status(500).json({
+      error: "Internal server error",
+      requestId,
+    });
   });
 
   return await new Promise<HttpServer>((resolvePromise, rejectPromise) => {

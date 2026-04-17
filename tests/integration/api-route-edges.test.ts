@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +22,35 @@ async function reserveFreePort(): Promise<number> {
       });
     });
   });
+}
+
+interface LogEntry {
+  timestamp: string;
+  level: "debug" | "info" | "warn" | "error";
+  component: string;
+  message: string;
+  data?: Record<string, unknown>;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForLog(
+  baseUrl: string,
+  matcher: (entry: LogEntry) => boolean,
+  attempts = 25,
+): Promise<LogEntry> {
+  for (let i = 0; i < attempts; i += 1) {
+    const res = await fetch(`${baseUrl}/api/logs?limit=500`);
+    if (res.ok) {
+      const body = await res.json() as { entries?: LogEntry[] };
+      const found = (body.entries ?? []).find(matcher);
+      if (found) return found;
+    }
+    await sleep(60);
+  }
+  throw new Error("Timed out waiting for structured log entry");
 }
 
 describe("api route edge validations (project selected)", () => {
@@ -84,6 +113,53 @@ describe("api route edge validations (project selected)", () => {
     expect(health.ok).toBe(true);
     const body = await health.json() as { ok?: boolean };
     expect(body.ok).toBe(true);
+  });
+
+  it("persists API request logs with status and path metadata", async () => {
+    await mkdir(join(tempProject, ".bender"), { recursive: true });
+    const failingRes = await fetch(`${baseUrl}/api/run/plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(failingRes.status).toBe(400);
+
+    const entry = await waitForLog(
+      baseUrl,
+      (log) => (
+        log.component === "api"
+        && log.message === "API request completed with client error"
+        && log.data?.path === "/api/run/plan"
+        && log.data?.statusCode === 400
+      ),
+    );
+    expect(entry.level).toBe("warn");
+  });
+
+  it("accepts client diagnostics logs and stores them in project log file", async () => {
+    await mkdir(join(tempProject, ".bender"), { recursive: true });
+    const marker = `mermaid-parse-${Date.now()}`;
+    const postRes = await fetch(`${baseUrl}/api/logs/client`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        component: "mermaid",
+        level: "error",
+        message: marker,
+        data: { section: "architecture" },
+      }),
+    });
+    expect(postRes.ok).toBe(true);
+
+    const entry = await waitForLog(
+      baseUrl,
+      (log) => (
+        log.component === "ui:mermaid"
+        && log.message === marker
+      ),
+    );
+    expect(entry.level).toBe("error");
+    expect(entry.data?.section).toBe("architecture");
   });
 
   it("validates /api/fs guardrails", async () => {
@@ -175,6 +251,7 @@ describe("api route edge validations (project selected)", () => {
   });
 
   it("returns uninitialized state shape for project without .bender", async () => {
+    await rm(join(tempProject, ".bender"), { recursive: true, force: true });
     const stateRes = await fetch(`${baseUrl}/api/state`);
     expect(stateRes.ok).toBe(true);
     const stateBody = await stateRes.json() as { initialized?: boolean; projectRoot?: string | null };

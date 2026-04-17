@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
-import type { LogEntry } from "../../logger.js";
+import type { LogEntry, LogLevel } from "../../logger.js";
 
 function parseLogEntries(raw: string, limit?: number): LogEntry[] {
   const lines = raw.split("\n").filter(Boolean);
@@ -50,6 +50,42 @@ export async function readStructuredLogs(projectRoot: string, limit = 200): Prom
   const raw = await readFile(logPath, "utf-8");
   const bounded = Math.min(500, Math.max(1, limit));
   return { entries: parseLogEntries(raw, bounded) };
+}
+
+interface ReadStructuredLogsOptions {
+  limit?: number;
+  level?: LogLevel;
+  component?: string;
+  contains?: string;
+  sinceMs?: number;
+}
+
+function matchesFilter(entry: LogEntry, opts: ReadStructuredLogsOptions): boolean {
+  if (opts.level && entry.level !== opts.level) return false;
+  if (opts.component && entry.component !== opts.component) return false;
+  if (opts.contains) {
+    const needle = opts.contains.toLowerCase();
+    const haystack = `${entry.message}\n${JSON.stringify(entry.data ?? {})}`.toLowerCase();
+    if (!haystack.includes(needle)) return false;
+  }
+  if (typeof opts.sinceMs === "number") {
+    const ts = Date.parse(entry.timestamp);
+    if (Number.isNaN(ts) || ts < opts.sinceMs) return false;
+  }
+  return true;
+}
+
+export async function readStructuredLogsFiltered(
+  projectRoot: string,
+  opts: ReadStructuredLogsOptions = {},
+): Promise<{ entries: LogEntry[] }> {
+  const logPath = join(projectRoot, ".bender", "bender.log");
+  if (!existsSync(logPath)) return { entries: [] };
+  const raw = await readFile(logPath, "utf-8");
+  const all = parseLogEntries(raw);
+  const filtered = all.filter((entry) => matchesFilter(entry, opts));
+  const bounded = Math.min(500, Math.max(1, opts.limit ?? 200));
+  return { entries: filtered.slice(-bounded) };
 }
 
 export async function readSessionUsage(

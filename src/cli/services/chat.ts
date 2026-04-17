@@ -12,8 +12,8 @@ import {
 } from "ai";
 import { z } from "zod";
 import { createModelForSelection, getProviderCapabilities } from "../../llm/provider.js";
-import { createRoleRuntime } from "../../llm/runtime.js";
-import { createLogger, toLoggerOptions } from "../../logger.js";
+import { createRoleRuntime, type RoleRuntime } from "../../llm/runtime.js";
+import { createLogger, logError, toLoggerOptions } from "../../logger.js";
 import { readEffectiveConfig, type BenderConfig } from "../../state/config.js";
 import { ChatStore, type ChatThread, type LlmProvider } from "../../state/chat.js";
 import { StateManager, formatContextForPrompt } from "../../state/manager.js";
@@ -743,9 +743,23 @@ export async function streamChatThreadResponse(
   if (trigger === "regenerate-message") {
     throw new ChatServiceError(400, "regenerate-message is not implemented yet");
   }
+  const logger = createLogger(
+    "chat",
+    projectRoot,
+    null,
+    toLoggerOptions(config.logging),
+  );
 
   const requestedMessages = Array.isArray(payload.messages) ? payload.messages : [];
   const requestedMessageId = typeof payload.messageId === "string" ? payload.messageId.trim() : "";
+  logger.info("Chat response requested", {
+    threadId,
+    trigger,
+    provider: activeThread.provider,
+    model: activeThread.model,
+    toolsEnabled: activeThread.toolsEnabled,
+    requestedMessageCount: requestedMessages.length,
+  });
 
   let incomingUser: UIMessage | null = null;
   if (requestedMessageId) {
@@ -772,9 +786,21 @@ export async function streamChatThreadResponse(
   const operatorCommand = parseOperatorCommandFromText(lastUserText);
   if (operatorCommand) {
     let responseText: string;
+    logger.info("Executing deterministic operator command", {
+      threadId,
+      commandType: operatorCommand.type,
+    });
     try {
       responseText = await executeOperatorCommand(projectRoot, operatorCommand);
+      logger.info("Deterministic operator command completed", {
+        threadId,
+        commandType: operatorCommand.type,
+      });
     } catch (err) {
+      logError(logger, "Deterministic operator command failed", err, {
+        threadId,
+        commandType: operatorCommand.type,
+      });
       responseText = `Operator command failed: ${parseErrorMessage(err)}`;
     }
     streamAssistantTextResponse(
@@ -800,29 +826,32 @@ export async function streamChatThreadResponse(
     );
     return;
   }
-
-  const logger = createLogger(
-    "chat",
-    projectRoot,
-    null,
-    toLoggerOptions(config.logging),
-  );
   const state = new StateManager(projectRoot);
   const projectContext = await state.gatherContext();
 
-  const runtime = await createRoleRuntime(
-    projectRoot,
-    config,
-    {
-      role: "planner",
+  let runtime: RoleRuntime;
+  try {
+    runtime = await createRoleRuntime(
+      projectRoot,
+      config,
+      {
+        role: "planner",
+        provider: activeThread.provider,
+        model: activeThread.model,
+        pinnedSkills: [],
+        modelTier: "strong",
+      },
+      projectContext.architecture ?? undefined,
+      logger,
+    );
+  } catch (err) {
+    logError(logger, "Failed to initialize chat role runtime", err, {
+      threadId,
       provider: activeThread.provider,
       model: activeThread.model,
-      pinnedSkills: [],
-      modelTier: "strong",
-    },
-    projectContext.architecture ?? undefined,
-    logger,
-  );
+    });
+    throw err;
+  }
   const benderTools = createBenderChatTools(projectRoot);
   if (!activeThread.toolsEnabled) {
     runtime.tools = undefined;
@@ -846,6 +875,14 @@ export async function streamChatThreadResponse(
       ? undefined
       : benderTools;
   }
+  logger.info("Starting chat model stream", {
+    threadId,
+    provider: activeThread.provider,
+    model: activeThread.model,
+    toolCount: availableTools ? Object.keys(availableTools).length : 0,
+    mcpEnabled: runtime.summary.mcpEnabled,
+    mcpTools: runtime.summary.mcpTools,
+  });
 
   const systemPrompt = [
     CHAT_SYSTEM_PROMPT,
@@ -869,6 +906,11 @@ export async function streamChatThreadResponse(
       maxOutputTokens: 2400,
     });
   } catch (err) {
+    logError(logger, "Failed to create chat stream", err, {
+      threadId,
+      provider: activeThread.provider,
+      model: activeThread.model,
+    });
     await runtime.close();
     throw err;
   }
@@ -891,6 +933,19 @@ export async function streamChatThreadResponse(
           message: withMeta,
         });
         await store.touchThread(threadId);
+        logger.info("Chat response stored", {
+          threadId,
+          provider: activeThread.provider,
+          model: activeThread.model,
+          responseParts: responseMessage.parts.length,
+        });
+      } catch (err) {
+        logError(logger, "Failed to persist streamed chat response", err, {
+          threadId,
+          provider: activeThread.provider,
+          model: activeThread.model,
+        });
+        throw err;
       } finally {
         await runtime.close();
       }

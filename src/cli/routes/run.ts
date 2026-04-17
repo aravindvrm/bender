@@ -1,5 +1,6 @@
 import type { Express, Response } from "express";
 import type { UIAdapter } from "../adapter.js";
+import { createLogger, resolveExistingProjectLogRoot } from "../../logger.js";
 import {
   runAnalyzeOperation,
   runFlowsOperation,
@@ -17,15 +18,24 @@ interface RunRouteDeps {
     res: Response,
     operation: (adapter: UIAdapter) => Promise<void>,
   ) => Promise<void>;
+  getCurrentProject?: () => string | null;
 }
 
 export function registerRunRoutes(app: Express, deps: RunRouteDeps): void {
   app.post("/api/run/answer", (req, res) => {
+    const logger = createLogger(
+      "api:run",
+      resolveExistingProjectLogRoot(deps.getCurrentProject?.() ?? null),
+    );
     const { id, answer } = req.body as { id: string; answer: string };
     if (deps.resolvePendingAnswer(id, answer)) {
       res.json({ ok: true });
       return;
     }
+    logger.warn("Rejected run answer request: pending question not found", {
+      requestId: res.locals.requestId as string | undefined,
+      id,
+    });
     res.status(404).json({ error: "No pending question with that id" });
   });
 
@@ -52,6 +62,10 @@ export function registerRunRoutes(app: Express, deps: RunRouteDeps): void {
   });
 
   app.post("/api/run/plan", async (req, res) => {
+    const logger = createLogger(
+      "api:run",
+      resolveExistingProjectLogRoot(deps.getCurrentProject?.() ?? null),
+    );
     const body = (req.body ?? {}) as {
       feature?: string;
       role?: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
@@ -63,6 +77,9 @@ export function registerRunRoutes(app: Express, deps: RunRouteDeps): void {
     };
 
     if (!body.feature) {
+      logger.warn("Rejected run plan request: feature missing", {
+        requestId: res.locals.requestId as string | undefined,
+      });
       res.status(400).json({ error: "feature is required" });
       return;
     }

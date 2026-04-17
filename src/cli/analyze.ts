@@ -2,12 +2,17 @@ import { readEffectiveConfig, writeConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
 import { createModelSet } from "../llm/provider.js";
 import { getModelForTier } from "../llm/provider.js";
-import { scanCodebase, analyzeCodebase, parseAnalysisOutput } from "../roles/analyzer.js";
+import {
+  scanCodebase,
+  analyzeCodebase,
+  parseAnalysisOutput,
+  type AnalysisResult,
+} from "../roles/analyzer.js";
 import { GitOperations } from "../git/operations.js";
 import { terminalAdapter, type UIAdapter } from "./adapter.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getEffectiveAgentForRole } from "../state/agents.js";
-import { createLogger, makeAdapterSink, toLoggerOptions } from "../logger.js";
+import { createLogger, logError, makeAdapterSink, toLoggerOptions } from "../logger.js";
 
 export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
   adapter.header("Bender Analyze — Existing Project");
@@ -40,6 +45,7 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
   try {
     models = createModelSet(config);
   } catch (err: unknown) {
+    logError(logger, "Failed to initialize LLM provider for analyze", err);
     adapter.error(`Failed to initialize LLM provider: ${(err as Error).message}`);
     adapter.error("Configure your API key in Settings first.");
     adapter.cleanup();
@@ -56,6 +62,7 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
     summary = await scanCodebase(projectRoot);
     scanSpin.succeed(`Found ${summary.totalFiles} source files (${summary.languages.join(", ") || "unknown language"})`);
   } catch (err: unknown) {
+    logError(logger, "Codebase scan failed during analyze", err, { projectRoot });
     scanSpin.fail(`Scan failed: ${(err as Error).message}`);
     adapter.cleanup();
     return;
@@ -85,6 +92,10 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
       logger,
     );
   } catch (err: unknown) {
+    logError(logger, "Failed to initialize runtime for analyze", err, {
+      role: "analyzer",
+      projectRoot,
+    });
     adapter.error(`Failed to initialize MCP/skills runtime: ${(err as Error).message}`);
     adapter.cleanup();
     return;
@@ -107,6 +118,11 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
       runtime,
     );
   } catch (err: unknown) {
+    logError(logger, "Analyzer role execution failed", err, {
+      role: "analyzer",
+      agentName: analyzerAgent.name,
+      modelTier: analyzerAgent.modelTier,
+    });
     adapter.error(`Analysis failed: ${(err as Error).message}`);
     adapter.cleanup();
     return;
@@ -127,7 +143,18 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
     adapter.info(`${normalizedOutput.slice(0, 600)}${normalizedOutput.length > 600 ? "…" : ""}`);
   }
 
-  const parsed = parseAnalysisOutput(rawOutput);
+  let parsed: AnalysisResult;
+  try {
+    parsed = parseAnalysisOutput(rawOutput);
+  } catch (err: unknown) {
+    logError(logger, "Failed to parse analyzer output", err, {
+      outputPreview: normalizedOutput.slice(0, 1000),
+      outputChars: normalizedOutput.length,
+    });
+    adapter.error(`Analysis failed: ${(err as Error).message}`);
+    adapter.cleanup();
+    return;
+  }
 
   // Step 3: Review and approve
   adapter.subheader("Step 3: Review");

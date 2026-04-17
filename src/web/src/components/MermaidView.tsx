@@ -32,6 +32,7 @@ interface MermaidViewProps {
 
 export function MermaidView({ chart, className = "" }: MermaidViewProps) {
   const id = useRef(`mermaid-${++counter}`);
+  const lastReportedError = useRef<string>("");
   const [svg, setSvg] = useState<string>("");
   const [error, setError] = useState<string>("");
 
@@ -42,10 +43,35 @@ export function MermaidView({ chart, className = "" }: MermaidViewProps) {
       .render(id.current, chart)
       .then(({ svg }) => {
         setSvg(svg);
+        lastReportedError.current = "";
         // reset counter id so re-renders get a fresh id
         id.current = `mermaid-${++counter}`;
       })
-      .catch((err) => setError(String(err?.message ?? err)));
+      .catch((err) => {
+        const message = String(err?.message ?? err);
+        setError(message);
+
+        const signature = `${message}|${chart}`;
+        if (lastReportedError.current === signature) return;
+        lastReportedError.current = signature;
+
+        void fetch("/api/logs/client", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            component: "mermaid",
+            level: "error",
+            message: "Mermaid render failed",
+            data: {
+              error: message,
+              chartPreview: chart.slice(0, 800),
+              chartLength: chart.length,
+            },
+          }),
+        }).catch(() => {
+          // Ignore diagnostics transport failures in UI rendering path.
+        });
+      });
   }, [chart]);
 
   if (error) {

@@ -190,6 +190,7 @@ Supported now:
 - `PORT`: secondary port fallback
 - `BENDER_PROJECT_DIR`: optional initial project path for desktop backend entrypoint
 - `BENDER_NODE_BIN`: optional Node executable path for Electron backend spawn
+- `BENDER_LOG_LEVEL`: override minimum structured log level (`debug|info|warn|error`)
 
 ## Scripts
 
@@ -215,3 +216,5 @@ Supported now:
 - Local provider URL errors (`Invalid URL`): include protocol or use host:port and let Bender normalize it
 - Desktop native module mismatch (`better-sqlite3`): run `npm rebuild` after Node/Electron version changes
 - GitHub MCP `401 Unauthorized`: refresh token/config in Settings
+- For deep debugging, inspect `.bender/bender.log` and `GET /api/logs` (supports `limit`, `level`, `component`, `contains`, `sinceMs` query filters)
+- Mermaid/UI render failures are reported into structured logs via `POST /api/logs/client`

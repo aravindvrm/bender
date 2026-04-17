@@ -1,6 +1,7 @@
 import { appendFile } from "node:fs/promises";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export type SinkLevel = LogLevel | "none";
@@ -11,6 +12,15 @@ export interface LogEntry {
   component: string;
   message: string;
   data?: Record<string, unknown>;
+}
+
+export interface SerializedError {
+  name?: string;
+  message: string;
+  stack?: string;
+  code?: string;
+  type?: string;
+  cause?: SerializedError | string;
 }
 
 export type LogSink = (entry: LogEntry) => void;
@@ -153,6 +163,63 @@ export function toLoggerOptions(settings?: LoggingSettingsLike): LoggerOptions {
     level: settings?.level ?? getMinLevel(),
     sinkMinLevel: settings?.consoleLevel ?? "warn",
   };
+}
+
+export function createRequestId(): string {
+  return randomUUID();
+}
+
+/**
+ * Return the project root only when .bender already exists.
+ * Useful for observational logging paths that should not implicitly initialize state.
+ */
+export function resolveExistingProjectLogRoot(projectRoot?: string | null): string | null {
+  if (!projectRoot) return null;
+  const benderDir = join(projectRoot, ".bender");
+  return existsSync(benderDir) ? projectRoot : null;
+}
+
+function normalizeErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message || error.name;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+export function serializeError(error: unknown): SerializedError {
+  if (error instanceof Error) {
+    const candidate = error as Error & { code?: unknown; cause?: unknown; type?: unknown };
+    return {
+      name: error.name,
+      message: normalizeErrorMessage(error),
+      ...(typeof error.stack === "string" && error.stack ? { stack: error.stack } : {}),
+      ...(typeof candidate.code === "string" ? { code: candidate.code } : {}),
+      ...(typeof candidate.type === "string" ? { type: candidate.type } : {}),
+      ...(candidate.cause !== undefined
+        ? {
+            cause: candidate.cause instanceof Error
+              ? serializeError(candidate.cause)
+              : normalizeErrorMessage(candidate.cause),
+          }
+        : {}),
+    };
+  }
+  return { message: normalizeErrorMessage(error) };
+}
+
+export function logError(
+  logger: Logger,
+  message: string,
+  error: unknown,
+  data?: Record<string, unknown>,
+): void {
+  logger.error(message, {
+    ...(data ?? {}),
+    error: serializeError(error),
+  });
 }
 
 /** Create a no-op logger (for tests or contexts where logging is unwanted). */

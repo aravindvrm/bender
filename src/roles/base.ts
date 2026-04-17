@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { generateText, streamText, type LanguageModel, type ToolSet } from "ai";
-import { createNullLogger, type Logger } from "../logger.js";
+import { createNullLogger, logError, type Logger } from "../logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -293,6 +293,11 @@ export async function runRoleStreaming(
           logger.warn(`Role ${roleName} hit token budget. Retrying with compacted context.`);
           continue attemptLoop;
         }
+        logError(logger, `Role ${roleName} failed`, error, {
+          attempt: attempt + 1,
+          mode: disableMcp ? "without-mcp" : "default",
+          streaming: options?.capabilities?.supportsStreaming !== false,
+        });
         throw new Error(formatRoleFailure(roleName, error));
       }
     }
@@ -395,6 +400,11 @@ export async function runRoleDetailed(
           logger.warn(`Role ${roleName} hit token budget. Retrying with compacted context.`);
           continue attemptLoop;
         }
+        logError(logger, `Role ${roleName} failed`, error, {
+          attempt: attempt + 1,
+          mode: disableMcp ? "without-mcp" : "default",
+          streaming: false,
+        });
         throw new Error(formatRoleFailure(roleName, error));
       }
     }
@@ -494,6 +504,12 @@ export async function runConversationalRole(
           logger.warn(`Role ${roleName} hit token budget in conversation. Retrying with compacted context.`);
           continue attemptLoop;
         }
+        logError(logger, `Role ${roleName} conversational run failed`, error, {
+          attempt: attempt + 1,
+          mode: disableMcp ? "without-mcp" : "default",
+          messageCount: current.messages.length,
+          streaming: options?.capabilities?.supportsStreaming !== false,
+        });
         throw new Error(formatRoleFailure(roleName, error));
       }
     }

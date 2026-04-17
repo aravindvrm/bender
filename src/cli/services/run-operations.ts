@@ -4,14 +4,14 @@ import { addToRegistry } from "../../state/registry.js";
 import { readEffectiveConfig, writeConfig } from "../../state/config.js";
 import { StateManager } from "../../state/manager.js";
 import { createModelSet, getModelForTier } from "../../llm/provider.js";
-import { createRoleRuntime } from "../../llm/runtime.js";
+import { createRoleRuntime, type RoleRuntime } from "../../llm/runtime.js";
 import { getEffectiveAgentForRole } from "../../state/agents.js";
 import { initCommand } from "../init.js";
 import { planCommand } from "../plan.js";
 import { implementCommand, implementSingleTask } from "../implement.js";
 import { analyzeCommand } from "../analyze.js";
 import { generateFlows } from "../../roles/flowcharter.js";
-import { createLogger, makeAdapterSink, toLoggerOptions } from "../../logger.js";
+import { createLogger, logError, makeAdapterSink, toLoggerOptions } from "../../logger.js";
 import type { UIAdapter } from "../adapter.js";
 
 interface RunInitDeps {
@@ -153,18 +153,23 @@ export async function runFlowsOperation(projectRoot: string, adapter: UIAdapter)
     throw new Error("Project needs a brief and architecture before flows can be generated. Run init or analyze first.");
   }
 
-  let runtime;
+  let runtime: RoleRuntime | undefined;
   let architectTier: "fast" | "default" | "strong" = "default";
   let architectAgentName = "Eng Review";
+  const config = await readEffectiveConfig(projectRoot);
+  const logger = createLogger(
+    "flows",
+    projectRoot,
+    makeAdapterSink(adapter),
+    toLoggerOptions(config.logging),
+  );
+  logger.info("Starting flow generation", {
+    hasBrief: !!context.brief,
+    hasArchitecture: !!context.architecture,
+    hasSchema: !!context.schema,
+  });
 
   try {
-    const config = await readEffectiveConfig(projectRoot);
-    const logger = createLogger(
-      "flows",
-      projectRoot,
-      makeAdapterSink(adapter),
-      toLoggerOptions(config.logging),
-    );
     const models = createModelSet(config);
     const architectAgent = await getEffectiveAgentForRole("architect");
     architectTier = architectAgent.modelTier;
@@ -197,8 +202,17 @@ export async function runFlowsOperation(projectRoot: string, adapter: UIAdapter)
     );
 
     await state.writeFlows(flows);
+    logger.info("Flow generation complete", {
+      agentName: architectAgentName,
+      modelTier: architectTier,
+      outputChars: flows.length,
+    });
     adapter.success("Flow diagrams saved to .bender/flows.md");
   } catch (err: unknown) {
+    logError(logger, "Flow generation failed", err, {
+      agentName: architectAgentName,
+      modelTier: architectTier,
+    });
     if ((err as Error)?.message?.startsWith("Missing API key")) {
       throw new Error(`Failed to initialize LLM provider: ${(err as Error).message}`);
     }
