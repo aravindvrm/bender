@@ -5,7 +5,6 @@ import {
   ChevronRight,
   Folder,
   FolderOpen,
-  X,
   Terminal as TerminalIcon,
   Info,
   MessageSquare,
@@ -451,21 +450,18 @@ export function OperationDrawer({
           >
             {collapsed ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           </button>
-          <button
-            onClick={() => setCollapsed(true)}
-            className="text-zinc-600 hover:text-zinc-400 transition-colors"
-            title="Minimize"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
         </div>
 
         {!collapsed && activeTab === "terminal" && (
-          <TerminalPanel projectPath={currentProjectPath} />
+          <div className="flex-1 min-h-0">
+            <TerminalPanel projectPath={currentProjectPath} />
+          </div>
         )}
 
         {!collapsed && activeTab === "chat" && (
-          <ChatPanel projectPath={currentProjectPath} />
+          <div className="flex-1 min-h-0">
+            <ChatPanel projectPath={currentProjectPath} />
+          </div>
         )}
 
         {!collapsed && activeTab === "console" && (

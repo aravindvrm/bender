@@ -1,7 +1,6 @@
 import { readEffectiveConfig, writeConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
-import { createModelSet } from "../llm/provider.js";
-import { getModelForTier } from "../llm/provider.js";
+import { createModelSet, getModelForTier, resolveProviderModelForTier } from "../llm/provider.js";
 import {
   scanCodebase,
   analyzeCodebase,
@@ -105,7 +104,10 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
   let rawOutput: string;
   let streamedChars = 0;
   try {
-    adapter.info(`Using agent: ${analyzerAgent.name} (${analyzerAgent.modelTier})`);
+    const analyzerModelSelection = resolveProviderModelForTier(config, analyzerAgent.modelTier);
+    adapter.info(
+      `Using agent: ${analyzerAgent.name} (${analyzerAgent.modelTier}) · model ${analyzerModelSelection.provider}:${analyzerModelSelection.model || "(unconfigured)"}`,
+    );
     const writeChunk = adapter.streamWriter();
     rawOutput = await analyzeCodebase(
       getModelForTier(models, analyzerAgent.modelTier),

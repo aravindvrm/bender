@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { RefreshCw, X } from "lucide-react";
 import type { OperationStatus } from "../hooks/useOperation";
 import { GitDiffViewer } from "./GitDiffViewer";
@@ -17,6 +17,10 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [width, setWidth] = useState(430);
+  const [resizing, setResizing] = useState(false);
+  const resizeStartX = useRef(0);
+  const resizeStartWidth = useRef(430);
 
   const canLoad = useMemo(() => open && !!projectPath, [open, projectPath]);
 
@@ -27,10 +31,16 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
     setDiffError(null);
     fetch(`/api/git/diff?commits=${diffCommits}`)
       .then(async (r) => {
-        const data = await r.json();
+        const raw = await r.text();
+        let data: { diff?: unknown; error?: string } = {};
+        try {
+          data = raw ? JSON.parse(raw) as { diff?: unknown; error?: string } : {};
+        } catch {
+          throw new Error("Failed to parse diff response");
+        }
         if (!r.ok) throw new Error(data.error ?? "Failed to load diff");
         if (cancelled) return;
-        setDiffRaw(data.diff ?? null);
+        setDiffRaw(typeof data.diff === "string" ? data.diff : null);
         setDiffLoading(false);
       })
       .catch((err) => {
@@ -51,12 +61,48 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
     }
   }, [open, operationStatus]);
 
+  useEffect(() => {
+    if (!resizing) return;
+
+    const onMouseMove = (event: MouseEvent) => {
+      const delta = resizeStartX.current - event.clientX;
+      const nextWidth = Math.max(320, Math.min(760, resizeStartWidth.current + delta));
+      setWidth(nextWidth);
+    };
+    const onMouseUp = () => {
+      setResizing(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [resizing]);
+
+  const startResize = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    resizeStartX.current = event.clientX;
+    resizeStartWidth.current = width;
+    setResizing(true);
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+  };
+
   if (!open) return null;
 
   return (
-    <aside className="w-[430px] max-w-[48vw] min-w-[360px] shrink-0 border-l border-zinc-800 bg-zinc-950 flex flex-col">
+    <aside className="relative min-w-[320px] max-w-[760px] shrink-0 border-l border-zinc-800 bg-zinc-950 flex flex-col" style={{ width: `${width}px` }}>
+      <div
+        onMouseDown={startResize}
+        className={`absolute left-0 top-0 h-full w-1 -translate-x-1/2 cursor-ew-resize ${resizing ? "bg-zinc-700/80" : "hover:bg-zinc-800/80"}`}
+        title="Drag to resize review panel"
+      />
       <div className="h-10 px-3 border-b border-zinc-800/60 flex items-center gap-2">
-        <h3 className="text-xs font-medium text-zinc-300">Git Diff</h3>
+        <h3 className="text-xs font-medium text-zinc-300">Review</h3>
         <div className="flex-1" />
         <button
           onClick={() => setRefreshTick((v) => v + 1)}
@@ -105,4 +151,3 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
     </aside>
   );
 }
-

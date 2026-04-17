@@ -373,6 +373,28 @@ export interface ProviderModelSelection {
   apiKey?: string;
 }
 
+export function resolveProviderModelForTier(
+  config: BenderConfig,
+  tier: ModelTier,
+): ProviderModelSelection {
+  const tierConfig = config.llm.models[tier];
+  if (typeof tierConfig === "string") {
+    const provider = config.llm.provider;
+    const configuredDefault = config.providers?.[provider]?.model?.trim() ?? "";
+    const model = tierConfig.trim()
+      || configuredDefault
+      || (provider === "openai-compatible" ? "local-model" : "");
+    return { provider, model };
+  }
+
+  const provider = tierConfig.provider?.trim() || config.llm.provider;
+  const configuredDefault = config.providers?.[provider]?.model?.trim() ?? "";
+  const model = tierConfig.model?.trim()
+    || configuredDefault
+    || (provider === "openai-compatible" ? "local-model" : "");
+  return { provider, model };
+}
+
 export function getModelForTier(models: ModelSet, tier: ModelTier): LanguageModel {
   return models[tier];
 }

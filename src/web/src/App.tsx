@@ -40,6 +40,7 @@ export function App() {
   const { state, loading, error, refresh } = useProjectState();
   const op = useOperation(refresh);
   const operationLabel = op.lines.find((line) => line.kind === "header")?.text ?? null;
+  const projectTitle = state?.projectRoot?.split(/[\\/]/).filter(Boolean).pop() ?? "No Project";
 
   if (loading && !state) {
     return (
@@ -102,9 +103,12 @@ export function App() {
 
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Top bar */}
-        <header className="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-800 px-6 py-3 shrink-0">
-          <div className="flex items-center gap-4">
+        <header className="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-800 px-6 h-10 shrink-0">
+          <div className="relative flex items-center gap-4 h-full">
             <h2 className="text-xs font-medium text-zinc-300">{VIEW_LABELS[activeView]}</h2>
+            <div className="absolute left-1/2 -translate-x-1/2 max-w-[45vw] truncate text-xs font-medium text-zinc-500 text-center pointer-events-none">
+              {projectTitle}
+            </div>
             <div className="flex-1" />
             {state?.git?.recentCommits[0] && (
               <span className="text-[11px] text-zinc-600 font-mono hidden lg:block">
@@ -114,7 +118,7 @@ export function App() {
             {hasProject && (
               <button
                 onClick={() => setDiffSidebarOpen((v) => !v)}
-                title={diffSidebarOpen ? "Close diff panel" : "Open diff panel"}
+                title={diffSidebarOpen ? "Close review panel" : "Open review panel"}
                 className="text-zinc-600 hover:text-zinc-400 transition-colors"
               >
                 {diffSidebarOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}

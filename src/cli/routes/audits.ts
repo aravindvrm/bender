@@ -1,7 +1,7 @@
 import type { Express, Response } from "express";
 import { StateManager } from "../../state/manager.js";
 import type { UIAdapter } from "../adapter.js";
-import { runAuditWorkflow } from "../services/audits.js";
+import { runAuditOperation } from "../services/run-operations.js";
 
 interface AuditsRouteDeps {
   getProject: () => string;
@@ -27,13 +27,13 @@ export function registerAuditRoutes(app: Express, deps: AuditsRouteDeps): void {
 
   app.post("/api/run/audit/security", async (_req, res) => {
     await deps.runOperation(res, async (adapter) => {
-      await runAuditWorkflow(deps.getProject(), "security", adapter);
+      await runAuditOperation(deps.getProject(), "security", adapter);
     });
   });
 
   app.post("/api/run/audit/tests", async (_req, res) => {
     await deps.runOperation(res, async (adapter) => {
-      await runAuditWorkflow(deps.getProject(), "tests", adapter);
+      await runAuditOperation(deps.getProject(), "tests", adapter);
     });
   });
 }

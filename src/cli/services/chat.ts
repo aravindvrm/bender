@@ -18,14 +18,11 @@ import { readEffectiveConfig, type BenderConfig } from "../../state/config.js";
 import { ChatStore, type ChatThread, type LlmProvider } from "../../state/chat.js";
 import { StateManager, formatContextForPrompt } from "../../state/manager.js";
 import { appendTask, deleteTask, patchTask } from "./tasks.js";
-import { implementSingleTask } from "../implement.js";
-import { analyzeCommand } from "../analyze.js";
 import type { SpinnerAdapter, UIAdapter } from "../adapter.js";
-import { runAuditWorkflow } from "./audits.js";
+import { runAnalyzeOperation, runAuditOperation, runImplementOperation } from "./run-operations.js";
 
 const MAX_THREAD_TITLE_CHARS = 120;
 const MAX_MESSAGE_TEXT_CHARS = 40_000;
-const MAX_TOOL_LOG_CHARS = 7_000;
 const PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "ollama", "openai-compatible"];
 
 const CHAT_SYSTEM_PROMPT = [
@@ -140,11 +137,6 @@ function makeUserUiMessage(text: string): UIMessage {
   };
 }
 
-function compactText(value: string, maxChars = MAX_TOOL_LOG_CHARS): string {
-  if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}\n... [truncated]`;
-}
-
 function parseTaskId(value: number): number {
   const taskId = Number(value);
   if (!Number.isFinite(taskId) || taskId <= 0) {
@@ -153,7 +145,7 @@ function parseTaskId(value: number): number {
   return Math.floor(taskId);
 }
 
-function createCapturingAdapter(): { adapter: UIAdapter; readLog: () => string } {
+function createCapturingAdapter(): UIAdapter {
   const lines: string[] = [];
   const push = (level: "info" | "success" | "warn" | "error", text: string) => {
     lines.push(`[${level}] ${text}`);
@@ -171,26 +163,23 @@ function createCapturingAdapter(): { adapter: UIAdapter; readLog: () => string }
   };
 
   return {
-    adapter: {
-      header: (text) => push("info", text),
-      subheader: (text) => push("info", text),
-      info: (text) => push("info", text),
-      success: (text) => push("success", text),
-      warn: (text) => push("warn", text),
-      error: (text) => push("error", text),
-      streamWriter: () => (chunk: string) => {
-        if (chunk.trim()) push("info", chunk.trim());
-      },
-      spinner,
-      confirm: async () => true,
-      promptMultiline: async () => "",
-      showFileOperations: (ops) => {
-        if (ops.length === 0) return;
-        push("info", `File operations: ${ops.map((op) => `${op.action}:${op.path}`).join(", ")}`);
-      },
-      cleanup: () => { /* no-op */ },
+    header: (text) => push("info", text),
+    subheader: (text) => push("info", text),
+    info: (text) => push("info", text),
+    success: (text) => push("success", text),
+    warn: (text) => push("warn", text),
+    error: (text) => push("error", text),
+    streamWriter: () => (chunk: string) => {
+      if (chunk.trim()) push("info", chunk.trim());
     },
-    readLog: () => compactText(lines.join("\n")),
+    spinner,
+    confirm: async () => true,
+    promptMultiline: async () => "",
+    showFileOperations: (ops) => {
+      if (ops.length === 0) return;
+      push("info", `File operations: ${ops.map((op) => `${op.action}:${op.path}`).join(", ")}`);
+    },
+    cleanup: () => { /* no-op */ },
   };
 }
 
@@ -294,23 +283,10 @@ export function createBenderChatTools(
         taskId: z.number().int().positive(),
       }),
       execute: async ({ taskId }) => {
-        const state = new StateManager(projectRoot);
-        const beforeCompleted = await state.readCompletedTasks();
-        const beforeSet = new Set(beforeCompleted.map((task) => task.name));
-
-        const captured = createCapturingAdapter();
-        await implementSingleTask(projectRoot, parseTaskId(taskId), captured.adapter);
-
-        const afterCompleted = await state.readCompletedTasks();
-        const newlyCompleted = afterCompleted
-          .filter((task) => !beforeSet.has(task.name))
-          .map((task) => task.name);
+        const taskResult = await runTaskForChat(projectRoot, parseTaskId(taskId));
         return {
           ok: true,
-          taskId,
-          completed: newlyCompleted.length > 0,
-          newlyCompleted,
-          log: captured.readLog(),
+          ...taskResult,
         };
       },
     }),
@@ -321,18 +297,10 @@ export function createBenderChatTools(
         kind: z.enum(["security", "tests", "ci"]),
       }),
       execute: async ({ kind }) => {
-        const auditType = kind === "ci" ? "tests" : kind;
-        const captured = createCapturingAdapter();
-        await runAuditWorkflow(projectRoot, auditType, captured.adapter);
-        const state = new StateManager(projectRoot);
-        const result = await state.readAudit(auditType);
+        const auditResult = await runAuditForChat(projectRoot, kind);
         return {
           ok: true,
-          kind,
-          summary: result?.summary ?? null,
-          coverageEstimate: result?.coverageEstimate ?? null,
-          issueCount: result?.issues.length ?? 0,
-          log: captured.readLog(),
+          ...auditResult,
         };
       },
     }),
@@ -340,10 +308,10 @@ export function createBenderChatTools(
       description: "Re-run project analyze to refresh brief and architecture from current code.",
       inputSchema: z.object({}),
       execute: async () => {
-        const summary = await runAnalyzeWithCapture(projectRoot);
+        const summary = await runAnalyzeForChat(projectRoot);
         return {
           ok: true,
-          summary,
+          ...summary,
         };
       },
     }),
@@ -359,23 +327,79 @@ type OperatorCommand =
   | { type: "audit-run"; kind: "security" | "tests" | "ci" }
   | { type: "analyze-run" };
 
-async function runAnalyzeWithCapture(projectRoot: string): Promise<string> {
+function formatCommandResponse(
+  command: string,
+  details: Array<string | null | undefined>,
+): string {
+  return [
+    `Command '${command}' completed via normal pipeline.`,
+    ...details.filter((line): line is string => typeof line === "string" && line.trim().length > 0),
+  ].join("\n");
+}
+
+async function runAnalyzeForChat(projectRoot: string): Promise<{
+  message: string;
+  hasBrief: boolean;
+  hasArchitecture: boolean;
+}> {
   const captured = createCapturingAdapter();
-  try {
-    await analyzeCommand(projectRoot, captured.adapter);
-    const state = new StateManager(projectRoot);
-    const context = await state.gatherContext();
-    const briefPreview = context.brief?.trim()
-      ? compactText(context.brief.trim(), 500)
-      : "(no brief generated)";
-    return [
-      "Analyze completed.",
-      `Brief: ${briefPreview}`,
-      captured.readLog(),
-    ].join("\n");
-  } catch (err) {
-    return `Analyze failed: ${parseErrorMessage(err)}\n${captured.readLog()}`;
-  }
+  await runAnalyzeOperation(projectRoot, captured);
+  const state = new StateManager(projectRoot);
+  const context = await state.gatherContext();
+  const hasBrief = Boolean(context.brief?.trim());
+  const hasArchitecture = Boolean(context.architecture?.trim());
+  return {
+    message: "Analyze completed via normal pipeline.",
+    hasBrief,
+    hasArchitecture,
+  };
+}
+
+async function runTaskForChat(projectRoot: string, taskId: number): Promise<{
+  taskId: number;
+  completed: boolean;
+  newlyCompleted: string[];
+  message: string;
+}> {
+  const state = new StateManager(projectRoot);
+  const beforeCompleted = await state.readCompletedTasks();
+  const beforeSet = new Set(beforeCompleted.map((task) => task.name));
+  const captured = createCapturingAdapter();
+  await runImplementOperation(projectRoot, { taskId }, captured);
+  const afterCompleted = await state.readCompletedTasks();
+  const newlyCompleted = afterCompleted
+    .filter((task) => !beforeSet.has(task.name))
+    .map((task) => task.name);
+  return {
+    taskId,
+    completed: newlyCompleted.length > 0,
+    newlyCompleted,
+    message: "Task execution completed via normal pipeline.",
+  };
+}
+
+async function runAuditForChat(
+  projectRoot: string,
+  kind: "security" | "tests" | "ci",
+): Promise<{
+  kind: "security" | "tests" | "ci";
+  summary: string | null;
+  coverageEstimate: string | null;
+  issueCount: number;
+  message: string;
+}> {
+  const auditType = kind === "ci" ? "tests" : kind;
+  const captured = createCapturingAdapter();
+  await runAuditOperation(projectRoot, auditType, captured);
+  const state = new StateManager(projectRoot);
+  const result = await state.readAudit(auditType);
+  return {
+    kind,
+    summary: result?.summary ?? null,
+    coverageEstimate: result?.coverageEstimate ?? null,
+    issueCount: result?.issues.length ?? 0,
+    message: `${kind} audit completed via normal pipeline.`,
+  };
 }
 
 function extractUserMessageText(message: UIMessage): string {
@@ -527,11 +551,16 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
   switch (command.type) {
     case "task-list": {
       const tasks = await readCurrentTasksSummary(projectRoot);
-      if (tasks.length === 0) return "No tasks found in the current task plan.";
+      if (tasks.length === 0) {
+        return formatCommandResponse("/task list", ["No tasks found in the current task plan."]);
+      }
       const lines = tasks.slice(0, 30).map((task) => (
         `${task.id}. ${task.title} | deps: ${task.dependencies || "None"}`
       ));
-      return `Current tasks (${tasks.length}):\n${lines.join("\n")}`;
+      return formatCommandResponse("/task list", [
+        `Current tasks (${tasks.length}):`,
+        lines.join("\n"),
+      ]);
     }
 
     case "task-add": {
@@ -540,7 +569,7 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
         description: command.description,
         files: command.files,
       });
-      return `Added task ${result.taskId}: ${command.title}`;
+      return formatCommandResponse("/task add", [`Added task ${result.taskId}: ${command.title}`]);
     }
 
     case "task-update": {
@@ -550,7 +579,7 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
         dependencies: command.dependencies,
         criteria: command.criteria,
       });
-      return `Updated task ${command.taskId}.`;
+      return formatCommandResponse("/task update", [`Updated task ${command.taskId}.`]);
     }
 
     case "task-delete": {
@@ -559,41 +588,39 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
         String(parseTaskId(command.taskId)),
         command.cascadeDependents,
       );
-      return `Deleted task IDs: ${deletedTaskIds.join(", ")}`;
+      return formatCommandResponse("/task delete", [`Deleted task IDs: ${deletedTaskIds.join(", ")}`]);
     }
 
     case "task-run": {
-      const state = new StateManager(projectRoot);
-      const beforeCompleted = await state.readCompletedTasks();
-      const beforeSet = new Set(beforeCompleted.map((task) => task.name));
-      const captured = createCapturingAdapter();
-      await implementSingleTask(projectRoot, parseTaskId(command.taskId), captured.adapter);
-      const afterCompleted = await state.readCompletedTasks();
-      const newlyCompleted = afterCompleted
-        .filter((task) => !beforeSet.has(task.name))
-        .map((task) => task.name);
-      return newlyCompleted.length > 0
-        ? `Task ${command.taskId} executed and marked complete.\n${captured.readLog()}`
-        : `Task ${command.taskId} executed, but no completion entry was recorded.\n${captured.readLog()}`;
+      const result = await runTaskForChat(projectRoot, parseTaskId(command.taskId));
+      if (result.completed) {
+        return formatCommandResponse("/task run", [
+          `Task ${command.taskId} executed and marked complete.`,
+        ]);
+      }
+      return formatCommandResponse("/task run", [
+        `Task ${command.taskId} executed. No completion entry was recorded.`,
+      ]);
     }
 
     case "audit-run": {
-      const captured = createCapturingAdapter();
-      const auditType = command.kind === "ci" ? "tests" : command.kind;
-      await runAuditWorkflow(projectRoot, auditType, captured.adapter);
-      const state = new StateManager(projectRoot);
-      const result = await state.readAudit(auditType);
-      return [
+      const result = await runAuditForChat(projectRoot, command.kind);
+      return formatCommandResponse(`/audit ${command.kind}`, [
         `Ran ${command.kind} audit.`,
         result?.summary ? `Summary: ${result.summary}` : "Summary: (none)",
         result?.coverageEstimate ? `Coverage: ${result.coverageEstimate}` : null,
-        `Issues: ${result?.issues.length ?? 0}`,
-        captured.readLog(),
-      ].filter(Boolean).join("\n");
+        `Issues: ${result.issueCount}`,
+      ]);
     }
 
-    case "analyze-run":
-      return await runAnalyzeWithCapture(projectRoot);
+    case "analyze-run": {
+      const result = await runAnalyzeForChat(projectRoot);
+      return formatCommandResponse("/analyze", [
+        "Analyze completed.",
+        `Brief available: ${result.hasBrief ? "yes" : "no"}`,
+        `Architecture available: ${result.hasArchitecture ? "yes" : "no"}`,
+      ]);
+    }
   }
 }
 

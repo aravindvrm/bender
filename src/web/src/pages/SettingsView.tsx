@@ -185,7 +185,7 @@ interface ConnectorStatus {
 
 const PROVIDER_MODEL_HINTS: Record<string, { fast: string; default: string; strong: string }> = {
   anthropic: { fast: "claude-haiku-4-5-20251001", default: "claude-sonnet-4-6-20250514", strong: "claude-opus-4-6-20250514" },
-  openai: { fast: "gpt-5.4-mini", default: "gpt-5.4", strong: "gpt-5.4" },
+  openai: { fast: "gpt-4o-mini", default: "gpt-4o", strong: "gpt-4.1" },
   google: { fast: "gemini-2.0-flash", default: "gemini-2.5-pro", strong: "gemini-2.5-pro" },
   groq: { fast: "llama-3.3-70b-versatile", default: "llama-3.3-70b-versatile", strong: "llama-3.3-70b-versatile" },
   ollama: { fast: "llama3.2", default: "llama3.1:70b", strong: "llama3.1:70b" },
@@ -199,17 +199,17 @@ const PROVIDER_MODEL_OPTIONS: Record<string, string[]> = {
     "claude-haiku-4-5-20251001",
   ],
   openai: [
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-4.1-nano",
     "gpt-5.4",
     "gpt-5.4-mini",
     "gpt-5.4-nano",
     "gpt-5",
     "gpt-5-mini",
     "gpt-5-nano",
-    "gpt-4.1",
-    "gpt-4.1-mini",
-    "gpt-4.1-nano",
-    "gpt-4o",
-    "gpt-4o-mini",
   ],
   google: [
     "gemini-2.5-pro",
@@ -407,6 +407,7 @@ export function SettingsView() {
   const [connectorsLoading, setConnectorsLoading] = useState(false);
   const [connectorsError, setConnectorsError] = useState<string | null>(null);
   const [connectorExpanded, setConnectorExpanded] = useState<Record<string, boolean>>({});
+  const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   async function persistConfig(nextConfig: FullConfig, silent = false): Promise<boolean> {
     try {
@@ -428,6 +429,13 @@ export function SettingsView() {
       setError((err as Error).message);
       return false;
     }
+  }
+
+  function enqueuePersistConfig(nextConfig: FullConfig, silent = false): Promise<boolean> {
+    const run = async () => await persistConfig(nextConfig, silent);
+    const queued = persistQueueRef.current.then(run, run);
+    persistQueueRef.current = queued.then(() => undefined, () => undefined);
+    return queued;
   }
 
   useEffect(() => {
@@ -530,7 +538,7 @@ export function SettingsView() {
     setSaving(true);
     setError(null);
     try {
-      await persistConfig(config, false);
+      await enqueuePersistConfig(config, false);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -562,7 +570,7 @@ export function SettingsView() {
           models: nextModels,
         },
       };
-      void persistConfig(nextConfig, true);
+      void enqueuePersistConfig(nextConfig, true);
       return nextConfig;
     });
   }
@@ -580,7 +588,7 @@ export function SettingsView() {
           models: nextModels,
         },
       };
-      void persistConfig(nextConfig, true);
+      void enqueuePersistConfig(nextConfig, true);
       return nextConfig;
     });
   }

@@ -7,7 +7,7 @@ import {
   readUIMessageStream,
   type UIMessage,
 } from "ai";
-import { Plus, RefreshCw, Send } from "lucide-react";
+import { Send } from "lucide-react";
 import { LoadingDots } from "./LoadingDots";
 
 interface ChatThread {
@@ -81,27 +81,9 @@ function messageToText(message: UIMessage): string {
       if (part.text.trim()) chunks.push(part.text.trim());
       continue;
     }
-    if (isToolUIPart(part)) {
-      const record = part as unknown as Record<string, unknown>;
-      const toolName = typeof record.toolName === "string"
-        ? record.toolName
-        : String(record.type ?? "tool");
-      const output = summarizeValue(record.output);
-      const errorText = typeof record.errorText === "string" ? record.errorText.trim() : "";
-      const state = typeof record.state === "string" ? record.state : "";
-      if (errorText) {
-        chunks.push(`[Tool ${toolName}] error: ${errorText}`);
-      } else if (output) {
-        chunks.push(`[Tool ${toolName}] ${output}`);
-      } else if (state) {
-        chunks.push(`[Tool ${toolName}] ${state}`);
-      } else {
-        chunks.push(`[Tool ${toolName}]`);
-      }
-      continue;
-    }
+    if (isToolUIPart(part)) continue;
   }
-  return chunks.join("\n\n").trim() || "(no text output)";
+  return chunks.join("\n\n").trim();
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -121,10 +103,6 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
-  const [newThreadTitle, setNewThreadTitle] = useState("");
-  const [showCreateThread, setShowCreateThread] = useState(false);
-  const [renameTitle, setRenameTitle] = useState("");
-  const [savingRename, setSavingRename] = useState(false);
   const [loadingThreads, setLoadingThreads] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
@@ -136,13 +114,14 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     [threads, activeThreadId],
   );
 
-  useEffect(() => {
-    if (!activeThread) {
-      setRenameTitle("");
-      return;
-    }
-    setRenameTitle(activeThread.title);
-  }, [activeThread?.id, activeThread?.title]);
+  const createThread = useCallback(async (title?: string): Promise<ChatThread> => {
+    const data = await fetchJson<{ thread: ChatThread }>("/api/chat/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(title?.trim() ? { title: title.trim() } : {}),
+    });
+    return data.thread;
+  }, []);
 
   const loadThreads = useCallback(async (): Promise<string | null> => {
     if (!projectPath) {
@@ -153,19 +132,18 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     setLoadingThreads(true);
     try {
       const data = await fetchJson<{ threads: ChatThread[] }>("/api/chat/threads");
-      const nextThreads = data.threads ?? [];
-      setThreads(nextThreads);
+      let nextThreads = data.threads ?? [];
       if (nextThreads.length === 0) {
-        setActiveThreadId(null);
-        setMessages([]);
-        return null;
+        const created = await createThread("Chat");
+        nextThreads = [created];
       }
-      const stored = localStorage.getItem(keyForProject(projectPath));
+      setThreads(nextThreads);
       const fallback = nextThreads[0]?.id ?? null;
-      const selected = stored && nextThreads.some((thread) => thread.id === stored)
-        ? stored
-        : fallback;
+      const selected = fallback;
       setActiveThreadId(selected);
+      if (selected) {
+        localStorage.setItem(keyForProject(projectPath), selected);
+      }
       return selected;
     } catch (err) {
       setError(parseErrorMessage(err));
@@ -173,7 +151,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     } finally {
       setLoadingThreads(false);
     }
-  }, [projectPath]);
+  }, [createThread, projectPath]);
 
   const loadMessages = useCallback(async (threadId: string) => {
     setLoadingMessages(true);
@@ -198,28 +176,8 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     void loadMessages(activeThreadId);
   }, [activeThreadId, loadMessages, projectPath]);
 
-  const createThread = useCallback(async (title?: string) => {
-    if (!projectPath) return;
-    try {
-      const data = await fetchJson<{ thread: ChatThread }>("/api/chat/threads", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(title?.trim() ? { title: title.trim() } : {}),
-      });
-      setThreads((prev) => [data.thread, ...prev]);
-      setActiveThreadId(data.thread.id);
-      setMessages([]);
-      setDraft("");
-      setNewThreadTitle("");
-      setShowCreateThread(false);
-      setError(null);
-    } catch (err) {
-      setError(parseErrorMessage(err));
-    }
-  }, [projectPath]);
-
   const patchActiveThread = useCallback(async (
-    updates: Partial<Pick<ChatThread, "toolsEnabled" | "title" | "archived">>,
+    updates: Partial<Pick<ChatThread, "toolsEnabled">>,
   ) => {
     if (!activeThread) return;
     try {
@@ -239,29 +197,6 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
       setError(parseErrorMessage(err));
     }
   }, [activeThread]);
-
-  const saveRename = useCallback(async () => {
-    if (!activeThread) return;
-    const next = renameTitle.trim();
-    if (!next || next === activeThread.title) return;
-    setSavingRename(true);
-    try {
-      await patchActiveThread({ title: next });
-    } finally {
-      setSavingRename(false);
-    }
-  }, [activeThread, patchActiveThread, renameTitle]);
-
-  const archiveActiveThread = useCallback(async () => {
-    if (!activeThread) return;
-    await patchActiveThread({ archived: true });
-    const nextThreadId = await loadThreads();
-    if (nextThreadId) {
-      await loadMessages(nextThreadId);
-    } else {
-      setMessages([]);
-    }
-  }, [activeThread, loadMessages, loadThreads, patchActiveThread]);
 
   const sendMessage = useCallback(async () => {
     if (!activeThread || sending) return;
@@ -370,87 +305,12 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   }
 
   return (
-    <div className="h-full flex flex-col bg-zinc-950 text-zinc-200">
-      <div className="px-3 py-2 border-b border-zinc-800 flex items-center gap-2">
-        <button
-          onClick={() => setShowCreateThread((prev) => !prev)}
-          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 transition-colors"
-        >
-          <Plus className="h-3 w-3" />
-          New Chat
-        </button>
-        <select
-          value={activeThreadId ?? ""}
-          onChange={(e) => setActiveThreadId(e.target.value || null)}
-          className="min-w-[180px] max-w-[320px] bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs"
-        >
-          {!activeThreadId && <option value="">Select thread</option>}
-          {threads.map((thread) => (
-            <option key={thread.id} value={thread.id}>{thread.title}</option>
-          ))}
-        </select>
-        <span className="text-[10px] uppercase tracking-wide text-zinc-500">
-          Agent: Bender Operator
-        </span>
-        <div className="flex-1" />
-        <button
-          onClick={() => {
-            void (async () => {
-              const selected = await loadThreads();
-              if (selected) {
-                await loadMessages(selected);
-              }
-            })();
-          }}
-          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
-        >
-          <RefreshCw className={`h-3 w-3 ${loadingThreads ? "animate-spin" : ""}`} />
-          Refresh
-        </button>
-      </div>
-
-      {showCreateThread && (
-        <div className="px-3 py-2 border-b border-zinc-800 flex items-center gap-2">
-          <input
-            value={newThreadTitle}
-            onChange={(e) => setNewThreadTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void createThread(newThreadTitle);
-              }
-            }}
-            placeholder="Thread name"
-            className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs"
-          />
-          <button
-            onClick={() => void createThread(newThreadTitle)}
-            className="px-2 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 text-xs"
-          >
-            Create
-          </button>
-          <button
-            onClick={() => {
-              setShowCreateThread(false);
-              setNewThreadTitle("");
-            }}
-            className="px-2 py-1 rounded border border-zinc-800 text-zinc-500 hover:text-zinc-300 text-xs"
-          >
-            Cancel
-          </button>
-        </div>
-      )}
-
+    <div className="h-full min-h-0 flex flex-col bg-zinc-950 text-zinc-200">
       {activeThread && (
-        <div className="px-3 py-2 border-b border-zinc-800 grid grid-cols-1 lg:grid-cols-3 gap-2 text-xs">
+        <div className="px-3 py-2 border-b border-zinc-800 grid grid-cols-1 lg:grid-cols-2 gap-2 text-xs shrink-0">
           <div className="flex items-center gap-2 text-zinc-400">
             <span className="text-zinc-500">Model</span>
             <span className="font-mono">Strong tier (Settings)</span>
-          </div>
-
-          <div className="flex items-center gap-2 text-zinc-400">
-            <span className="text-zinc-500">Current</span>
-            <span className="font-mono">{activeThread.provider}:{activeThread.model}</span>
           </div>
 
           <label className="inline-flex items-center gap-2 text-zinc-400">
@@ -463,58 +323,38 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
             />
             Tools enabled
           </label>
-
-          <div className="lg:col-span-3 flex items-center gap-2">
-            <span className="text-zinc-500">Thread</span>
-            <input
-              value={renameTitle}
-              onChange={(e) => setRenameTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void saveRename();
-                }
-              }}
-              className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs"
-            />
-            <button
-              onClick={() => void saveRename()}
-              disabled={savingRename || !renameTitle.trim() || renameTitle.trim() === activeThread.title}
-              className="px-2 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 text-xs disabled:opacity-40"
-            >
-              Save
-            </button>
-            <button
-              onClick={() => void archiveActiveThread()}
-              className="px-2 py-1 rounded border border-zinc-800 text-zinc-500 hover:text-zinc-300 text-xs"
-            >
-              Archive
-            </button>
-          </div>
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
         {loadingMessages && <LoadingDots size={18} label="Loading chat…" textClassName="text-xs text-zinc-500" />}
         {!loadingMessages && messages.length === 0 && (
           <p className="text-xs text-zinc-500 italic">No messages yet.</p>
         )}
-        {!loadingMessages && messages.map((message) => (
-          <div
-            key={message.id}
-            className={`max-w-[90%] rounded-lg px-3 py-2 border ${
-              message.role === "user"
-                ? "ml-auto bg-zinc-800 border-zinc-700 text-zinc-100"
-                : "mr-auto bg-zinc-900 border-zinc-800 text-zinc-200"
-            }`}
-          >
-            <p className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">{message.role}</p>
-            <pre className="whitespace-pre-wrap text-xs leading-relaxed font-mono">{messageToText(message)}</pre>
+        {!loadingMessages && messages.map((message) => {
+          const text = messageToText(message);
+          if (!text) return null;
+          return (
+            <div
+              key={message.id}
+              className={`max-w-[90%] px-3 py-2 ${
+                message.role === "user"
+                  ? "ml-auto rounded-lg border bg-zinc-800 border-zinc-700 text-zinc-100"
+                  : "mr-auto text-zinc-200"
+              }`}
+            >
+              <pre className="whitespace-pre-wrap text-xs leading-relaxed font-mono">{text}</pre>
+            </div>
+          );
+        })}
+        {sending && (
+          <div className="mr-auto px-3 py-2 text-zinc-400">
+            <LoadingDots size={14} label="Thinking…" textClassName="text-xs text-zinc-500" />
           </div>
-        ))}
+        )}
       </div>
 
-      <div className="px-3 py-2 border-t border-zinc-800">
+      <div className="px-3 py-2 border-t border-zinc-800 shrink-0">
         {error && (
           <p className="text-xs text-red-400 mb-2">{error}</p>
         )}

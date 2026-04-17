@@ -96,17 +96,22 @@ function createStartupHtml(): string {
         color: #f4f4f5;
         display: flex;
         align-items: center;
-        justify-content: center;
+        justify-content: flex-start;
+        padding-left: 28px;
         min-height: 100vh;
       }
       .stack {
         display: flex;
         align-items: center;
+        justify-content: flex-start;
         gap: 10px;
+        min-width: 280px;
       }
       .label {
         font-size: 13px;
         color: #a1a1aa;
+        min-width: 220px;
+        text-align: left;
       }
       .bender-loader {
         width: var(--loader-size, 18px);
@@ -132,10 +137,26 @@ function createStartupHtml(): string {
     </style>
   </head>
   <body>
-    <div class="stack">
+      <div class="stack">
       <div class="bender-loader" aria-hidden="true"></div>
-      <div class="label">Starting up...</div>
+      <div class="label" id="startup-label">Spinning the wheel...</div>
     </div>
+    <script>
+      (function () {
+        const lines = [
+          "Spinning the wheel...",
+          "Dealing the cards....",
+          "Jacking in...",
+        ];
+        let index = 0;
+        const label = document.getElementById("startup-label");
+        if (!label) return;
+        setInterval(() => {
+          index = (index + 1) % lines.length;
+          label.textContent = lines[index];
+        }, 1400);
+      })();
+    </script>
   </body>
 </html>`;
 }

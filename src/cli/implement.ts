@@ -2,7 +2,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { StateManager } from "../state/manager.js";
-import { createModelSet, getModelForTier } from "../llm/provider.js";
+import { createModelSet, getModelForTier, resolveProviderModelForTier } from "../llm/provider.js";
 import { implementTask, type TaskDescription, type FileOperation } from "../roles/implementer.js";
 import { reviewCode, type ReviewResult } from "../roles/reviewer.js";
 import { GitOperations } from "../git/operations.js";
@@ -186,6 +186,11 @@ function reviewerDecisionPrompt(review: ReviewResult): { question: string; defau
   };
 }
 
+function formatTierModelLabel(config: BenderConfig, tier: AgentConfig["modelTier"]): string {
+  const selection = resolveProviderModelForTier(config, tier);
+  return `${selection.provider}:${selection.model || "(unconfigured)"}`;
+}
+
 async function runReviewerGate(
   projectRoot: string,
   config: BenderConfig,
@@ -198,7 +203,9 @@ async function runReviewerGate(
   logger: Logger,
 ): Promise<boolean> {
   adapter.subheader("Review Check");
-  adapter.info(`Using reviewer agent: ${reviewerAgent.name} (${reviewerAgent.modelTier})`);
+  adapter.info(
+    `Using reviewer agent: ${reviewerAgent.name} (${reviewerAgent.modelTier}) · model ${formatTierModelLabel(config, reviewerAgent.modelTier)}`,
+  );
 
   const reviewerModel = getModelForTier(models, reviewerAgent.modelTier);
   let reviewerRuntime: RoleRuntime;
@@ -368,7 +375,9 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
 
   try {
     const context = await state.gatherContext();
-    adapter.info(`Using agent: ${agent.name} (${agent.modelTier})`);
+    adapter.info(
+      `Using agent: ${agent.name} (${agent.modelTier}) · model ${formatTierModelLabel(config, agent.modelTier)}`,
+    );
     const spin = adapter.spinner(`Implementing task ${task.id}...`);
     spin.start();
 
@@ -560,7 +569,9 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
 
     adapter.subheader(`Task ${task.id}: ${task.title}`);
     adapter.info(task.description);
-    adapter.info(`Using agent: ${agent.name} (${agent.modelTier})`);
+    adapter.info(
+      `Using agent: ${agent.name} (${agent.modelTier}) · model ${formatTierModelLabel(config, agent.modelTier)}`,
+    );
 
     try {
       const context = await state.gatherContext();

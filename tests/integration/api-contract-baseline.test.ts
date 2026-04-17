@@ -155,8 +155,26 @@ describe("api contract baseline", () => {
 
     const stateRes = await fetch(`${baseUrl}/api/state`);
     expect(stateRes.ok).toBe(true);
-    const stateBody = await stateRes.json() as { config?: { llm?: { provider?: string } } };
+    const stateBody = await stateRes.json() as {
+      config?: {
+        llm?: {
+          provider?: string;
+          models?: {
+            fast?: string | { provider?: string; model?: string };
+            default?: string | { provider?: string; model?: string };
+            strong?: string | { provider?: string; model?: string };
+          };
+        };
+      };
+    };
     expect(stateBody.config?.llm?.provider).toBe("openai-compatible");
+    const models = stateBody.config?.llm?.models;
+    const fast = typeof models?.fast === "string" ? models.fast : models?.fast?.model;
+    const defaultModel = typeof models?.default === "string" ? models.default : models?.default?.model;
+    const strong = typeof models?.strong === "string" ? models.strong : models?.strong?.model;
+    expect(fast).toBe("local-model");
+    expect(defaultModel).toBe("local-model");
+    expect(strong).toBe("local-model");
   });
 
   it("preserves /api/terminal/exec validation and output shape", async () => {

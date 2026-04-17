@@ -1,6 +1,6 @@
 import { readEffectiveConfig } from "../state/config.js";
 import { StateManager } from "../state/manager.js";
-import { createModelSet, getModelForTier } from "../llm/provider.js";
+import { createModelSet, getModelForTier, resolveProviderModelForTier } from "../llm/provider.js";
 import { generateClarifyingQuestions, generateBrief } from "../roles/clarifier.js";
 import { updateArchitecture } from "../roles/architect.js";
 import { generateFeaturePlan } from "../roles/planner.js";
@@ -128,7 +128,10 @@ export async function planCommand(
     adapter.subheader("Step 1: Understanding the Change");
     adapter.info(`Feature request: "${featureDescription}"\n`);
     adapter.info(`Requested role perspective: ${requestedRole}`);
-    adapter.info(`Using planner agent: ${plannerAgent.name} (${plannerAgent.modelTier})`);
+    const plannerModelSelection = resolveProviderModelForTier(config, plannerAgent.modelTier);
+    adapter.info(
+      `Using planner agent: ${plannerAgent.name} (${plannerAgent.modelTier}) · model ${plannerModelSelection.provider}:${plannerModelSelection.model || "(unconfigured)"}`,
+    );
 
     const clarifierModel = getModelForTier(models, plannerAgent.modelTier);
     let fullDescription = roleGuidedFeatureDescription;
@@ -206,7 +209,10 @@ export async function planCommand(
     adapter.subheader("Step 2: Architecture Impact");
     adapter.info("Analyzing architecture impact...\n");
 
-    adapter.info(`Using architect agent: ${architectAgent.name} (${architectAgent.modelTier})`);
+    const architectModelSelection = resolveProviderModelForTier(config, architectAgent.modelTier);
+    adapter.info(
+      `Using architect agent: ${architectAgent.name} (${architectAgent.modelTier}) · model ${architectModelSelection.provider}:${architectModelSelection.model || "(unconfigured)"}`,
+    );
     const architectModel = getModelForTier(models, architectAgent.modelTier);
     let architectureUpdate = "";
     let schemaMigration: string | null = null;

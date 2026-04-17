@@ -205,7 +205,7 @@ const PROVIDERS = ["anthropic", "openai", "google", "groq", "ollama", "openai-co
 
 const PROVIDER_MODEL_HINTS: Record<string, { fast: string; default: string; strong: string }> = {
   anthropic: { fast: "claude-haiku-4-5-20251001", default: "claude-sonnet-4-6-20250514", strong: "claude-opus-4-6-20250514" },
-  openai: { fast: "gpt-5.4-mini", default: "gpt-5.4", strong: "gpt-5.4" },
+  openai: { fast: "gpt-4o-mini", default: "gpt-4o", strong: "gpt-4.1" },
   google: { fast: "gemini-2.0-flash", default: "gemini-2.5-pro", strong: "gemini-2.5-pro" },
   groq: { fast: "llama-3.3-70b-versatile", default: "llama-3.3-70b-versatile", strong: "llama-3.3-70b-versatile" },
   ollama: { fast: "llama3.2", default: "llama3.1:70b", strong: "llama3.1:70b" },

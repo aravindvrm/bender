@@ -10,6 +10,7 @@ import { initCommand } from "../init.js";
 import { planCommand } from "../plan.js";
 import { implementCommand, implementSingleTask } from "../implement.js";
 import { analyzeCommand } from "../analyze.js";
+import { runAuditWorkflow } from "./audits.js";
 import { generateFlows } from "../../roles/flowcharter.js";
 import { createLogger, logError, makeAdapterSink, toLoggerOptions } from "../../logger.js";
 import type { UIAdapter } from "../adapter.js";
@@ -143,6 +144,14 @@ export async function runImplementOperation(
 
 export async function runAnalyzeOperation(projectRoot: string, adapter: UIAdapter): Promise<void> {
   await analyzeCommand(projectRoot, adapter);
+}
+
+export async function runAuditOperation(
+  projectRoot: string,
+  kind: "security" | "tests",
+  adapter: UIAdapter,
+): Promise<void> {
+  await runAuditWorkflow(projectRoot, kind, adapter);
 }
 
 export async function runFlowsOperation(projectRoot: string, adapter: UIAdapter): Promise<void> {

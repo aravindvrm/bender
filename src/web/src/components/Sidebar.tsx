@@ -99,7 +99,6 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
   const completedCount = Math.max(completedFromFiles, completedFromCurrent);
   const decisionCount = state?.decisions?.length ?? 0;
   const llmProvider = llmProviderLabel(state?.config?.llm);
-  const projectName = state?.projectRoot?.split(/[\\/]/).filter(Boolean).pop() ?? "No Project";
   const hasProject = !!state?.projectRoot;
   const isRunning = operationStatus === "running";
 
@@ -199,11 +198,11 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
       <div className="flex-1 flex flex-col min-w-0">
 
         {/* Project header */}
-        <div className="px-4 pt-2 pb-2 border-b border-zinc-800/60">
-          <p className="font-bender-brand text-[16px] leading-none tracking-[0.08em] text-zinc-400/85 mb-1 select-none">
-            Bender
+        <div className="px-4 h-10 border-b border-zinc-800/60 flex items-center">
+          <p className="font-bender-brand text-[16px] leading-none tracking-[0.08em] select-none">
+            <span className="text-zinc-100">Bender</span>
+            <span className="text-zinc-500">.desktop</span>
           </p>
-          <p className="text-sm font-medium text-zinc-600 truncate">{projectName}</p>
         </div>
 
         {/* Project nav */}
