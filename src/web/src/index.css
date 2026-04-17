@@ -4,8 +4,21 @@
   --color-zinc-925: #111113;
 }
 
+@font-face {
+  font-family: "Doto";
+  src: url("./assets/fonts/Doto-VariableFont_ROND,wght.ttf") format("truetype-variations");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 body {
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.font-bender-brand {
+  font-family: "Doto", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-variation-settings: "wght" 480;
 }
 
 /* Flat select styling */

@@ -6,7 +6,7 @@ import { SecretInput } from "./SecretInput";
 
 interface ProjectSelectorProps {
   currentPath: string | null;
-  onProjectChange: () => void;
+  onProjectChange: () => Promise<void> | void;
   compact?: boolean;
 }
 
@@ -78,6 +78,37 @@ async function browseDir(path?: string): Promise<BrowseResult> {
   const res = await fetch(`/api/fs/browse${query}`);
   if (!res.ok) throw new Error((await res.json()).error);
   return res.json();
+}
+
+function postClientLog(
+  level: "debug" | "info" | "warn" | "error",
+  message: string,
+  data?: Record<string, unknown>,
+): void {
+  void fetch("/api/logs/client", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      component: "project-selector",
+      level,
+      message,
+      ...(data ? { data } : {}),
+    }),
+  }).catch(() => {
+    // Best-effort diagnostics only.
+  });
+}
+
+function isPathResolutionError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("path does not exist")
+    || normalized.includes("not a directory")
+    || normalized.includes("permission")
+    || normalized.includes("operation not permitted")
+    || normalized.includes("eacces")
+    || normalized.includes("eperm")
+  );
 }
 
 async function fetchGitHubStatus(): Promise<GitHubAuthStatus> {
@@ -178,6 +209,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
   const [inputPath, setInputPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [showBrowser, setShowBrowser] = useState(false);
   const [browserRoot, setBrowserRoot] = useState<BrowseResult | null>(null);
   const [browserLoading, setBrowserLoading] = useState(false);
@@ -247,7 +279,18 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
     setBrowserLoading(true);
     setBrowserError(null);
     try {
-      const data = await browseDir(path);
+      let data: BrowseResult;
+      try {
+        data = await browseDir(path);
+      } catch (err) {
+        const message = (err as Error).message;
+        if (path?.trim() && isPathResolutionError(message)) {
+          data = await browseDir(undefined);
+          setBrowserError(`Could not open ${path}. Showing home directory instead.`);
+        } else {
+          throw err;
+        }
+      }
       setBrowserRoot(data);
       setSelectedPath((prev) => prev ?? data.path);
       return data;
@@ -273,16 +316,22 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
 
   async function handleSelect(path: string) {
     setLoading(true);
+    setPendingPath(path);
     setError(null);
+    postClientLog("info", "Project select started", { path });
     try {
       await selectProject(path);
-      onProjectChange();
+      await Promise.resolve(onProjectChange());
+      postClientLog("info", "Project select succeeded", { path });
       setOpen(false);
       setShowBrowser(false);
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      setError(message);
+      postClientLog("error", "Project select failed", { path, error: message });
     } finally {
       setLoading(false);
+      setPendingPath(null);
     }
   }
 
@@ -290,16 +339,22 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
     const path = inputPath.trim();
     if (!path) return;
     setLoading(true);
+    setPendingPath(path);
     setError(null);
+    postClientLog("info", "Project open started", { path });
     try {
       await openProject(path);
-      onProjectChange();
+      await Promise.resolve(onProjectChange());
+      postClientLog("info", "Project open succeeded", { path });
       setOpen(false);
       setShowBrowser(false);
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      setError(message);
+      postClientLog("error", "Project open failed", { path, error: message });
     } finally {
       setLoading(false);
+      setPendingPath(null);
     }
   }
 
@@ -449,7 +504,18 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
     setCloneBrowserError(null);
     try {
       const preferred = path?.trim() || parentPath(currentPath);
-      const data = await browseDir(preferred);
+      let data: BrowseResult;
+      try {
+        data = await browseDir(preferred);
+      } catch (err) {
+        const message = (err as Error).message;
+        if (preferred?.trim() && isPathResolutionError(message)) {
+          data = await browseDir(undefined);
+          setCloneBrowserError(`Could not open ${preferred}. Showing home directory instead.`);
+        } else {
+          throw err;
+        }
+      }
       setCloneBrowserRoot(data);
       setCloneDestinationPath((prev) => prev ?? data.path);
     } catch (err) {
@@ -478,7 +544,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
     setGithubError(null);
     try {
       await cloneGitHubRepo(clonePickerRepo.cloneUrl, targetPath);
-      onProjectChange();
+      await Promise.resolve(onProjectChange());
       setOpen(false);
       setGithubNotice(`Cloned ${clonePickerRepo.fullName}`);
     } catch (err) {
@@ -557,7 +623,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                     disabled={!inputPath.trim() || loading}
                     className="px-3 py-1.5 text-xs font-medium bg-zinc-700 text-zinc-200 rounded-md hover:bg-zinc-600 disabled:opacity-40 transition-colors"
                   >
-                    Open
+                    {loading && pendingPath === inputPath.trim() ? "Opening…" : "Open"}
                   </button>
                 </div>
                 <button
@@ -567,6 +633,12 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                   <span>{showBrowser ? "▾" : "▸"}</span>
                   <span>Explorer</span>
                 </button>
+                {loading && (
+                  <div className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-2">
+                    <LoadingDots size={16} label="Opening project…" textClassName="text-xs text-zinc-400" />
+                    <span className="text-[11px] text-zinc-500 font-mono truncate">{pendingPath ?? "Loading…"}</span>
+                  </div>
+                )}
                 {error && <p className="text-xs text-red-400">{error}</p>}
               </div>
 
@@ -640,7 +712,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                       disabled={!selectedPath || loading}
                       className="px-3 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-900 rounded-md hover:bg-white disabled:opacity-40 transition-colors"
                     >
-                      Select
+                      {loading ? "Opening…" : "Select"}
                     </button>
                   </div>
                 </div>
@@ -882,6 +954,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                 <div key={p.path} className={`flex items-center gap-2 px-3 py-2 hover:bg-zinc-800 transition-colors ${p.path === currentPath ? "bg-zinc-800/60" : ""}`}>
                   <button
                     onClick={() => void handleSelect(p.path)}
+                    disabled={loading}
                     className="flex-1 min-w-0 text-left"
                   >
                     <p className="text-sm text-zinc-200 truncate">{p.name}</p>
@@ -890,6 +963,7 @@ export function ProjectSelector({ currentPath, onProjectChange, compact }: Proje
                   {p.path === currentPath && <span className="text-xs text-emerald-500 shrink-0">active</span>}
                   <button
                     onClick={() => void handleRemove(p.path)}
+                    disabled={loading}
                     className="text-zinc-600 hover:text-zinc-300 text-xs shrink-0 px-1"
                     title="Remove from recents"
                   >

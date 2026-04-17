@@ -16,6 +16,7 @@ Use `flowchart LR` for data pipelines or system-level flows.
 - Base every flow strictly on the provided brief and architecture. Do not invent features.
 - Keep diagrams focused — 6–12 nodes each. Avoid mega-diagrams.
 - Use plain, readable node labels (no technical jargon unless it's in the architecture doc).
+- Avoid double quotes inside flowchart node labels; when quoting words, use single quotes.
 - For sequence diagrams use Actor names that match the architecture (User, Browser, API, DB, etc.).
 - Always show the happy path first. Add error/edge branches only if they're explicitly described.
 - Do not add explanatory prose between diagrams — headings only.

@@ -4,7 +4,7 @@ import { MarkdownView } from "../components/MarkdownView";
 import { MermaidView } from "../components/MermaidView";
 import { LoadingDots } from "../components/LoadingDots";
 import { sqlToErDiagram } from "../utils/sqlToErDiagram";
-import { RefreshCw, ShieldAlert, TestTube2, AlertTriangle, Info, AlertCircle, CheckCircle2, Plus } from "lucide-react";
+import { RefreshCw, ShieldAlert, TestTube2, AlertTriangle, Info, AlertCircle, CheckCircle2, Plus, ChevronDown } from "lucide-react";
 
 interface ArchitectureViewProps {
   state: ProjectState;
@@ -54,9 +54,19 @@ function parseStackLines(lines: string[]): Partial<Record<StackFieldKey, string>
     if (!match) continue;
     const key = normalizeStackKey(match[1]);
     if (!key) continue;
-    parsed[key] = match[2].trim();
+    parsed[key] = normalizeStackValue(match[2]);
   }
   return parsed;
+}
+
+function normalizeStackValue(raw: string): string {
+  return raw
+    .replace(/^[-*]\s+/, "")
+    .replace(/\*\*/g, "")
+    .replace(/`/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*;\s*/g, "; ")
+    .trim();
 }
 
 function extractStackFromArchitecture(content: string): Partial<Record<StackFieldKey, string>> {
@@ -278,6 +288,13 @@ function FlowsContent({ content, onRegenerate, generating }: {
 }) {
   // Split on ## headings to get sections
   const sections = content.split(/(?=^## )/m).filter(Boolean);
+  const [collapsedSections, setCollapsedSections] = useState<Record<number, boolean>>({});
+
+  useEffect(() => {
+    const defaults: Record<number, boolean> = {};
+    sections.forEach((_section, i) => { defaults[i] = true; });
+    setCollapsedSections(defaults);
+  }, [content]);
 
   return (
     <div className="space-y-8">
@@ -296,17 +313,29 @@ function FlowsContent({ content, onRegenerate, generating }: {
       {sections.map((section, i) => {
         const headingMatch = section.match(/^## (.+)$/m);
         const heading = headingMatch?.[1] ?? `Flow ${i + 1}`;
-        const chartMatch = section.match(/```mermaid\n([\s\S]*?)```/);
+        const chartMatch = section.match(/```mermaid\s*\r?\n([\s\S]*?)```/i);
         const chart = chartMatch?.[1]?.trim();
+        const isCollapsed = collapsedSections[i] ?? true;
 
         return (
-          <div key={i}>
-            <h3 className="text-sm font-medium text-zinc-300 mb-3">{heading}</h3>
-            {chart ? (
-              <MermaidView chart={chart} />
-            ) : (
-              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-sm text-zinc-500">
-                No diagram found in this section.
+          <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-900/30 overflow-hidden">
+            <button
+              onClick={() => setCollapsedSections((prev) => ({ ...prev, [i]: !isCollapsed }))}
+              className="w-full flex items-center justify-between px-4 py-3 border-b border-zinc-800/70 hover:bg-zinc-800/40 transition-colors"
+            >
+              <h3 className="text-sm font-medium text-zinc-300 text-left">{heading}</h3>
+              <ChevronDown className={`h-4 w-4 text-zinc-500 transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
+            </button>
+
+            {!isCollapsed && (
+              <div className="p-4">
+                {chart ? (
+                  <MermaidView chart={chart} />
+                ) : (
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-sm text-zinc-500">
+                    No diagram found in this section.
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -642,33 +671,33 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
   const stackRows: Array<{ label: string; value: string }> = [
     {
       label: STACK_FIELD_LABELS.framework,
-      value: parsedStack.framework ?? state.config.stack.framework,
+      value: normalizeStackValue(parsedStack.framework ?? state.config.stack.framework),
     },
     {
       label: STACK_FIELD_LABELS.database,
-      value: parsedStack.database ?? state.config.stack.database,
+      value: normalizeStackValue(parsedStack.database ?? state.config.stack.database),
     },
     {
       label: STACK_FIELD_LABELS.orm,
-      value: parsedStack.orm ?? state.config.stack.orm,
+      value: normalizeStackValue(parsedStack.orm ?? state.config.stack.orm),
     },
     {
       label: STACK_FIELD_LABELS.auth,
-      value: parsedStack.auth ?? state.config.stack.auth,
+      value: normalizeStackValue(parsedStack.auth ?? state.config.stack.auth),
     },
     {
       label: STACK_FIELD_LABELS.styling,
-      value: parsedStack.styling ?? state.config.stack.styling,
+      value: normalizeStackValue(parsedStack.styling ?? state.config.stack.styling),
     },
     {
       label: STACK_FIELD_LABELS.language,
-      value: parsedStack.language ?? state.config.stack.language,
+      value: normalizeStackValue(parsedStack.language ?? state.config.stack.language),
     },
-  ];
+  ].filter((row) => row.value.trim().length > 0);
   if (parsedStack.deployment) {
     stackRows.push({
       label: STACK_FIELD_LABELS.deployment,
-      value: parsedStack.deployment,
+      value: normalizeStackValue(parsedStack.deployment),
     });
   }
   const architectureContent = state.architecture ?? "";

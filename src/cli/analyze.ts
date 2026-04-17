@@ -181,6 +181,7 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
   await state.writeArchitecture(parsed.architecture);
   if (parsed.conventions) await state.writeConventions(parsed.conventions);
   if (parsed.schema) await state.writeSchema(parsed.schema);
+  if (parsed.apiContracts) await state.writeApiContracts(parsed.apiContracts);
 
   // Write session log
   await state.writeSession(
@@ -209,6 +210,7 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
     hasBrief: true,
     hasConventions: !!parsed.conventions,
     hasSchema: !!parsed.schema,
+    hasApiContracts: !!parsed.apiContracts,
   });
 
   adapter.header("Analysis Complete");
@@ -216,6 +218,7 @@ export async function analyzeCommand(projectRoot: string, adapter: UIAdapter = t
   adapter.success("Architecture:  .bender/architecture.md");
   if (parsed.conventions) adapter.success("Conventions:   .bender/conventions.md");
   if (parsed.schema) adapter.success("Schema:        .bender/schema.sql");
+  if (parsed.apiContracts) adapter.success("API Contracts: .bender/api-contracts/routes.yaml");
   adapter.info("Run `bender plan` to plan your next change, or `bender bend` (`npm run bend` in local dev) to launch the dashboard.");
   adapter.cleanup();
 }

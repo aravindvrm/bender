@@ -48,39 +48,67 @@ export interface ProjectEntry {
   lastOpened: string;
 }
 
+const API_TIMEOUT_MS = 15_000;
+
+async function fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = API_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readApiError(res: Response, fallback: string): Promise<string> {
+  const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+  if (contentType.includes("application/json")) {
+    const body = await res.json().catch(() => ({})) as { error?: string };
+    if (body.error?.trim()) return body.error.trim();
+  }
+  const text = (await res.text().catch(() => "")).trim();
+  if (text) return text.slice(0, 300);
+  return fallback;
+}
+
 export async function saveConfig(updates: Record<string, unknown>): Promise<void> {
-  const res = await fetch(`${API_BASE}/config`, {
+  const res = await fetchWithTimeout(`${API_BASE}/config`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
   });
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error ?? "Save failed");
+    throw new Error(await readApiError(res, "Save failed"));
   }
 }
 
 export async function selectProject(path: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/project/select`, {
+  const res = await fetchWithTimeout(`${API_BASE}/project/select`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
-  });
+  }, API_TIMEOUT_MS);
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error ?? "Failed to select project");
+    throw new Error(await readApiError(res, `Failed to select project (${res.status})`));
   }
 }
 
 export async function openProject(path: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/project/open`, {
+  const res = await fetchWithTimeout(`${API_BASE}/project/open`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
-  });
+  }, API_TIMEOUT_MS);
   if (!res.ok) {
-    const body = await res.json();
-    throw new Error(body.error ?? "Failed to open project");
+    throw new Error(await readApiError(res, `Failed to open project (${res.status})`));
   }
 }
 
@@ -102,8 +130,10 @@ export function useProjectState() {
   const refresh = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/state`);
-      if (!res.ok) throw new Error(await res.text());
+      const res = await fetchWithTimeout(`${API_BASE}/state`);
+      if (!res.ok) {
+        throw new Error(await readApiError(res, `Failed to load project state (${res.status})`));
+      }
       const data = await res.json();
       setState(data);
       setError(null);

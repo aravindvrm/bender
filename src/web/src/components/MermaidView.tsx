@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import mermaid from "mermaid";
 import { LoadingDots } from "./LoadingDots";
+import { looksLikeMermaidErrorSvg, normalizeMermaidChartInput, repairMermaidChart } from "../utils/mermaid";
 
 mermaid.initialize({
   startOnLoad: false,
@@ -37,47 +38,122 @@ export function MermaidView({ chart, className = "" }: MermaidViewProps) {
   const [error, setError] = useState<string>("");
 
   useEffect(() => {
-    if (!chart?.trim()) return;
+    if (!chart?.trim()) {
+      setSvg("");
+      setError("");
+      return;
+    }
+    const normalizedChart = normalizeMermaidChartInput(chart);
+    const repairedChart = repairMermaidChart(normalizedChart);
+    const isRepairCandidate = repairedChart !== normalizedChart;
+    let canceled = false;
+    setSvg("");
     setError("");
-    mermaid
-      .render(id.current, chart)
-      .then(({ svg }) => {
-        setSvg(svg);
+
+    async function render(): Promise<void> {
+      const nextId = () => `mermaid-${++counter}`;
+      try {
+        const firstPass = await mermaid.render(nextId(), normalizedChart);
+        if (looksLikeMermaidErrorSvg(firstPass.svg)) {
+          throw new Error("Mermaid produced an error diagram");
+        }
+        if (canceled) return;
+        setSvg(firstPass.svg);
         lastReportedError.current = "";
-        // reset counter id so re-renders get a fresh id
-        id.current = `mermaid-${++counter}`;
-      })
-      .catch((err) => {
-        const message = String(err?.message ?? err);
-        setError(message);
+        // Reset counter id so re-renders get a fresh id.
+        id.current = nextId();
+        return;
+      } catch (err) {
+        const firstError = String((err as Error)?.message ?? err);
+        if (!isRepairCandidate) {
+          if (canceled) return;
+          setError("Diagram could not be rendered.");
+          const signature = `${firstError}|${normalizedChart}`;
+          if (lastReportedError.current === signature) return;
+          lastReportedError.current = signature;
+          void fetch("/api/logs/client", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              component: "mermaid",
+              level: "error",
+              message: "Mermaid render failed",
+              data: {
+                error: firstError,
+                chartPreview: normalizedChart.slice(0, 800),
+                chartLength: normalizedChart.length,
+              },
+            }),
+          }).catch(() => {
+            // Ignore diagnostics transport failures in UI rendering path.
+          });
+          return;
+        }
 
-        const signature = `${message}|${chart}`;
-        if (lastReportedError.current === signature) return;
-        lastReportedError.current = signature;
+        try {
+          const secondPass = await mermaid.render(nextId(), repairedChart);
+          if (looksLikeMermaidErrorSvg(secondPass.svg)) {
+            throw new Error("Mermaid produced an error diagram after repair");
+          }
+          if (canceled) return;
+          setSvg(secondPass.svg);
+          lastReportedError.current = "";
+          id.current = nextId();
+          void fetch("/api/logs/client", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              component: "mermaid",
+              level: "warn",
+              message: "Mermaid chart auto-repaired after parse failure",
+              data: {
+                error: firstError,
+                chartPreview: normalizedChart.slice(0, 800),
+                repairedPreview: repairedChart.slice(0, 800),
+              },
+            }),
+          }).catch(() => {
+            // Ignore diagnostics transport failures in UI rendering path.
+          });
+        } catch (retryErr) {
+          if (canceled) return;
+          const retryMessage = String((retryErr as Error)?.message ?? retryErr);
+          setError("Diagram could not be rendered.");
+          const signature = `${retryMessage}|${normalizedChart}`;
+          if (lastReportedError.current === signature) return;
+          lastReportedError.current = signature;
+          void fetch("/api/logs/client", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              component: "mermaid",
+              level: "error",
+              message: "Mermaid render failed after auto-repair attempt",
+              data: {
+                firstError,
+                retryError: retryMessage,
+                chartPreview: normalizedChart.slice(0, 800),
+                repairedPreview: repairedChart.slice(0, 800),
+                chartLength: normalizedChart.length,
+              },
+            }),
+          }).catch(() => {
+            // Ignore diagnostics transport failures in UI rendering path.
+          });
+        }
+      }
+    }
 
-        void fetch("/api/logs/client", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            component: "mermaid",
-            level: "error",
-            message: "Mermaid render failed",
-            data: {
-              error: message,
-              chartPreview: chart.slice(0, 800),
-              chartLength: chart.length,
-            },
-          }),
-        }).catch(() => {
-          // Ignore diagnostics transport failures in UI rendering path.
-        });
-      });
+    void render();
+    return () => {
+      canceled = true;
+    };
   }, [chart]);
 
   if (error) {
     return (
-      <div className={`rounded-lg border border-red-900/40 bg-red-950/20 p-4 ${className}`}>
-        <p className="text-xs text-red-400 font-mono">{error}</p>
+      <div className={`rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 ${className}`}>
+        <p className="text-xs text-zinc-500">{error}</p>
       </div>
     );
   }

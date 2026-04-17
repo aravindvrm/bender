@@ -1,10 +1,17 @@
 import { simpleGit, type SimpleGit } from "simple-git";
 
+interface GitOperationsOptions {
+  timeoutMs?: number;
+}
+
 export class GitOperations {
   private git: SimpleGit;
 
-  constructor(private projectRoot: string) {
-    this.git = simpleGit(projectRoot);
+  constructor(private projectRoot: string, options?: GitOperationsOptions) {
+    const timeoutMs = typeof options?.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
+      ? Math.max(250, Math.floor(options.timeoutMs))
+      : null;
+    this.git = simpleGit(projectRoot, timeoutMs ? { timeout: { block: timeoutMs } } : undefined);
   }
 
   async isRepo(): Promise<boolean> {
@@ -108,8 +115,13 @@ export class GitOperations {
   }
 
   async getCurrentBranch(): Promise<string> {
-    const status = await this.git.status();
-    return status.current || "HEAD";
+    try {
+      const branch = await this.git.revparse(["--abbrev-ref", "HEAD"]);
+      return branch.trim() || "HEAD";
+    } catch {
+      const status = await this.git.status();
+      return status.current || "HEAD";
+    }
   }
 
   async log(count: number = 10): Promise<{ hash: string; message: string; date: string }[]> {
@@ -121,8 +133,10 @@ export class GitOperations {
     }));
   }
 
-  async hasChanges(): Promise<boolean> {
-    const status = await this.git.status();
+  async hasChanges(includeUntracked = true): Promise<boolean> {
+    const status = includeUntracked
+      ? await this.git.status()
+      : await this.git.status(["--untracked-files=no"]);
     return !status.isClean();
   }
 

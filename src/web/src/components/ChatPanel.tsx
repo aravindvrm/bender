@@ -37,6 +37,28 @@ function parseErrorMessage(error: unknown): string {
   return String(error);
 }
 
+type ClientLogLevel = "debug" | "info" | "warn" | "error";
+
+function postClientLog(
+  level: ClientLogLevel,
+  component: string,
+  message: string,
+  data?: Record<string, unknown>,
+): void {
+  void fetch("/api/logs/client", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      level,
+      component,
+      message,
+      ...(data ? { data } : {}),
+    }),
+  }).catch(() => {
+    // Best-effort diagnostics only.
+  });
+}
+
 function summarizeValue(value: unknown, maxChars = 320): string {
   if (value === null || value === undefined) return "";
   const text = typeof value === "string"
@@ -263,6 +285,14 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     setDraft("");
     setSending(true);
     setError(null);
+    const requestId = safeNowId();
+    postClientLog("info", "chat-panel", "Chat request started", {
+      requestId,
+      threadId: activeThread.id,
+      messageId: userMessage.id,
+      messageLength: text.length,
+      outgoingMessageCount: outgoingMessages.length,
+    });
 
     try {
       const transport = new DefaultChatTransport<UIMessage>({
@@ -276,7 +306,11 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         abortSignal: undefined,
       });
 
+      let partialCount = 0;
+      let assistantPartialCount = 0;
       for await (const partial of readUIMessageStream<UIMessage>({ stream })) {
+        partialCount += 1;
+        if (partial.role === "assistant") assistantPartialCount += 1;
         setMessages((prev) => {
           const existingIdx = prev.findIndex((message) => message.id === partial.id);
           if (existingIdx === -1) {
@@ -288,9 +322,40 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         });
       }
 
+      if (assistantPartialCount === 0) {
+        postClientLog("warn", "chat-panel", "Chat stream ended without assistant output", {
+          requestId,
+          threadId: activeThread.id,
+          partialCount,
+          outgoingMessageCount: outgoingMessages.length,
+        });
+        const refreshed = await fetchJson<{ messages: UIMessage[] }>(
+          `/api/chat/threads/${encodeURIComponent(activeThread.id)}/messages`,
+        );
+        const refreshedMessages = refreshed.messages ?? [];
+        const hasAssistantReply = refreshedMessages.some((message) => message.role === "assistant");
+        setMessages(refreshedMessages);
+        if (!hasAssistantReply) {
+          throw new Error("No assistant response was produced. Check /api/logs for details.");
+        }
+      } else {
+        postClientLog("info", "chat-panel", "Chat stream completed", {
+          requestId,
+          threadId: activeThread.id,
+          partialCount,
+          assistantPartialCount,
+        });
+      }
+
       await loadThreads();
     } catch (err) {
-      setError(parseErrorMessage(err));
+      const errorText = parseErrorMessage(err);
+      setError(errorText);
+      postClientLog("error", "chat-panel", "Chat request failed", {
+        requestId,
+        threadId: activeThread.id,
+        error: errorText,
+      });
     } finally {
       setSending(false);
     }

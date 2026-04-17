@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -101,6 +101,7 @@ describe("api contract baseline", () => {
 
   it("preserves /api/project/open and /api/project/select behavior", async () => {
     const openTarget = join(tempWorkspace, "project-a");
+    await mkdir(openTarget, { recursive: true });
     const openRes = await fetch(`${baseUrl}/api/project/open`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -127,6 +128,7 @@ describe("api contract baseline", () => {
 
   it("applies /api/config writes to active project scope", async () => {
     const projectPath = join(tempWorkspace, "project-scope-config");
+    await mkdir(projectPath, { recursive: true });
     const openRes = await fetch(`${baseUrl}/api/project/open`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

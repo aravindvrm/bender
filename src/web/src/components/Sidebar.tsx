@@ -58,14 +58,6 @@ function llmProviderLabel(llm: ProjectState["config"]["llm"] | null | undefined)
   return displayProviderName([...providers][0] ?? fallback);
 }
 
-function deriveFrameworkFromArchitecture(architecture: string | null | undefined): string | null {
-  if (!architecture) return null;
-  // Accept "Framework: X" and markdown variants like "- **Framework**: X"
-  const match = architecture.match(/^\s*(?:[-*]\s*)?(?:\*\*)?\s*framework\s*(?:\*\*)?\s*:\s*(.+)$/im);
-  const value = match?.[1]?.trim();
-  return value ? value.replace(/\*\*/g, "").replace(/`/g, "") : null;
-}
-
 function countCompletedInCurrentTasks(currentTasks: string | null | undefined): number {
   if (!currentTasks) return 0;
   const matches = currentTasks.match(/^\s*[-*]\s*\[(?:x|X)\]\s+/gm);
@@ -86,7 +78,7 @@ interface SidebarProps {
   activeView: View;
   onViewChange: (view: View) => void;
   state: ProjectState | null;
-  onProjectChange: () => void;
+  onProjectChange: () => Promise<void> | void;
   onGlobalAction: (action: "new-project" | "analyze") => void;
   operationStatus?: OperationStatus;
   operationLabel?: string | null;
@@ -106,7 +98,6 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
   const completedFromCurrent = countCompletedInCurrentTasks(state?.currentTasks);
   const completedCount = Math.max(completedFromFiles, completedFromCurrent);
   const decisionCount = state?.decisions?.length ?? 0;
-  const framework = deriveFrameworkFromArchitecture(state?.architecture) ?? state?.config?.stack?.framework ?? "—";
   const llmProvider = llmProviderLabel(state?.config?.llm);
   const projectName = state?.projectRoot?.split(/[\\/]/).filter(Boolean).pop() ?? "No Project";
   const hasProject = !!state?.projectRoot;
@@ -209,9 +200,10 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
 
         {/* Project header */}
         <div className="px-4 pt-2 pb-2 border-b border-zinc-800/60">
-          <img src="/bender_logo_alpha.png" alt="Bender" className="h-6 w-auto mb-1" />
-          <p className="text-[10px] font-medium text-zinc-600 uppercase tracking-widest mb-1">Project</p>
-          <p className="text-sm font-semibold text-zinc-100 truncate">{projectName}</p>
+          <p className="font-bender-brand text-[16px] leading-none tracking-[0.08em] text-zinc-400/85 mb-1 select-none">
+            Bender
+          </p>
+          <p className="text-sm font-medium text-zinc-600 truncate">{projectName}</p>
         </div>
 
         {/* Project nav */}
@@ -273,13 +265,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
           {state?.config ? (
             <>
               <div className="flex items-center justify-between">
-                <span className="text-[11px] text-zinc-600">Stack</span>
-                <span className="text-[11px] text-zinc-400 truncate max-w-[120px] text-right">
-                  {framework}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-zinc-600">LLM</span>
+                <span className="text-[11px] text-zinc-600">LLM Provider</span>
                 <span className="text-[11px] text-zinc-400">
                   {llmProvider}
                 </span>

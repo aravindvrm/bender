@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { addToRegistry, readRegistry, removeFromRegistry } from "../../state/registry.js";
 import type { ProjectEntry } from "../../state/registry.js";
 
@@ -21,12 +21,11 @@ export async function selectExistingProject(normalizedPath: string): Promise<str
 
 export async function openProjectDirectory(normalizedPath: string): Promise<string> {
   if (!existsSync(normalizedPath)) {
-    await mkdir(normalizedPath, { recursive: true });
-  } else {
-    const dirStat = await stat(normalizedPath);
-    if (!dirStat.isDirectory()) {
-      throw new Error("Path is not a directory");
-    }
+    throw new Error("Directory does not exist");
+  }
+  const dirStat = await stat(normalizedPath);
+  if (!dirStat.isDirectory()) {
+    throw new Error("Path is not a directory");
   }
   await addToRegistry(normalizedPath);
   return normalizedPath;

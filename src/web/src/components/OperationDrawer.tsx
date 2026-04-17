@@ -7,13 +7,11 @@ import {
   FolderOpen,
   X,
   Terminal as TerminalIcon,
-  GitCompare,
   Info,
   MessageSquare,
 } from "lucide-react";
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
 import { LoadingDots } from "./LoadingDots";
-import { GitDiffViewer } from "./GitDiffViewer";
 import { SecretInput } from "./SecretInput";
 import { ChatPanel } from "./ChatPanel";
 import { roleLabel, roleSummary, type BaseRole } from "../lib/roleLabels";
@@ -261,14 +259,10 @@ export function OperationDrawer({
   onSubmitInit,
   onSubmitPlan,
 }: OperationDrawerProps) {
-  const [activeTab, setActiveTab] = useState<"console" | "diff" | "terminal" | "chat">("console");
+  const [activeTab, setActiveTab] = useState<"console" | "terminal" | "chat">("console");
   const [collapsed, setCollapsed] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(288);
   const [isResizing, setIsResizing] = useState(false);
-  const [diffCommits, setDiffCommits] = useState(1);
-  const [diffRaw, setDiffRaw] = useState<string | null>(null);
-  const [diffLoading, setDiffLoading] = useState(false);
-  const [diffError, setDiffError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const resizeStartYRef = useRef(0);
   const resizeStartHeightRef = useRef(288);
@@ -306,30 +300,6 @@ export function OperationDrawer({
       setActiveTab("console");
     }
   }, [status]);
-
-  useEffect(() => {
-    if (activeTab !== "diff") return;
-    if (!currentProjectPath) return;
-    let cancelled = false;
-    setDiffLoading(true);
-    setDiffError(null);
-    fetch(`/api/git/diff?commits=${diffCommits}`)
-      .then(async (r) => {
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error ?? "Failed to load diff");
-        if (cancelled) return;
-        setDiffRaw(data.diff ?? null);
-        setDiffLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setDiffError((err as Error).message);
-        setDiffLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab, diffCommits, currentProjectPath, status]);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -429,17 +399,6 @@ export function OperationDrawer({
               Console
             </button>
             <button
-              onClick={() => setActiveTab("diff")}
-              className={`px-3 h-full rounded-none text-[11px] transition-colors flex items-center gap-1 ${
-                activeTab === "diff"
-                  ? "text-zinc-100 bg-zinc-900"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
-              }`}
-            >
-              <GitCompare className="h-3 w-3" />
-              Diff
-            </button>
-            <button
               onClick={() => setActiveTab("terminal")}
               className={`px-3 h-full rounded-none text-[11px] transition-colors flex items-center gap-1 ${
                 activeTab === "terminal"
@@ -525,38 +484,6 @@ export function OperationDrawer({
               />
             ))}
             <div ref={bottomRef} />
-          </div>
-        )}
-
-        {!collapsed && activeTab === "diff" && (
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            {!currentProjectPath && (
-              <p className="text-sm text-zinc-600">No project selected.</p>
-            )}
-            {currentProjectPath && (
-              <>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-zinc-500">Show latest diff for</span>
-                  {[1, 2, 3, 5].map((n) => (
-                    <button
-                      key={n}
-                      onClick={() => setDiffCommits(n)}
-                      className={`px-2.5 py-1 rounded text-xs border transition-colors ${
-                        diffCommits === n
-                          ? "bg-zinc-700 border-zinc-500 text-zinc-100"
-                          : "bg-transparent border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
-                      }`}
-                    >
-                      {n} commit{n > 1 ? "s" : ""}
-                    </button>
-                  ))}
-                </div>
-                {diffLoading && <LoadingDots size={20} label="Loading diff…" textClassName="text-sm text-zinc-500" />}
-                {diffError && <p className="text-sm text-red-400/80">{diffError}</p>}
-                {!diffLoading && !diffError && !diffRaw && <p className="text-sm text-zinc-500">No diff available.</p>}
-                {!diffLoading && diffRaw && <GitDiffViewer raw={diffRaw} />}
-              </>
-            )}
           </div>
         )}
       </div>

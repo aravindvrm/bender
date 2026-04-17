@@ -1,7 +1,8 @@
 import { appendFile } from "node:fs/promises";
 import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { getBenderHomePath } from "./state/paths.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export type SinkLevel = LogLevel | "none";
@@ -152,6 +153,18 @@ export function createLogger(
       } catch {
         // ignore; appendFile fallback is also best-effort
       }
+    }
+  } else {
+    const homeLogPath = getBenderHomePath("bender.log");
+    const homeDir = dirname(homeLogPath);
+    try {
+      if (!existsSync(homeDir)) {
+        mkdirSync(homeDir, { recursive: true });
+      }
+      logFile = homeLogPath;
+    } catch {
+      // ignore and continue without file sink
+      logFile = null;
     }
   }
   return new Logger(component, logFile, sink ?? null, opts);

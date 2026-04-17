@@ -115,6 +115,31 @@ describe("api route edge validations (project selected)", () => {
     expect(body.ok).toBe(true);
   });
 
+  it("falls back to home logs when current project has no .bender log root", async () => {
+    const marker = `project-open-home-log-${Date.now()}`;
+    const postRes = await fetch(`${baseUrl}/api/logs/client`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        component: "project-selector",
+        level: "error",
+        message: marker,
+        data: { scenario: "no-project-log-root" },
+      }),
+    });
+    expect(postRes.ok).toBe(true);
+
+    const entry = await waitForLog(
+      baseUrl,
+      (log) => (
+        log.component === "ui:project-selector"
+        && log.message === marker
+      ),
+    );
+    expect(entry.level).toBe("error");
+    expect(entry.data?.scenario).toBe("no-project-log-root");
+  });
+
   it("persists API request logs with status and path metadata", async () => {
     await mkdir(join(tempProject, ".bender"), { recursive: true });
     const failingRes = await fetch(`${baseUrl}/api/run/plan`, {
@@ -262,12 +287,14 @@ describe("api route edge validations (project selected)", () => {
 
 describe("api route edge validations (no project selected)", () => {
   let tempBenderHome = "";
+  let tempWorkspace = "";
   let server: HttpServer | null = null;
   let baseUrl = "";
 
   beforeAll(async () => {
     vi.resetModules();
     tempBenderHome = await mkdtemp(join(tmpdir(), "bender-api-routes-home-noproject-"));
+    tempWorkspace = await mkdtemp(join(tmpdir(), "bender-api-routes-workspace-noproject-"));
     process.env.BENDER_HOME_DIR = tempBenderHome;
 
     const { startServer } = await import("../../src/cli/server.js");
@@ -288,6 +315,9 @@ describe("api route edge validations (no project selected)", () => {
     if (tempBenderHome) {
       await rm(tempBenderHome, { recursive: true, force: true });
     }
+    if (tempWorkspace) {
+      await rm(tempWorkspace, { recursive: true, force: true });
+    }
     delete process.env.BENDER_HOME_DIR;
   });
 
@@ -306,5 +336,113 @@ describe("api route edge validations (no project selected)", () => {
     expect(taskIssueRes.status).toBe(400);
     const taskIssueBody = await taskIssueRes.json() as { error?: string };
     expect(taskIssueBody.error).toBe("No project selected");
+  });
+
+  it("surfaces stale project-open failure, then recovers on valid path with logs", async () => {
+    const missingPath = join(tempWorkspace, "missing-project");
+    const validPath = join(tempWorkspace, "valid-project");
+    await mkdir(validPath, { recursive: true });
+
+    const uiStartMissing = `Project open started stale ${Date.now()}`;
+    const uiFailMissing = `Project open failed stale ${Date.now()}`;
+    const uiStartValid = `Project open started valid ${Date.now()}`;
+    const uiSuccessValid = `Project open succeeded valid ${Date.now()}`;
+
+    const postClientLog = async (level: "info" | "error", message: string, path: string) => {
+      const res = await fetch(`${baseUrl}/api/logs/client`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          component: "project-selector",
+          level,
+          message,
+          data: { path },
+        }),
+      });
+      expect(res.ok).toBe(true);
+    };
+
+    await postClientLog("info", uiStartMissing, missingPath);
+    const openMissing = await fetch(`${baseUrl}/api/project/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: missingPath }),
+    });
+    expect(openMissing.status).toBe(400);
+    const openMissingBody = await openMissing.json() as { error?: string };
+    expect(openMissingBody.error).toBe("Directory does not exist");
+    await postClientLog("error", uiFailMissing, missingPath);
+
+    await postClientLog("info", uiStartValid, validPath);
+    const openValid = await fetch(`${baseUrl}/api/project/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: validPath }),
+    });
+    expect(openValid.ok).toBe(true);
+    const openValidBody = await openValid.json() as { ok?: boolean; path?: string };
+    expect(openValidBody.ok).toBe(true);
+    expect(openValidBody.path).toBe(validPath);
+    await postClientLog("info", uiSuccessValid, validPath);
+
+    const projectRes = await fetch(`${baseUrl}/api/project`);
+    expect(projectRes.ok).toBe(true);
+    const projectBody = await projectRes.json() as { path?: string | null };
+    expect(projectBody.path).toBe(validPath);
+
+    const apiFailLog = await waitForLog(
+      baseUrl,
+      (log) => (
+        log.component === "api:projects"
+        && log.message === "Failed to open project path"
+        && log.data?.inputPath === missingPath
+      ),
+    );
+    expect(apiFailLog.level).toBe("error");
+
+    const apiSuccessLog = await waitForLog(
+      baseUrl,
+      (log) => (
+        log.component === "api:projects"
+        && log.message === "Project opened"
+        && log.data?.normalizedPath === validPath
+      ),
+    );
+    expect(apiSuccessLog.level).toBe("info");
+
+    const uiFailLog = await waitForLog(
+      baseUrl,
+      (log) => (
+        log.component === "ui:project-selector"
+        && log.message === uiFailMissing
+        && log.data?.path === missingPath
+      ),
+    );
+    expect(uiFailLog.level).toBe("error");
+
+    const uiSuccessLog = await waitForLog(
+      baseUrl,
+      (log) => (
+        log.component === "ui:project-selector"
+        && log.message === uiSuccessValid
+        && log.data?.path === validPath
+      ),
+    );
+    expect(uiSuccessLog.level).toBe("info");
+  });
+
+  it("returns clear error for missing path on project open instead of hanging", async () => {
+    const missingPath = join(tempWorkspace, "definitely-missing-path");
+    const startedAt = Date.now();
+    const res = await fetch(`${baseUrl}/api/project/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: missingPath }),
+    });
+    const elapsedMs = Date.now() - startedAt;
+    expect(res.status).toBe(400);
+    expect(elapsedMs).toBeLessThan(5_000);
+    const body = await res.json() as { error?: string };
+    expect(body.error).toBe("Directory does not exist");
   });
 });

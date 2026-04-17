@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer as createNetServer } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import type { Server as HttpServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DefaultChatTransport, isTextUIPart, readUIMessageStream, type UIMessage } from "ai";
@@ -120,6 +120,7 @@ describe("api chat integration", () => {
     baseUrl = `http://127.0.0.1:${port}`;
 
     const projectPath = join(tempWorkspace, "project-chat");
+    await mkdir(projectPath, { recursive: true });
     const openRes = await fetch(`${baseUrl}/api/project/open`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

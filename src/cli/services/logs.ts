@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import type { LogEntry, LogLevel } from "../../logger.js";
+import { getBenderHomePath } from "../../state/paths.js";
 
 function parseLogEntries(raw: string, limit?: number): LogEntry[] {
   const lines = raw.split("\n").filter(Boolean);
@@ -88,6 +89,18 @@ export async function readStructuredLogsFiltered(
   return { entries: filtered.slice(-bounded) };
 }
 
+export async function readHomeStructuredLogsFiltered(
+  opts: ReadStructuredLogsOptions = {},
+): Promise<{ entries: LogEntry[] }> {
+  const logPath = getBenderHomePath("bender.log");
+  if (!existsSync(logPath)) return { entries: [] };
+  const raw = await readFile(logPath, "utf-8");
+  const all = parseLogEntries(raw);
+  const filtered = all.filter((entry) => matchesFilter(entry, opts));
+  const bounded = Math.min(500, Math.max(1, opts.limit ?? 200));
+  return { entries: filtered.slice(-bounded) };
+}
+
 export async function readSessionUsage(
   currentProject: string | null,
   startedAtMs: number,
@@ -108,9 +121,20 @@ export async function readSessionUsage(
     lastUpdatedAt: null as string | null,
   };
 
-  if (!currentProject) return base;
-  const logPath = join(currentProject, ".bender", "bender.log");
-  if (!existsSync(logPath)) return base;
+  let logPath: string | null = null;
+  if (currentProject) {
+    const candidate = join(currentProject, ".bender", "bender.log");
+    if (existsSync(candidate)) {
+      logPath = candidate;
+    }
+  }
+  if (!logPath) {
+    const homeLogPath = getBenderHomePath("bender.log");
+    if (existsSync(homeLogPath)) {
+      logPath = homeLogPath;
+    }
+  }
+  if (!logPath) return base;
 
   const raw = await readFile(logPath, "utf-8");
   const usage = aggregateTokenUsage(parseLogEntries(raw), startedAtMs);

@@ -3,6 +3,16 @@ import { StateManager, type TaskGitHubLink } from "../../state/manager.js";
 import { GitOperations } from "../../git/operations.js";
 import { taskSlugFromTitle, parseGitHubRepoFullName } from "./github-utils.js";
 
+const STATE_GIT_TIMEOUT_MS = 3_500;
+
+async function safeGit<T>(run: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await run();
+  } catch {
+    return fallback;
+  }
+}
+
 export async function getProjectState(projectRoot: string): Promise<Record<string, unknown>> {
   const state = new StateManager(projectRoot);
 
@@ -27,13 +37,13 @@ export async function getProjectState(projectRoot: string): Promise<Record<strin
   let inferredRepoFullName: string | undefined;
 
   try {
-    const gitOps = new GitOperations(projectRoot);
+    const gitOps = new GitOperations(projectRoot, { timeoutMs: STATE_GIT_TIMEOUT_MS });
     if (await gitOps.isRepo()) {
-      const branch = await gitOps.getCurrentBranch();
-      const clean = !(await gitOps.hasChanges());
-      const recentCommits = await gitOps.log(5);
+      const branch = await safeGit(() => gitOps.getCurrentBranch(), "HEAD");
+      const clean = await safeGit(async () => !(await gitOps.hasChanges(false)), false);
+      const recentCommits = await safeGit(() => gitOps.log(5), []);
       git = { branch, clean, recentCommits };
-      const remotes = await gitOps.getRemotes();
+      const remotes = await safeGit(() => gitOps.getRemotes(), []);
       const origin = remotes.find((r) => r.name === "origin");
       if (origin?.fetch) {
         inferredRepoFullName = parseGitHubRepoFullName(origin.fetch) ?? undefined;

@@ -1,5 +1,9 @@
 import type { Express } from "express";
-import { readSessionUsage, readStructuredLogsFiltered } from "../services/logs.js";
+import {
+  readHomeStructuredLogsFiltered,
+  readSessionUsage,
+  readStructuredLogsFiltered,
+} from "../services/logs.js";
 import { createLogger, resolveExistingProjectLogRoot } from "../../logger.js";
 
 interface LogsRouteDeps {
@@ -15,7 +19,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function registerLogRoutes(app: Express, deps: LogsRouteDeps): void {
   app.get("/api/logs", async (req, res) => {
     try {
-      const projectRoot = deps.getProject();
       const limit = Math.min(500, parseInt((req.query.limit as string) ?? "200", 10) || 200);
       const rawLevel = typeof req.query.level === "string" ? req.query.level.toLowerCase() : "";
       const level = (
@@ -32,13 +35,22 @@ export function registerLogRoutes(app: Express, deps: LogsRouteDeps): void {
         ? Number.parseInt(req.query.sinceMs, 10)
         : Number.NaN;
       const sinceMs = Number.isFinite(sinceMsRaw) ? sinceMsRaw : undefined;
-      const payload = await readStructuredLogsFiltered(projectRoot, {
-        limit,
-        level,
-        ...(component ? { component } : {}),
-        ...(contains ? { contains } : {}),
-        ...(sinceMs ? { sinceMs } : {}),
-      });
+      const projectRoot = resolveExistingProjectLogRoot(deps.getCurrentProject());
+      const payload = projectRoot
+        ? await readStructuredLogsFiltered(projectRoot, {
+          limit,
+          level,
+          ...(component ? { component } : {}),
+          ...(contains ? { contains } : {}),
+          ...(sinceMs ? { sinceMs } : {}),
+        })
+        : await readHomeStructuredLogsFiltered({
+          limit,
+          level,
+          ...(component ? { component } : {}),
+          ...(contains ? { contains } : {}),
+          ...(sinceMs ? { sinceMs } : {}),
+        });
       res.json(payload);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -48,7 +60,7 @@ export function registerLogRoutes(app: Express, deps: LogsRouteDeps): void {
   app.get("/api/usage/session", async (_req, res) => {
     try {
       const payload = await readSessionUsage(
-        deps.getCurrentProject(),
+        resolveExistingProjectLogRoot(deps.getCurrentProject()),
         deps.sessionStartedAtMs,
       );
       res.json(payload);

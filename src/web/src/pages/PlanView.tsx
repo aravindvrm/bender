@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ProjectState } from "../hooks/useApi";
+import { MarkdownView } from "../components/MarkdownView";
 import { Play, Sparkles, Search, ChevronDown, Lock, Pencil, Trash2, Save, X, GitBranch } from "lucide-react";
 import { GitHubIssueImportDialog } from "../components/GitHubIssueImportDialog";
 
@@ -64,6 +65,17 @@ function parseTasks(markdown: string): ParsedTask[] {
 
 function isTaskCompleted(taskId: number, completedTasks: { name: string; content: string }[]): boolean {
   return completedTasks.some((t) => t.content.includes(`Task ${taskId}:`));
+}
+
+function getTaskCompletionProof(taskId: number, completedTasks: { name: string; content: string }[]): string | null {
+  const pattern = new RegExp(`\\bTask\\s*${taskId}\\s*:`, "i");
+  for (let i = completedTasks.length - 1; i >= 0; i -= 1) {
+    const entry = completedTasks[i];
+    if (pattern.test(entry.content)) {
+      return entry.content.trim();
+    }
+  }
+  return null;
 }
 
 function parseDependencyIds(depStr: string): number[] {
@@ -170,6 +182,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
     ...task,
     completed: isTaskCompleted(task.id, state.completedTasks),
     runStatus: getTaskRunStatus(task, state.completedTasks),
+    completionProof: getTaskCompletionProof(task.id, state.completedTasks),
     assignedAgentId: taskAgents[String(task.id)] ?? "",
     githubLink: taskGitHubLinks[String(task.id)] ?? null,
   }));
@@ -462,7 +475,13 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
 }
 
 interface TaskRowProps {
-  task: ParsedTask & { completed: boolean; runStatus: TaskRunStatus; assignedAgentId: string; githubLink: TaskGitHubLink | null };
+  task: ParsedTask & {
+    completed: boolean;
+    runStatus: TaskRunStatus;
+    completionProof: string | null;
+    assignedAgentId: string;
+    githubLink: TaskGitHubLink | null;
+  };
   allTasks: (ParsedTask & { completed: boolean })[];
   agents: AgentOption[];
   assigning: boolean;
@@ -529,6 +548,14 @@ function TaskRow({
     setDraftRepoFullName(task.githubLink?.repoFullName ?? "");
     setDraftBranchName(task.githubLink?.branchName ?? "");
   }, [task.id, task.title, task.description, task.dependencies, task.criteria, task.githubLink?.repoFullName, task.githubLink?.branchName]);
+
+  const showMutableControls = !task.completed;
+
+  useEffect(() => {
+    if (task.completed) {
+      setEditing(false);
+    }
+  }, [task.completed]);
 
   return (
     <>
@@ -602,7 +629,7 @@ function TaskRow({
       {/* Expanded detail panel */}
       {expanded && (
         <div className={`px-4 pb-4 pt-1 bg-zinc-900/40 space-y-3 ${!isLast ? "border-b border-zinc-800/60" : ""}`}>
-          {editing ? (
+          {showMutableControls && editing ? (
             <div className="ml-6 space-y-2">
               <input
                 value={draftTitle}
@@ -679,184 +706,201 @@ function TaskRow({
             </div>
           )}
 
-          <div className="ml-6 flex items-center gap-2">
-            <p className="text-xs text-zinc-600">Agent</p>
-            <div className="relative">
-              <select
-                value={task.assignedAgentId}
-                onChange={(e) => onAssignAgent(e.target.value)}
-                disabled={assigning}
-                className="select-flat pl-2 pr-7 py-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <option value="">Default Implementer</option>
-                {agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name} ({agent.modelTier})
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
-            </div>
-            {assigning && <span className="text-[11px] text-zinc-500">Saving…</span>}
-          </div>
-
-          <div className="ml-6 space-y-2 pt-1">
-            <p className="text-xs text-zinc-600">GitHub Linkage</p>
-            <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2 max-w-3xl">
-              <input
-                value={draftRepoFullName}
-                onChange={(e) => setDraftRepoFullName(e.target.value)}
-                className="select-flat px-3 py-1.5 text-xs font-mono"
-                placeholder="owner/repo"
-              />
-              <input
-                value={draftBranchName}
-                onChange={(e) => setDraftBranchName(e.target.value)}
-                className="select-flat px-3 py-1.5 text-xs font-mono"
-                placeholder="task/123-short-name"
-              />
-              <button
-                disabled={savingGitHubLink}
-                onClick={async () => {
-                  setSavingGitHubLink(true);
-                  try {
-                    await onSaveGitHubLink({
-                      repoFullName: draftRepoFullName.trim() || undefined,
-                      branchName: draftBranchName.trim() || undefined,
-                    });
-                  } finally {
-                    setSavingGitHubLink(false);
-                  }
-                }}
-                className="px-2 py-1 text-xs border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
-              >
-                {savingGitHubLink ? "Saving..." : "Save Link"}
-              </button>
-            </div>
-            <div className="flex items-center flex-wrap gap-2 text-xs">
-              <button
-                disabled={creatingIssue}
-                onClick={async () => {
-                  setCreatingIssue(true);
-                  try {
-                    await onCreateIssue(draftRepoFullName.trim() || undefined);
-                  } finally {
-                    setCreatingIssue(false);
-                  }
-                }}
-                className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
-              >
-                {creatingIssue ? "Creating issue..." : "Create Linked Issue"}
-              </button>
-              <button
-                disabled={creatingBranch}
-                onClick={async () => {
-                  setCreatingBranch(true);
-                  try {
-                    await onCreateBranch(draftBranchName.trim() || undefined);
-                  } finally {
-                    setCreatingBranch(false);
-                  }
-                }}
-                className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
-              >
-                {creatingBranch ? "Switching..." : "Create/Switch Branch"}
-              </button>
-              <button
-                disabled={creatingPR}
-                onClick={async () => {
-                  setCreatingPR(true);
-                  try {
-                    await onCreatePR(draftRepoFullName.trim() || undefined, draftBranchName.trim() || undefined);
-                  } finally {
-                    setCreatingPR(false);
-                  }
-                }}
-                className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
-              >
-                {creatingPR ? "Opening PR..." : "Open PR"}
-              </button>
-              {task.githubLink?.issueUrl && (
-                <a
-                  href={task.githubLink.issueUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-zinc-400 hover:text-zinc-200 underline decoration-zinc-700 underline-offset-2"
-                >
-                  Issue #{task.githubLink.issueNumber ?? "?"}
-                </a>
-              )}
-              {task.githubLink?.prUrl && (
-                <a
-                  href={task.githubLink.prUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-zinc-400 hover:text-zinc-200 underline decoration-zinc-700 underline-offset-2"
-                >
-                  PR #{task.githubLink.prNumber ?? "?"}
-                </a>
+          {task.completed && (
+            <div className="ml-6 space-y-2">
+              <p className="text-xs text-zinc-600">Result / Acceptance Proof</p>
+              {task.completionProof ? (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-3">
+                  <MarkdownView content={task.completionProof} className="text-xs" />
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500">No completion proof recorded.</p>
               )}
             </div>
-          </div>
+          )}
 
-          <div className="ml-6 flex items-center gap-2 pt-1">
-            {!editing ? (
-              <>
-                <button
-                  onClick={() => setEditing(true)}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-300 hover:bg-zinc-800"
-                >
-                  <Pencil className="h-3 w-3" />
-                  Edit
-                </button>
-                <button
-                  onClick={onDelete}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-red-900/60 text-red-300 hover:bg-red-950/30"
-                >
-                  <Trash2 className="h-3 w-3" />
-                  Delete
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  disabled={saving || !draftTitle.trim()}
-                  onClick={async () => {
-                    setSaving(true);
-                    try {
-                      await onSaveEdits({
-                        title: draftTitle.trim(),
-                        description: draftDescription.trim(),
-                        dependencies: draftDependencies.trim() || "None",
-                        criteria: draftCriteria.trim(),
-                      });
-                      setEditing(false);
-                    } finally {
-                      setSaving(false);
-                    }
-                  }}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  <Save className="h-3 w-3" />
-                  Save
-                </button>
-                <button
-                  disabled={saving}
-                  onClick={() => {
-                    setEditing(false);
-                    setDraftTitle(task.title);
-                    setDraftDescription(task.description);
-                    setDraftDependencies(task.dependencies);
-                    setDraftCriteria(task.criteria);
-                  }}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
-                >
-                  <X className="h-3 w-3" />
-                  Cancel
-                </button>
-              </>
-            )}
-          </div>
+          {showMutableControls && (
+            <>
+              <div className="ml-6 flex items-center gap-2">
+                <p className="text-xs text-zinc-600">Agent</p>
+                <div className="relative">
+                  <select
+                    value={task.assignedAgentId}
+                    onChange={(e) => onAssignAgent(e.target.value)}
+                    disabled={assigning}
+                    className="select-flat pl-2 pr-7 py-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="">Default Implementer</option>
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.name} ({agent.modelTier})
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
+                </div>
+                {assigning && <span className="text-[11px] text-zinc-500">Saving…</span>}
+              </div>
+
+              <div className="ml-6 space-y-2 pt-1">
+                <p className="text-xs text-zinc-600">GitHub Linkage</p>
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2 max-w-3xl">
+                  <input
+                    value={draftRepoFullName}
+                    onChange={(e) => setDraftRepoFullName(e.target.value)}
+                    className="select-flat px-3 py-1.5 text-xs font-mono"
+                    placeholder="owner/repo"
+                  />
+                  <input
+                    value={draftBranchName}
+                    onChange={(e) => setDraftBranchName(e.target.value)}
+                    className="select-flat px-3 py-1.5 text-xs font-mono"
+                    placeholder="task/123-short-name"
+                  />
+                  <button
+                    disabled={savingGitHubLink}
+                    onClick={async () => {
+                      setSavingGitHubLink(true);
+                      try {
+                        await onSaveGitHubLink({
+                          repoFullName: draftRepoFullName.trim() || undefined,
+                          branchName: draftBranchName.trim() || undefined,
+                        });
+                      } finally {
+                        setSavingGitHubLink(false);
+                      }
+                    }}
+                    className="px-2 py-1 text-xs border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {savingGitHubLink ? "Saving..." : "Save Link"}
+                  </button>
+                </div>
+                <div className="flex items-center flex-wrap gap-2 text-xs">
+                  <button
+                    disabled={creatingIssue}
+                    onClick={async () => {
+                      setCreatingIssue(true);
+                      try {
+                        await onCreateIssue(draftRepoFullName.trim() || undefined);
+                      } finally {
+                        setCreatingIssue(false);
+                      }
+                    }}
+                    className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {creatingIssue ? "Creating issue..." : "Create Linked Issue"}
+                  </button>
+                  <button
+                    disabled={creatingBranch}
+                    onClick={async () => {
+                      setCreatingBranch(true);
+                      try {
+                        await onCreateBranch(draftBranchName.trim() || undefined);
+                      } finally {
+                        setCreatingBranch(false);
+                      }
+                    }}
+                    className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {creatingBranch ? "Switching..." : "Create/Switch Branch"}
+                  </button>
+                  <button
+                    disabled={creatingPR}
+                    onClick={async () => {
+                      setCreatingPR(true);
+                      try {
+                        await onCreatePR(draftRepoFullName.trim() || undefined, draftBranchName.trim() || undefined);
+                      } finally {
+                        setCreatingPR(false);
+                      }
+                    }}
+                    className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {creatingPR ? "Opening PR..." : "Open PR"}
+                  </button>
+                  {task.githubLink?.issueUrl && (
+                    <a
+                      href={task.githubLink.issueUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-zinc-400 hover:text-zinc-200 underline decoration-zinc-700 underline-offset-2"
+                    >
+                      Issue #{task.githubLink.issueNumber ?? "?"}
+                    </a>
+                  )}
+                  {task.githubLink?.prUrl && (
+                    <a
+                      href={task.githubLink.prUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-zinc-400 hover:text-zinc-200 underline decoration-zinc-700 underline-offset-2"
+                    >
+                      PR #{task.githubLink.prNumber ?? "?"}
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              <div className="ml-6 flex items-center gap-2 pt-1">
+                {!editing ? (
+                  <>
+                    <button
+                      onClick={() => setEditing(true)}
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                    >
+                      <Pencil className="h-3 w-3" />
+                      Edit
+                    </button>
+                    <button
+                      onClick={onDelete}
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-red-900/60 text-red-300 hover:bg-red-950/30"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      Delete
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      disabled={saving || !draftTitle.trim()}
+                      onClick={async () => {
+                        setSaving(true);
+                        try {
+                          await onSaveEdits({
+                            title: draftTitle.trim(),
+                            description: draftDescription.trim(),
+                            dependencies: draftDependencies.trim() || "None",
+                            criteria: draftCriteria.trim(),
+                          });
+                          setEditing(false);
+                        } finally {
+                          setSaving(false);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      <Save className="h-3 w-3" />
+                      Save
+                    </button>
+                    <button
+                      disabled={saving}
+                      onClick={() => {
+                        setEditing(false);
+                        setDraftTitle(task.title);
+                        setDraftDescription(task.description);
+                        setDraftDependencies(task.dependencies);
+                        setDraftCriteria(task.criteria);
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                    >
+                      <X className="h-3 w-3" />
+                      Cancel
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
     </>

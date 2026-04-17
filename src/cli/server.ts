@@ -165,7 +165,10 @@ export async function startServer(initialProject?: string, port?: number): Promi
     githubApi,
   });
 
-  registerFilesystemRoutes(app, { normalizeUserPath });
+  registerFilesystemRoutes(app, {
+    normalizeUserPath,
+    getCurrentProject: () => currentProject,
+  });
 
   registerLlmRoutes(app, {
     getCurrentProject: () => currentProject,

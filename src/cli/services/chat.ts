@@ -386,6 +386,41 @@ function extractUserMessageText(message: UIMessage): string {
     .trim();
 }
 
+function summarizeResponseMessage(message: UIMessage): {
+  partCount: number;
+  textChars: number;
+  reasoningChars: number;
+  toolParts: number;
+  otherParts: number;
+} {
+  let textChars = 0;
+  let reasoningChars = 0;
+  let toolParts = 0;
+  let otherParts = 0;
+  for (const part of message.parts) {
+    if (part.type === "text") {
+      textChars += part.text.length;
+      continue;
+    }
+    if (part.type === "reasoning") {
+      reasoningChars += part.text.length;
+      continue;
+    }
+    if (part.type.startsWith("tool-")) {
+      toolParts += 1;
+      continue;
+    }
+    otherParts += 1;
+  }
+  return {
+    partCount: message.parts.length,
+    textChars,
+    reasoningChars,
+    toolParts,
+    otherParts,
+  };
+}
+
 function parseKeyValueFields(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const segment of raw.split(";")) {
@@ -917,8 +952,25 @@ export async function streamChatThreadResponse(
 
   const stream = result.toUIMessageStream<UIMessage>({
     originalMessages: uiMessages,
+    onError: (err) => {
+      logError(logger, "Chat stream emitted error", err, {
+        threadId,
+        provider: activeThread.provider,
+        model: activeThread.model,
+      });
+      return `Chat failed: ${parseErrorMessage(err)}`;
+    },
     onFinish: async ({ responseMessage }) => {
       try {
+        const stats = summarizeResponseMessage(responseMessage);
+        if (stats.textChars === 0 && stats.reasoningChars === 0 && stats.toolParts === 0) {
+          logger.warn("Chat stream finished without visible assistant output", {
+            threadId,
+            provider: activeThread.provider,
+            model: activeThread.model,
+            ...stats,
+          });
+        }
         const withMeta = attachMetadata(responseMessage, {
           provider: activeThread.provider,
           model: activeThread.model,
@@ -937,7 +989,7 @@ export async function streamChatThreadResponse(
           threadId,
           provider: activeThread.provider,
           model: activeThread.model,
-          responseParts: responseMessage.parts.length,
+          ...stats,
         });
       } catch (err) {
         logError(logger, "Failed to persist streamed chat response", err, {

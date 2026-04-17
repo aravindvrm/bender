@@ -283,26 +283,132 @@ export interface AnalysisResult {
   architecture: string;
   conventions: string | null;
   schema: string | null;
+  apiContracts: string | null;
+}
+
+interface MarkdownSection {
+  heading: string;
+  level: number;
+  body: string;
+}
+
+function normalizeHeading(heading: string): string {
+  return heading.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function parseMarkdownSections(content: string): MarkdownSection[] {
+  const lines = content.split("\n");
+  const headings: Array<{ index: number; level: number; heading: string }> = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = lines[i].match(/^(#{1,6})\s+(.+)$/);
+    if (!match) continue;
+    headings.push({
+      index: i,
+      level: match[1].length,
+      heading: match[2].trim(),
+    });
+  }
+
+  if (headings.length === 0) return [];
+
+  const sections: MarkdownSection[] = [];
+  for (let i = 0; i < headings.length; i += 1) {
+    const current = headings[i];
+    const next = headings[i + 1];
+    const body = lines.slice(current.index + 1, next ? next.index : lines.length).join("\n").trim();
+    sections.push({
+      heading: current.heading,
+      level: current.level,
+      body,
+    });
+  }
+
+  return sections;
+}
+
+function stripFence(content: string): string {
+  return content
+    .replace(/^\s*```[a-z0-9_-]*\s*\n?/i, "")
+    .replace(/\n?```\s*$/i, "")
+    .trim();
+}
+
+function isEmptySection(content: string | null | undefined): boolean {
+  if (!content) return true;
+  const normalized = content.trim().toLowerCase();
+  return normalized.length === 0
+    || normalized === "none"
+    || normalized === "none found"
+    || normalized === "n/a";
+}
+
+function looksLikeApiHeading(heading: string): boolean {
+  const normalized = normalizeHeading(heading);
+  return normalized === "api"
+    || normalized.startsWith("api ")
+    || normalized.includes(" api")
+    || normalized.includes("api route")
+    || normalized.includes("api contract")
+    || normalized === "routes"
+    || normalized === "endpoints"
+    || normalized === "http routes";
+}
+
+function looksLikeSchemaHeading(heading: string): boolean {
+  const normalized = normalizeHeading(heading);
+  return normalized === "schema"
+    || normalized === "database schema"
+    || normalized === "data model"
+    || normalized === "database";
 }
 
 export function parseAnalysisOutput(output: string): AnalysisResult {
-  // Split on the horizontal rule separating brief from architecture
-  const hrIdx = output.indexOf("\n---\n");
-  const briefSection = hrIdx !== -1 ? output.slice(0, hrIdx).trim() : output;
-  const archSection = hrIdx !== -1 ? output.slice(hrIdx + 5).trim() : "";
+  const normalized = output.replace(/\r\n?/g, "\n").trim();
+  const architectureHeadingMatch = normalized.match(/^#\s+architecture\b.*$/im);
+  const architectureStart = architectureHeadingMatch?.index ?? -1;
 
-  // Extract conventions section from architecture
-  const conventionsMatch = archSection.match(/## Conventions\n([\s\S]*?)(?=\n## |\n# |$)/);
-  const conventions = conventionsMatch ? conventionsMatch[1].trim() : null;
+  let briefSection = normalized;
+  let archSection = "";
 
-  // Extract SQL schema
-  const schemaMatch = archSection.match(/```sql\n([\s\S]*?)```/);
-  const schema = schemaMatch ? schemaMatch[1].trim() : null;
+  if (architectureStart >= 0) {
+    briefSection = normalized.slice(0, architectureStart).trim();
+    archSection = normalized.slice(architectureStart).trim();
+  } else {
+    const hrIdx = normalized.indexOf("\n---\n");
+    briefSection = hrIdx !== -1 ? normalized.slice(0, hrIdx).trim() : normalized;
+    archSection = hrIdx !== -1 ? normalized.slice(hrIdx + 5).trim() : "";
+  }
+
+  const architectureBody = archSection || normalized;
+  const sections = parseMarkdownSections(architectureBody);
+
+  const conventionsSection = sections.find((section) => {
+    const heading = normalizeHeading(section.heading);
+    return heading === "conventions" || heading === "coding conventions";
+  });
+  const conventions = conventionsSection && !isEmptySection(conventionsSection.body)
+    ? conventionsSection.body.trim()
+    : null;
+
+  const schemaSection = sections.find((section) => looksLikeSchemaHeading(section.heading));
+  const schemaFromSection = schemaSection?.body?.trim() ?? "";
+  const schemaFenceInSection = schemaFromSection.match(/```sql\s*\n([\s\S]*?)```/i);
+  const schemaFenceGlobal = architectureBody.match(/```sql\s*\n([\s\S]*?)```/i);
+  const schemaRaw = schemaFenceInSection?.[1]
+    ?? schemaFenceGlobal?.[1]
+    ?? schemaFromSection;
+  const schema = !isEmptySection(schemaRaw) ? stripFence(schemaRaw) : null;
+
+  const apiSection = sections.find((section) => looksLikeApiHeading(section.heading));
+  const apiBody = apiSection?.body?.trim() ?? "";
+  const apiContracts = !isEmptySection(apiBody) ? stripFence(apiBody) : null;
 
   return {
-    brief: briefSection,
-    architecture: archSection || briefSection,
+    brief: briefSection || normalized,
+    architecture: architectureBody,
     conventions,
     schema,
+    apiContracts,
   };
 }
