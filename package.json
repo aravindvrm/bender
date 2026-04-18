@@ -1,8 +1,10 @@
 {
   "name": "bender",
+  "productName": "Bender",
   "version": "0.1.0",
   "description": "AI-powered software factory — turns messy product ideas into maintainable codebases",
   "type": "module",
+  "main": "dist/desktop/main.js",
   "bin": {
     "bender": "./dist/cli/index.js"
   },
@@ -16,8 +18,13 @@
     "desktop:start": "npm run build && electron dist/desktop/main.js",
     "desktop:dev": "npm run desktop:start",
     "desktop:backend": "npm run build:cli && node dist/desktop/backend.js",
+    "desktop:pack:dmg": "npm run build && npx electron-builder@26.0.12 --mac dmg --publish never",
+    "desktop:pack:dir": "npm run build && npx electron-builder@26.0.12 --mac dir --publish never",
     "open": "npm run bend",
     "start": "node dist/cli/index.js",
+    "version:patch": "npm version patch -m \"chore(release): %s\"",
+    "version:minor": "npm version minor -m \"chore(release): %s\"",
+    "version:major": "npm version major -m \"chore(release): %s\"",
     "test": "npm run test:harness",
     "test:unit": "vitest run --config vitest.config.ts tests/unit",
     "test:integration": "vitest run --config vitest.config.ts tests/integration",
@@ -40,6 +47,29 @@
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
+  },
+  "build": {
+    "appId": "com.bender.desktop",
+    "productName": "Bender",
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "files": [
+      "dist/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg"
+      ],
+      "icon": "build/icons/icon.icns"
+    }
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.69",

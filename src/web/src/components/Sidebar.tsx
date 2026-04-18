@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import type { ProjectState } from "../hooks/useApi";
 import type { OperationStatus } from "../hooks/useOperation";
 import { ProjectSelector } from "./ProjectSelector";
@@ -46,6 +46,13 @@ function resolveTierProvider(
   return provider || fallback;
 }
 
+function resolveTierModel(
+  value: string | { provider: string; model: string } | undefined,
+): string {
+  if (typeof value === "string") return value.trim() || "—";
+  return value?.model?.trim() || "—";
+}
+
 function llmProviderLabel(llm: ProjectState["config"]["llm"] | null | undefined): string {
   if (!llm) return "—";
   const fallback = llm.provider;
@@ -56,12 +63,6 @@ function llmProviderLabel(llm: ProjectState["config"]["llm"] | null | undefined)
   ].filter(Boolean));
   if (providers.size > 1) return "Mixed";
   return displayProviderName([...providers][0] ?? fallback);
-}
-
-function countCompletedInCurrentTasks(currentTasks: string | null | undefined): number {
-  if (!currentTasks) return 0;
-  const matches = currentTasks.match(/^\s*[-*]\s*\[(?:x|X)\]\s+/gm);
-  return matches?.length ?? 0;
 }
 
 interface TokenStats {
@@ -94,11 +95,19 @@ const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
 
 export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGlobalAction, operationStatus, operationLabel }: SidebarProps) {
   const taskCount = state?.currentTasks?.match(/###\s*Task\s*\d+/g)?.length ?? 0;
-  const completedFromFiles = state?.completedTasks?.length ?? 0;
-  const completedFromCurrent = countCompletedInCurrentTasks(state?.currentTasks);
-  const completedCount = Math.max(completedFromFiles, completedFromCurrent);
   const decisionCount = state?.decisions?.length ?? 0;
   const llmProvider = llmProviderLabel(state?.config?.llm);
+  const tierModels = useMemo(() => {
+    const llm = state?.config?.llm;
+    if (!llm) {
+      return { fast: "—", default: "—", strong: "—" };
+    }
+    return {
+      fast: resolveTierModel(llm.models.fast),
+      default: resolveTierModel(llm.models.default),
+      strong: resolveTierModel(llm.models.strong),
+    };
+  }, [state?.config?.llm]);
   const hasProject = !!state?.projectRoot;
   const isRunning = operationStatus === "running";
 
@@ -269,11 +278,19 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
                   {llmProvider}
                 </span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-zinc-600">Tasks done</span>
-                <span className={`text-[11px] font-medium ${completedCount > 0 ? "text-zinc-100/80" : "text-zinc-500"}`}>
-                  {completedCount}
-                </span>
+              <div className="space-y-0.5 pb-0.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-zinc-600">fast</span>
+                  <span className="text-[10px] text-zinc-500 font-mono truncate max-w-[150px]">{tierModels.fast}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-zinc-600">default</span>
+                  <span className="text-[10px] text-zinc-500 font-mono truncate max-w-[150px]">{tierModels.default}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-zinc-600">strong</span>
+                  <span className="text-[10px] text-zinc-500 font-mono truncate max-w-[150px]">{tierModels.strong}</span>
+                </div>
               </div>
             </>
           ) : hasProject ? (
@@ -291,7 +308,7 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
 
           {state?.git && (
             <div className="flex items-center gap-1.5 pt-1 border-t border-zinc-800/60">
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.git.clean ? "bg-zinc-100" : "bg-amber-400"}`} />
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.git.clean ? "bg-emerald-500" : "bg-amber-400"}`} />
               <span className="text-[11px] text-zinc-600 truncate">{state.git.branch || "main"}</span>
             </div>
           )}

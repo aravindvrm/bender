@@ -928,7 +928,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
                                 <div key={assertion.id} className="rounded border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] text-zinc-300">
                                   <div className="flex items-center justify-between gap-3">
                                     <span>{assertion.metric ?? assertion.type}</span>
-                                    <span className={assertion.pass ? "text-zinc-100" : "text-rose-400"}>
+                                    <span className={assertion.pass ? "text-emerald-400" : "text-rose-400"}>
                                       {assertion.pass ? "pass" : "fail"}
                                     </span>
                                   </div>

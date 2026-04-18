@@ -106,6 +106,15 @@ describe("api route edge validations (project selected)", () => {
     expect(planRes.status).toBe(400);
     const planBody = await planRes.json() as { error?: string };
     expect(planBody.error).toBe("feature is required");
+
+    const guardedPlanRes = await fetch(`${baseUrl}/api/run/plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feature: "Add multi-tenant billing import flow" }),
+    });
+    expect(guardedPlanRes.status).toBe(409);
+    const guardedPlanBody = await guardedPlanRes.json() as { error?: string };
+    expect(guardedPlanBody.error).toContain("Planning pipeline is reserved for new-project init");
   });
 
   it("exposes /api/health for desktop readiness checks", async () => {

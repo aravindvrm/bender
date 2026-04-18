@@ -141,7 +141,12 @@ function isStackHeading(heading: string): boolean {
 
 function isSchemaHeading(heading: string): boolean {
   const normalized = normalizeHeadingTitle(heading);
-  return normalized === "schema" || normalized === "database schema";
+  return normalized === "schema"
+    || normalized === "database schema"
+    || normalized === "data model"
+    || normalized === "database"
+    || normalized === "database and data model"
+    || normalized === "data model and schema";
 }
 
 function isConventionsHeading(heading: string): boolean {
@@ -167,18 +172,48 @@ function isDesignHeading(heading: string): boolean {
     || normalized === "key decisions";
 }
 
+function extractSqlFence(content: string): string | null {
+  const match = content.match(/```sql\s*\r?\n([\s\S]*?)```/i);
+  return match?.[1]?.trim() || null;
+}
+
+function extractMermaidErDiagram(content: string): string | null {
+  const blocks = content.matchAll(/```mermaid\s*\r?\n([\s\S]*?)```/gi);
+  for (const block of blocks) {
+    const chart = block[1]?.trim();
+    if (!chart) continue;
+    if (/\berDiagram\b/i.test(chart)) return chart;
+  }
+  return null;
+}
+
+function stripSchemaCodeBlocks(content: string): string {
+  return content
+    .replace(/```sql\s*\r?\n[\s\S]*?```/gi, "")
+    .replace(/```mermaid\s*\r?\n([\s\S]*?)```/gi, (full, chart: string) =>
+      /\berDiagram\b/i.test(chart) ? "" : full,
+    );
+}
+
+function sectionLooksLikeSchema(section: MarkdownSection): boolean {
+  if (isSchemaHeading(section.heading)) return true;
+  if (extractSqlFence(section.body)) return true;
+  if (extractMermaidErDiagram(section.body)) return true;
+  return false;
+}
+
 function buildOverviewContent(content: string): string {
-  const withoutStackLines = content
+  const withoutStackLines = stripSchemaCodeBlocks(content
     .split("\n")
     .filter((line) => !isStackValueLine(line))
     .join("\n")
-    .trim();
+    .trim());
 
   const { preface, sections } = parseMarkdownSections(withoutStackLines);
   const designSection = sections.find((section) => isDesignHeading(section.heading));
   const filtered = sections.filter((section) =>
     !isStackHeading(section.heading)
-    && !isSchemaHeading(section.heading)
+    && !sectionLooksLikeSchema(section)
     && !isConventionsHeading(section.heading)
     && !isApiHeading(section.heading)
     && !isDesignHeading(section.heading),
@@ -221,7 +256,7 @@ interface ApiRoute {
 }
 
 const METHOD_COLORS: Record<string, string> = {
-  GET:    "bg-zinc-100/15 text-zinc-100 border-zinc-500/30",
+  GET:    "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
   POST:   "bg-blue-500/15 text-blue-400 border-blue-500/30",
   PUT:    "bg-amber-500/15 text-amber-400 border-amber-500/30",
   PATCH:  "bg-amber-500/15 text-amber-400 border-amber-500/30",
@@ -441,7 +476,7 @@ function AuditIssueCard({ issue, onAddAsTask }: { issue: AuditIssue; onAddAsTask
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {added ? (
-            <span className="flex items-center gap-1 text-[11px] text-zinc-100">
+            <span className="flex items-center gap-1 text-[11px] text-emerald-400">
               <CheckCircle2 className="h-3 w-3" /> Added
             </span>
           ) : (
@@ -563,7 +598,7 @@ function AuditTabContent({
             </>
           ) : (
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-6 text-center">
-              <CheckCircle2 className="h-6 w-6 text-zinc-100 mx-auto mb-2" />
+              <CheckCircle2 className="h-6 w-6 text-emerald-400 mx-auto mb-2" />
               <p className="text-sm text-zinc-400">No issues found.</p>
             </div>
           )}
@@ -666,7 +701,37 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
     }
   }, [runOperation]);
 
-  const erDiagram = state.schema ? sqlToErDiagram(state.schema) : null;
+  const architectureContent = state.architecture ?? "";
+  const architectureSections = parseMarkdownSections(architectureContent).sections;
+  const schemaSection = architectureSections.find((section) => sectionLooksLikeSchema(section)) ?? null;
+  const schemaSectionBody = schemaSection?.body?.trim() ?? "";
+  const schemaSourceFromState = state.schema?.trim() ?? "";
+  const schemaSourceFromArchitecture = schemaSectionBody
+    || extractSqlFence(architectureContent)
+    || extractMermaidErDiagram(architectureContent)
+    || "";
+  const schemaSource = schemaSourceFromState || schemaSourceFromArchitecture;
+
+  const erDiagram = (() => {
+    const mermaidFromState = extractMermaidErDiagram(schemaSourceFromState);
+    if (mermaidFromState) return mermaidFromState;
+    const sqlFromState = extractSqlFence(schemaSourceFromState) || (schemaSourceFromState ? stripCodeFence(schemaSourceFromState) : "");
+    if (sqlFromState) {
+      const chart = sqlToErDiagram(sqlFromState);
+      if (chart) return chart;
+    }
+
+    const mermaidFromArchitecture = extractMermaidErDiagram(schemaSectionBody)
+      || extractMermaidErDiagram(architectureContent);
+    if (mermaidFromArchitecture) return mermaidFromArchitecture;
+
+    const sqlFromArchitecture = extractSqlFence(schemaSectionBody)
+      || extractSqlFence(architectureContent);
+    if (sqlFromArchitecture) return sqlToErDiagram(sqlFromArchitecture);
+
+    return null;
+  })();
+  const hasSchemaContent = Boolean(schemaSource || erDiagram);
   const parsedStack = extractStackFromArchitecture(state.architecture ?? "");
   const stackRows: Array<{ label: string; value: string }> = [
     {
@@ -700,7 +765,6 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
       value: normalizeStackValue(parsedStack.deployment),
     });
   }
-  const architectureContent = state.architecture ?? "";
   const overviewContent = buildOverviewContent(architectureContent);
   const apiContent = (() => {
     const direct = state.apiContracts?.trim() ?? "";
@@ -770,7 +834,7 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
 
   const tabs: { id: Tab; label: string; available: boolean }[] = [
     { id: "overview", label: "Architecture", available: !!state.architecture },
-    { id: "schema", label: "Schema", available: !!state.schema },
+    { id: "schema", label: "Schema", available: hasSchemaContent },
     { id: "api", label: "API", available: true },
     { id: "flows", label: "Flows", available: true },
     { id: "decisions", label: `Decisions (${state.decisions.length})`, available: state.decisions.length > 0 },
@@ -816,7 +880,7 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
           </div>
         )}
 
-        {activeTab === "schema" && state.schema && (
+        {activeTab === "schema" && hasSchemaContent && (
           <div className="space-y-6">
             {erDiagram ? (
               <div>
@@ -824,12 +888,16 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
                 <MermaidView chart={erDiagram} />
               </div>
             ) : null}
-            <div>
-              <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-3">SQL Source</h2>
-              <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 overflow-x-auto text-sm leading-relaxed">
-                <code className="text-zinc-300">{stripCodeFence(state.schema)}</code>
-              </pre>
-            </div>
+            {schemaSource && (
+              <div>
+                <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-3">
+                  {extractMermaidErDiagram(schemaSource) ? "Schema Source (Mermaid ER)" : "Schema Source"}
+                </h2>
+                <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 overflow-x-auto text-sm leading-relaxed">
+                  <code className="text-zinc-300">{stripCodeFence(schemaSource)}</code>
+                </pre>
+              </div>
+            )}
           </div>
         )}
 

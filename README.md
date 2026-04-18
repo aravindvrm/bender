@@ -83,6 +83,12 @@ npm run bend
 npm run desktop:start
 ```
 
+### Build desktop DMG (macOS)
+
+```bash
+npm run desktop:pack:dmg
+```
+
 ### Install CLI globally (optional)
 
 ```bash
@@ -200,6 +206,9 @@ Supported now:
 - `npm run bend` build CLI + run dashboard
 - `npm run desktop:start` build + launch desktop app
 - `npm run desktop:backend` run desktop backend entrypoint only
+- `npm run desktop:pack:dmg` build versioned macOS `.dmg` into `dist-desktop/`
+- `npm run desktop:pack:dir` build unpacked macOS app into `dist-desktop/`
+- `npm run version:patch|version:minor|version:major` bump semantic version + create git tag
 - `npm run test` run harness tests
 - `npm run test:unit` run unit tests
 - `npm run test:integration` run integration tests
@@ -218,3 +227,19 @@ Supported now:
 - GitHub MCP `401 Unauthorized`: refresh token/config in Settings
 - For deep debugging, inspect `.bender/bender.log` and `GET /api/logs` (supports `limit`, `level`, `component`, `contains`, `sinceMs` query filters)
 - Mermaid/UI render failures are reported into structured logs via `POST /api/logs/client`
+
+## Desktop Release Pipeline
+
+- Workflow: [desktop-dmg.yml](/Volumes/SD3.2_256/Repos/bender/.github/workflows/desktop-dmg.yml)
+- Triggers:
+  - manual (`workflow_dispatch`)
+  - git tags matching `v*` (for example `v0.2.0`)
+- Output:
+  - versioned `.dmg` artifact uploaded from `dist-desktop/*.dmg`
+  - on tag builds, `.dmg` is also attached to the GitHub Release
+
+Versioning convention:
+
+1. Run `npm run version:patch` (or `version:minor` / `version:major`).
+2. Push commit + tag (`git push && git push --tags`).
+3. GitHub Actions builds and publishes the versioned desktop package.

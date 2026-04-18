@@ -6,7 +6,6 @@ import {
   runFlowsOperation,
   runImplementOperation,
   runInitOperation,
-  runPlanOperation,
 } from "../services/run-operations.js";
 
 interface RunRouteDeps {
@@ -22,6 +21,8 @@ interface RunRouteDeps {
 }
 
 export function registerRunRoutes(app: Express, deps: RunRouteDeps): void {
+  const planGuardMessage = "Planning pipeline is reserved for new-project init. Use New Task (or /api/tasks/append) for iterative work.";
+
   app.post("/api/run/answer", (req, res) => {
     const logger = createLogger(
       "api:run",
@@ -84,9 +85,10 @@ export function registerRunRoutes(app: Express, deps: RunRouteDeps): void {
       return;
     }
 
-    await deps.runOperation(res, async (adapter) => {
-      await runPlanOperation(deps.getProject(), body, adapter);
+    logger.warn("Rejected run plan request: pipeline disabled outside init flow", {
+      requestId: res.locals.requestId as string | undefined,
     });
+    res.status(409).json({ error: planGuardMessage });
   });
 
   app.post("/api/run/implement", async (req, res) => {

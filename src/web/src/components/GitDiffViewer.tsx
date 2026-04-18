@@ -61,7 +61,7 @@ function FileDiff({ file, lines }: { file: string; lines: DiffLine[] }) {
         className="w-full flex items-center gap-3 px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800/80 transition-colors text-left"
       >
         <span className="font-mono text-xs text-zinc-300 flex-1 truncate">{file}</span>
-        {addCount > 0 && <span className="text-xs text-zinc-100">+{addCount}</span>}
+        {addCount > 0 && <span className="text-xs text-emerald-500">+{addCount}</span>}
         {removeCount > 0 && <span className="text-xs text-red-400">-{removeCount}</span>}
         <span className="text-zinc-600 text-xs ml-1">{collapsed ? "▶" : "▼"}</span>
       </button>
@@ -77,7 +77,7 @@ function FileDiff({ file, lines }: { file: string; lines: DiffLine[] }) {
                     key={i}
                     className={
                       line.type === "add"
-                        ? "bg-zinc-900/30"
+                        ? "bg-emerald-950/30"
                         : line.type === "remove"
                           ? "bg-red-950/30"
                           : line.type === "hunk"
@@ -91,7 +91,7 @@ function FileDiff({ file, lines }: { file: string; lines: DiffLine[] }) {
                     <td
                       className={`pr-4 py-0.5 whitespace-pre-wrap break-all ${
                         line.type === "add"
-                          ? "text-zinc-200"
+                          ? "text-emerald-300"
                           : line.type === "remove"
                             ? "text-red-300"
                             : line.type === "hunk"

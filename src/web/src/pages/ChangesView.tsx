@@ -435,7 +435,7 @@ export function GitView({ state, onStateChange }: GitViewProps) {
 
         {githubLoading && <LoadingDots size={20} label="Checking GitHub status…" textClassName="text-sm text-zinc-500" />}
         {githubError && <p className="text-sm text-red-400/80">{githubError}</p>}
-        {deviceFlowNotice && <p className="text-xs text-zinc-100">{deviceFlowNotice}</p>}
+        {deviceFlowNotice && <p className="text-xs text-emerald-400">{deviceFlowNotice}</p>}
 
         {githubStatus && !githubStatus.configured && (
           <p className="text-sm text-amber-400">{githubStatus.message ?? "GitHub auth is not configured on this machine."}</p>
@@ -740,7 +740,7 @@ export function GitView({ state, onStateChange }: GitViewProps) {
         )}
 
         {actionError && <p className="text-xs text-red-400">{actionError}</p>}
-        {actionNotice && <p className="text-xs text-zinc-100">{actionNotice}</p>}
+        {actionNotice && <p className="text-xs text-emerald-400">{actionNotice}</p>}
       </section>
 
     </div>
@@ -758,7 +758,7 @@ function Metric({
   tone?: "ok" | "warn";
   mono?: boolean;
 }) {
-  const toneClass = tone === "ok" ? "text-zinc-100" : tone === "warn" ? "text-amber-400" : "text-zinc-200";
+  const toneClass = tone === "ok" ? "text-emerald-400" : tone === "warn" ? "text-amber-400" : "text-zinc-200";
   return (
     <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
       <p className="text-[11px] text-zinc-600">{label}</p>

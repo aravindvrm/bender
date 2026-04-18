@@ -6,14 +6,13 @@ import {
   Folder,
   FolderOpen,
   Terminal as TerminalIcon,
-  Info,
   MessageSquare,
 } from "lucide-react";
 import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
 import { LoadingDots } from "./LoadingDots";
 import { SecretInput } from "./SecretInput";
 import { ChatPanel } from "./ChatPanel";
-import { roleLabel, roleSummary, type BaseRole } from "../lib/roleLabels";
+import { type BaseRole } from "../lib/roleLabels";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
 type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "openai-compatible";
@@ -64,14 +63,10 @@ interface TerminalEntry {
   exitCode: number;
 }
 
-interface PlanModalSubmission {
-  feature: string;
-  role: BaseRole;
+export interface TaskCreateSubmission {
+  title?: string;
+  description: string;
   agentId?: string;
-  officeHoursMode?: "pressure-test" | "execution-plan";
-  askClarifyingQuestions: boolean;
-  requireArchitectureApproval: boolean;
-  requirePlanApproval: boolean;
 }
 
 interface OperationDrawerProps {
@@ -89,7 +84,7 @@ interface OperationDrawerProps {
   onClear: () => void;
   onAbort: () => void;
   onSubmitInit: (submission: InitModalSubmission) => void;
-  onSubmitPlan: (submission: PlanModalSubmission) => void;
+  onCreateTask: (submission: TaskCreateSubmission) => Promise<void>;
 }
 
 // ── Terminal component ────────────────────────────────────────────────────────
@@ -256,9 +251,10 @@ export function OperationDrawer({
   onClear,
   onAbort,
   onSubmitInit,
-  onSubmitPlan,
+  onCreateTask,
 }: OperationDrawerProps) {
   const [activeTab, setActiveTab] = useState<"console" | "terminal" | "chat">("console");
+  const [chatClearToken, setChatClearToken] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(288);
   const [isResizing, setIsResizing] = useState(false);
@@ -334,7 +330,7 @@ export function OperationDrawer({
 
   const statusColor =
     status === "running" ? "text-zinc-400" :
-    status === "done" ? "text-zinc-100" :
+    status === "done" ? "text-emerald-400" :
     status === "error" ? "text-red-400" : "text-zinc-500";
 
   if (!drawerOpen) return null;
@@ -355,14 +351,11 @@ export function OperationDrawer({
       {modal?.kind === "plan" && (
         <PlanTaskModal
           initialDescription={inputText}
-          lines={lines}
-          status={status}
-          onConfirm={onConfirm}
-          onPromptSubmit={onPromptSubmit}
           onCancel={() => { onSetModal(null); onSetInputText(""); }}
-          onSubmit={(submission) => {
+          onSubmit={async (submission) => {
+            await onCreateTask(submission);
             onSetInputText("");
-            onSubmitPlan(submission);
+            onSetModal(null);
           }}
         />
       )}
@@ -431,6 +424,14 @@ export function OperationDrawer({
               Stop
             </button>
           )}
+          {activeTab === "chat" && (
+            <button
+              onClick={() => setChatClearToken((prev) => prev + 1)}
+              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 rounded border border-zinc-800 hover:border-zinc-600"
+            >
+              Clear
+            </button>
+          )}
           {(status === "done" || status === "error") && (
             <button
               onClick={() => {
@@ -460,7 +461,10 @@ export function OperationDrawer({
 
         {!collapsed && activeTab === "chat" && (
           <div className="flex-1 min-h-0">
-            <ChatPanel projectPath={currentProjectPath} />
+            <ChatPanel
+              projectPath={currentProjectPath}
+              clearToken={chatClearToken}
+            />
           </div>
         )}
 
@@ -609,7 +613,7 @@ function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewProjectM
       return <p className="text-xs text-amber-400">This directory already contains a <code>.bender</code> state.</p>;
     }
     if (dirInspect.empty) {
-      return <p className="text-xs text-zinc-100">Empty directory. Great for a clean initialization.</p>;
+      return <p className="text-xs text-emerald-400">Empty directory. Great for a clean initialization.</p>;
     }
     return (
       <p className="text-xs text-zinc-400">
@@ -695,7 +699,7 @@ function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewProjectM
                       >
                         <FolderOpen className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
                         <span className="truncate">. (this directory)</span>
-                        {browserRoot.hasBender && <span className="ml-auto text-[10px] text-zinc-100">bender</span>}
+                        {browserRoot.hasBender && <span className="ml-auto text-[10px] text-emerald-500">bender</span>}
                       </button>
 
                       {browserRoot.dirs.map((entry) => (
@@ -781,7 +785,7 @@ function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewProjectM
                     }`}
                   >
                     {provider}
-                    {llmStatus?.providers[provider]?.configured && <span className="ml-1 text-zinc-100">•</span>}
+                    {llmStatus?.providers[provider]?.configured && <span className="ml-1 text-emerald-400">•</span>}
                   </button>
                 ))}
               </div>
@@ -882,7 +886,7 @@ function DirectoryTreeNode({ entry, depth, selectedPath, onChoose }: DirectoryTr
         </span>
         {expanded ? <FolderOpen className="h-3.5 w-3.5 text-zinc-400" /> : <Folder className="h-3.5 w-3.5 text-zinc-400" />}
         <span className="truncate">{entry.name}</span>
-        {entry.hasBender && <span className="ml-auto text-[10px] text-zinc-100">bender</span>}
+        {entry.hasBender && <span className="ml-auto text-[10px] text-emerald-500">bender</span>}
       </button>
 
       {expanded && (
@@ -938,7 +942,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
     case "output": {
       const colors: Record<string, string> = {
         info: "text-zinc-400",
-        success: "text-zinc-100",
+        success: "text-emerald-400",
         warn: "text-amber-400",
         error: "text-red-400",
       };
@@ -952,7 +956,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
       if (!line.done) return null;
       return (
         <div className="flex items-center gap-2 text-zinc-400">
-          <span className={line.success ? "text-zinc-100" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
+          <span className={line.success ? "text-emerald-400" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
           <span>{line.text}</span>
         </div>
       );
@@ -962,7 +966,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
         <div className="pt-1 pb-1 space-y-0.5">
           {line.ops.map((op, i) => (
             <div key={i} className="flex items-center gap-2">
-              <span className={op.action === "create" ? "text-zinc-100 w-8" : "text-amber-400 w-8"}>{op.action.toUpperCase()}</span>
+              <span className={op.action === "create" ? "text-emerald-400 w-8" : "text-amber-400 w-8"}>{op.action.toUpperCase()}</span>
               <span className="text-zinc-300">{op.path}</span>
             </div>
           ))}
@@ -974,7 +978,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
         <div className="my-2 p-3 bg-zinc-800/60 rounded-lg border border-zinc-700 space-y-2">
           <p className="text-zinc-200 font-sans">{line.question}</p>
           {line.answered ? (
-            <p className={`text-xs font-sans ${line.answer ? "text-zinc-100" : "text-red-400"}`}>
+            <p className={`text-xs font-sans ${line.answer ? "text-emerald-400" : "text-red-400"}`}>
               → {line.answer ? "Approved" : "Declined"}
             </p>
           ) : !interactivePrompts ? (
@@ -983,7 +987,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
             <div className="flex gap-2">
               <button
                 onClick={() => onConfirm(line.id, lineIdx, true)}
-                className="px-3 py-1 text-xs rounded bg-zinc-900/50 border border-zinc-600 text-zinc-200 hover:bg-zinc-900 transition-colors font-sans"
+                className="px-3 py-1 text-xs rounded bg-emerald-900/50 border border-emerald-700 text-emerald-300 hover:bg-emerald-900 transition-colors font-sans"
               >
                 Approve
               </button>
@@ -1028,7 +1032,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
 
     case "done":
       return (
-        <div className={`pt-2 font-semibold font-sans ${line.success ? "text-zinc-100" : "text-red-400"}`}>
+        <div className={`pt-2 font-semibold font-sans ${line.success ? "text-emerald-400" : "text-red-400"}`}>
           {line.success ? "✓ Operation completed successfully." : "✗ Operation finished with errors."}
         </div>
       );
@@ -1043,11 +1047,7 @@ function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, interactiveP
 
 interface PlanTaskModalProps {
   initialDescription: string;
-  lines: OutputLine[];
-  status: OperationStatus;
-  onConfirm: (id: string, idx: number, answer: boolean) => void;
-  onPromptSubmit: (id: string, idx: number, text: string) => void;
-  onSubmit: (submission: PlanModalSubmission) => void;
+  onSubmit: (submission: TaskCreateSubmission) => Promise<void>;
   onCancel: () => void;
 }
 
@@ -1068,38 +1068,17 @@ function formatAgentOptionLabel(agent: AgentOption, roleOption: BaseRole): strin
   return `${agent.name} (${agent.modelTier})${builtinSuffix}`;
 }
 
-const ROLE_OPTIONS: BaseRole[] = ["planner", "implementer", "architect", "analyzer", "reviewer"];
-
-function detectRoleFromDescription(text: string): BaseRole {
-  const normalized = text.toLowerCase();
-  const containsAny = (terms: string[]) => terms.some((t) => normalized.includes(t));
-
-  if (containsAny(["security", "threat model", "vulnerability", "audit"])) return "analyzer";
-  if (containsAny(["review", "qa", "test coverage", "regression"])) return "reviewer";
-  if (containsAny(["architecture", "design", "schema", "data model"])) return "architect";
-  if (containsAny(["implement", "build", "create", "fix", "refactor"])) return "implementer";
-  return "planner";
-}
-
 function PlanTaskModal({
   initialDescription,
-  lines,
-  status,
-  onConfirm,
-  onPromptSubmit,
   onSubmit,
   onCancel,
 }: PlanTaskModalProps) {
+  const [title, setTitle] = useState("");
   const [description, setDescription] = useState(initialDescription);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [agentId, setAgentId] = useState("");
-  const [planningMode, setPlanningMode] = useState<"office-hours" | "execution-only">("office-hours");
-  const [askClarifyingQuestions, setAskClarifyingQuestions] = useState(true);
-  const [requireArchitectureApproval, setRequireArchitectureApproval] = useState(true);
-  const [requirePlanApproval, setRequirePlanApproval] = useState(true);
-  const [submittedFromThisModal, setSubmittedFromThisModal] = useState(false);
-
-  const detectedRole = detectRoleFromDescription(description);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/agents")
@@ -1108,22 +1087,34 @@ function PlanTaskModal({
       .catch(() => setAgents([]));
   }, []);
 
-  const selectedAgent = agents.find((a) => a.id === agentId);
-  const effectiveRole: BaseRole = selectedAgent?.baseRole ?? detectedRole;
-  const sortedAgents = [...agents].sort((a, b) => {
-    const roleDelta = ROLE_OPTIONS.indexOf(a.baseRole) - ROLE_OPTIONS.indexOf(b.baseRole);
-    if (roleDelta !== 0) return roleDelta;
-    if (a.isBuiltin !== b.isBuiltin) return a.isBuiltin ? -1 : 1;
-    return a.name.localeCompare(b.name);
-  });
-  const plannerModeSelected = effectiveRole === "planner";
-  const officeHoursModeActive = plannerModeSelected && planningMode === "office-hours";
-  const canSubmit = description.trim().length > 0;
-  const started = status === "running" || status === "done" || status === "error";
-  const showOperationLog = submittedFromThisModal && started;
-  const submitAskClarifyingQuestions = officeHoursModeActive ? askClarifyingQuestions : false;
-  const submitRequireArchitectureApproval = officeHoursModeActive ? requireArchitectureApproval : false;
-  const submitRequirePlanApproval = officeHoursModeActive ? requirePlanApproval : false;
+  const implementerAgents = agents
+    .filter((agent) => agent.baseRole === "implementer")
+    .sort((a, b) => {
+      if (a.isBuiltin !== b.isBuiltin) return a.isBuiltin ? -1 : 1;
+      if (a.modelTier !== b.modelTier) {
+        const tierOrder = { fast: 0, default: 1, strong: 2 } as const;
+        return tierOrder[a.modelTier] - tierOrder[b.modelTier];
+      }
+      return a.name.localeCompare(b.name);
+    });
+  const canSubmit = description.trim().length > 0 && !submitting;
+
+  async function handleSubmit() {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await onSubmit({
+        title: title.trim() || undefined,
+        description: description.trim(),
+        agentId: agentId || undefined,
+      });
+    } catch (err) {
+      setSubmitError((err as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -1133,172 +1124,74 @@ function PlanTaskModal({
         </div>
         <div className="p-5 space-y-5 overflow-y-auto">
           <div className="space-y-1.5">
-            <label className="text-xs text-zinc-500 uppercase tracking-wide">Description</label>
+            <label className="text-xs text-zinc-500 uppercase tracking-wide">Title (optional)</label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Short task title (auto-derived from description if omitted)"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs text-zinc-500 uppercase tracking-wide">Task Description</label>
             <textarea
               autoFocus
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe the feature, fix, or change…"
-              rows={5}
+              placeholder="Describe what should be done, expected outcome, and constraints..."
+              rows={7}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSubmit && status !== "running") {
-                  setSubmittedFromThisModal(true);
-                  onSubmit({
-                    feature: description.trim(),
-                    role: effectiveRole,
-                    agentId: agentId || undefined,
-                    officeHoursMode: plannerModeSelected
-                      ? (officeHoursModeActive ? "pressure-test" : "execution-plan")
-                      : undefined,
-                    askClarifyingQuestions: submitAskClarifyingQuestions,
-                    requireArchitectureApproval: submitRequireArchitectureApproval,
-                    requirePlanApproval: submitRequirePlanApproval,
-                  });
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  void handleSubmit();
                 }
-                if (e.key === "Escape") onCancel();
+                if (e.key === "Escape" && !submitting) onCancel();
               }}
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 resize-none"
             />
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs text-zinc-500 uppercase tracking-wide">Agent</label>
+            <label className="text-xs text-zinc-500 uppercase tracking-wide">Implementer Agent (optional)</label>
             <div className="relative">
               <select
                 value={agentId}
                 onChange={(e) => setAgentId(e.target.value)}
                 className="select-flat w-full pl-3 pr-8 py-2 text-sm"
               >
-                <option
-                  value=""
-                  title={roleSummary(detectedRole)}
-                >
-                  Use auto default
-                </option>
-                {sortedAgents.filter((a) => a.id !== "default-planner").map((a) => (
-                  <option
-                    key={a.id}
-                    value={a.id}
-                    title={roleSummary(a.baseRole)}
-                  >
-                    {formatAgentOptionLabel(a, a.baseRole)}
+                <option value="">Use project default implementer</option>
+                {implementerAgents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {formatAgentOptionLabel(agent, "implementer")}
                   </option>
                 ))}
               </select>
               <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
             </div>
-            <p
-              className="text-[11px] text-zinc-600 flex items-center gap-1.5"
-              title={roleSummary(effectiveRole)}
-            >
-              Effective role: {roleLabel(effectiveRole)}{selectedAgent ? ` (from ${selectedAgent.name})` : " (auto-detected)"}
-              <Info className="h-3 w-3 text-zinc-500" />
-            </p>
           </div>
 
-          <div className="space-y-2">
-            <p className="text-xs text-zinc-500 uppercase tracking-wide">Planning Flow</p>
-            {plannerModeSelected && (
-              <div className="space-y-1.5">
-                <label className="flex items-center gap-2 text-xs text-zinc-400">
-                  <input
-                    type="radio"
-                    name="planner-flow-mode"
-                    checked={planningMode === "office-hours"}
-                    onChange={() => setPlanningMode("office-hours")}
-                  />
-                  Office Hours mode (pressure test + approvals)
-                </label>
-                <label className="flex items-center gap-2 text-xs text-zinc-400">
-                  <input
-                    type="radio"
-                    name="planner-flow-mode"
-                    checked={planningMode === "execution-only"}
-                    onChange={() => setPlanningMode("execution-only")}
-                  />
-                  Execution only (skip Office Hours pressure test)
-                </label>
-              </div>
-            )}
-            {officeHoursModeActive && (
-              <>
-                <label className="flex items-center gap-2 text-xs text-zinc-400">
-                  <input
-                    type="checkbox"
-                    checked={askClarifyingQuestions}
-                    onChange={(e) => setAskClarifyingQuestions(e.target.checked)}
-                  />
-                  Ask clarifying questions before planning
-                </label>
-                <label className="flex items-center gap-2 text-xs text-zinc-400">
-                  <input
-                    type="checkbox"
-                    checked={requireArchitectureApproval}
-                    onChange={(e) => setRequireArchitectureApproval(e.target.checked)}
-                  />
-                  Require architecture approval step
-                </label>
-                <label className="flex items-center gap-2 text-xs text-zinc-400">
-                  <input
-                    type="checkbox"
-                    checked={requirePlanApproval}
-                    onChange={(e) => setRequirePlanApproval(e.target.checked)}
-                  />
-                  Require plan approval step
-                </label>
-              </>
-            )}
-          </div>
-
-          {showOperationLog && (
-            <section className="space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-zinc-500 uppercase tracking-wide">Run Output</p>
-                <p className="text-[11px] text-zinc-600">
-                  {status === "running" ? "Running..." : status === "done" ? "Done" : status === "error" ? "Error" : "Idle"}
-                </p>
-              </div>
-              <div className="max-h-56 overflow-y-auto border border-zinc-800 rounded-lg bg-zinc-950 p-3 font-mono text-xs space-y-0.5">
-                {lines.length === 0 && <p className="text-zinc-600 italic">Waiting for output...</p>}
-                {lines.map((line, i) => (
-                  <OutputLineView
-                    key={i}
-                    line={line}
-                    lineIdx={i}
-                    onConfirm={onConfirm}
-                    onPromptSubmit={onPromptSubmit}
-                    interactivePrompts
-                  />
-                ))}
-              </div>
-            </section>
+          {submitError && (
+            <p className="text-xs text-red-400">{submitError}</p>
           )}
 
-          <p className="text-xs text-zinc-600">⌘ Enter to start</p>
+          <p className="text-xs text-zinc-600">⌘ Enter to create task</p>
         </div>
         <div className="px-5 py-3 border-t border-zinc-800 flex justify-end gap-2">
-          <button onClick={onCancel} className="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
+          <button
+            onClick={onCancel}
+            disabled={submitting}
+            className="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-50"
+          >
             Cancel
           </button>
           <button
-            onClick={() => {
-              setSubmittedFromThisModal(true);
-              onSubmit({
-                feature: description.trim(),
-                role: effectiveRole,
-                agentId: agentId || undefined,
-                officeHoursMode: plannerModeSelected
-                  ? (officeHoursModeActive ? "pressure-test" : "execution-plan")
-                  : undefined,
-                askClarifyingQuestions: submitAskClarifyingQuestions,
-                requireArchitectureApproval: submitRequireArchitectureApproval,
-                requirePlanApproval: submitRequirePlanApproval,
-              });
-            }}
-            disabled={!canSubmit || status === "running"}
+            onClick={() => { void handleSubmit(); }}
+            disabled={!canSubmit}
             className="px-4 py-1.5 text-xs font-medium bg-zinc-100 text-zinc-900 rounded-md hover:bg-white disabled:opacity-40 transition-colors"
           >
-            {status === "running" ? "Running..." : "Start"}
+            {submitting ? "Creating..." : "Create Task"}
           </button>
         </div>
       </div>

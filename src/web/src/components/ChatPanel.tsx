@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DefaultChatTransport,
   isReasoningUIPart,
@@ -7,7 +7,7 @@ import {
   readUIMessageStream,
   type UIMessage,
 } from "ai";
-import { Send } from "lucide-react";
+import { Send, Square } from "lucide-react";
 import { LoadingDots } from "./LoadingDots";
 
 interface ChatThread {
@@ -35,6 +35,15 @@ function safeNowId(): string {
 function parseErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!error) return false;
+  if (error instanceof DOMException && error.name === "AbortError") return true;
+  if (error instanceof Error) {
+    return error.name === "AbortError" || /aborted|canceled|cancelled/i.test(error.message);
+  }
+  return false;
 }
 
 type ClientLogLevel = "debug" | "info" | "warn" | "error";
@@ -97,9 +106,10 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 interface ChatPanelProps {
   projectPath: string | null;
+  clearToken?: number;
 }
 
-export function ChatPanel({ projectPath }: ChatPanelProps) {
+export function ChatPanel({ projectPath, clearToken = 0 }: ChatPanelProps) {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
@@ -108,10 +118,21 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   const [sending, setSending] = useState(false);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [hiddenMessageIdsByThread, setHiddenMessageIdsByThread] = useState<Record<string, Record<string, true>>>({});
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const userCancelledRef = useRef(false);
 
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === activeThreadId) ?? null,
     [threads, activeThreadId],
+  );
+  const hiddenForActiveThread = useMemo(
+    () => (activeThread ? (hiddenMessageIdsByThread[activeThread.id] ?? {}) : {}),
+    [activeThread, hiddenMessageIdsByThread],
+  );
+  const visibleMessages = useMemo(
+    () => messages.filter((message) => !hiddenForActiveThread[message.id]),
+    [messages, hiddenForActiveThread],
   );
 
   const createThread = useCallback(async (title?: string): Promise<ChatThread> => {
@@ -176,27 +197,10 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     void loadMessages(activeThreadId);
   }, [activeThreadId, loadMessages, projectPath]);
 
-  const patchActiveThread = useCallback(async (
-    updates: Partial<Pick<ChatThread, "toolsEnabled">>,
-  ) => {
-    if (!activeThread) return;
-    try {
-      const data = await fetchJson<{ thread: ChatThread }>(
-        `/api/chat/threads/${encodeURIComponent(activeThread.id)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(updates),
-        },
-      );
-      setThreads((prev) => prev.map((thread) => (
-        thread.id === activeThread.id ? data.thread : thread
-      )));
-      setError(null);
-    } catch (err) {
-      setError(parseErrorMessage(err));
-    }
-  }, [activeThread]);
+  useEffect(() => () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+  }, []);
 
   const sendMessage = useCallback(async () => {
     if (!activeThread || sending) return;
@@ -210,7 +214,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
       metadata: {
         provider: activeThread.provider,
         model: activeThread.model,
-        toolsEnabled: activeThread.toolsEnabled,
+        toolsEnabled: true,
         createdAt: Date.now(),
       },
     };
@@ -220,6 +224,9 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     setDraft("");
     setSending(true);
     setError(null);
+    userCancelledRef.current = false;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     const requestId = safeNowId();
     postClientLog("info", "chat-panel", "Chat request started", {
       requestId,
@@ -238,7 +245,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         chatId: activeThread.id,
         messageId: userMessage.id,
         messages: outgoingMessages,
-        abortSignal: undefined,
+        abortSignal: controller.signal,
       });
 
       let partialCount = 0;
@@ -284,6 +291,13 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
 
       await loadThreads();
     } catch (err) {
+      if (userCancelledRef.current || isAbortLikeError(err)) {
+        postClientLog("info", "chat-panel", "Chat request cancelled", {
+          requestId,
+          threadId: activeThread.id,
+        });
+        return;
+      }
       const errorText = parseErrorMessage(err);
       setError(errorText);
       postClientLog("error", "chat-panel", "Chat request failed", {
@@ -292,9 +306,38 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         error: errorText,
       });
     } finally {
+      abortControllerRef.current = null;
+      userCancelledRef.current = false;
       setSending(false);
     }
   }, [activeThread, draft, loadThreads, messages, sending]);
+
+  const stopMessage = useCallback(() => {
+    userCancelledRef.current = true;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setSending(false);
+  }, []);
+
+  const clearMessages = useCallback(async () => {
+    if (!activeThread || sending || messages.length === 0) return;
+    setHiddenMessageIdsByThread((prev) => {
+      const existing = prev[activeThread.id] ?? {};
+      const nextHidden = { ...existing };
+      for (const message of messages) {
+        nextHidden[message.id] = true;
+      }
+      return {
+        ...prev,
+        [activeThread.id]: nextHidden,
+      };
+    });
+  }, [activeThread, sending, messages]);
+
+  useEffect(() => {
+    if (clearToken <= 0) return;
+    void clearMessages();
+  }, [clearMessages, clearToken]);
 
   if (!projectPath) {
     return (
@@ -306,32 +349,12 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-zinc-950 text-zinc-200">
-      {activeThread && (
-        <div className="px-3 py-2 border-b border-zinc-800 grid grid-cols-1 lg:grid-cols-2 gap-2 text-xs shrink-0">
-          <div className="flex items-center gap-2 text-zinc-400">
-            <span className="text-zinc-500">Model</span>
-            <span className="font-mono">Strong tier (Settings)</span>
-          </div>
-
-          <label className="inline-flex items-center gap-2 text-zinc-400">
-            <input
-              type="checkbox"
-              checked={activeThread.toolsEnabled}
-              onChange={(e) => {
-                void patchActiveThread({ toolsEnabled: e.target.checked });
-              }}
-            />
-            Tools enabled
-          </label>
-        </div>
-      )}
-
       <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
         {loadingMessages && <LoadingDots size={18} label="Loading chat…" textClassName="text-xs text-zinc-500" />}
-        {!loadingMessages && messages.length === 0 && (
+        {!loadingMessages && visibleMessages.length === 0 && (
           <p className="text-xs text-zinc-500 italic">No messages yet.</p>
         )}
-        {!loadingMessages && messages.map((message) => {
+        {!loadingMessages && visibleMessages.map((message) => {
           const text = messageToText(message);
           if (!text) return null;
           return (
@@ -374,17 +397,21 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
             className="flex-1 resize-none bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
           />
           <button
-            onClick={() => void sendMessage()}
-            disabled={!activeThread || sending || !draft.trim()}
-            className="inline-flex items-center gap-1 px-3 py-2 rounded-md border border-zinc-700 text-xs text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={() => {
+              if (sending) {
+                stopMessage();
+                return;
+              }
+              void sendMessage();
+            }}
+            disabled={!sending && (!activeThread || !draft.trim())}
+            aria-label={sending ? "Stop response" : "Send message"}
+            title={sending ? "Stop" : "Send"}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-zinc-700 text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <Send className="h-3 w-3" />
-            Send
+            {sending ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
           </button>
         </div>
-        <p className="mt-2 text-[10px] text-zinc-500">
-          Deterministic commands: <code>/task list</code>, <code>/task add title: ...</code>, <code>/task update 3 title: ...</code>, <code>/task run 3</code>, <code>/audit security</code>, <code>/analyze</code>
-        </p>
       </div>
     </div>
   );

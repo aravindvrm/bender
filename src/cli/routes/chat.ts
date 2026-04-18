@@ -92,14 +92,32 @@ export function registerChatRoutes(app: Express, deps: ChatRouteDeps): void {
   });
 
   app.post("/api/chat/threads/:threadId/respond", async (req, res) => {
+    const controller = new AbortController();
+    const abortRequest = () => {
+      if (!controller.signal.aborted) controller.abort();
+    };
+    req.on("aborted", abortRequest);
+    req.on("close", abortRequest);
+    res.on("close", abortRequest);
     try {
-      await streamChatThreadResponse(deps.getProject(), req.params.threadId, req.body ?? {}, res);
+      await streamChatThreadResponse(
+        deps.getProject(),
+        req.params.threadId,
+        req.body ?? {},
+        res,
+        { signal: controller.signal },
+      );
     } catch (err) {
+      if (controller.signal.aborted) return;
       logChatRouteError("POST /api/chat/threads/:threadId/respond", deps, err, res.locals.requestId as string | undefined);
       const mapped = toHttpError(err);
       if (!res.headersSent) {
         res.status(mapped.status).json({ error: mapped.message });
       }
+    } finally {
+      req.off("aborted", abortRequest);
+      req.off("close", abortRequest);
+      res.off("close", abortRequest);
     }
   });
 }

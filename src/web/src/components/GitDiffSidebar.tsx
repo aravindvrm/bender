@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { RefreshCw, X } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import type { OperationStatus } from "../hooks/useOperation";
 import { GitDiffViewer } from "./GitDiffViewer";
 import { LoadingDots } from "./LoadingDots";
@@ -8,10 +8,9 @@ interface GitDiffSidebarProps {
   open: boolean;
   projectPath: string | null;
   operationStatus: OperationStatus;
-  onClose: () => void;
 }
 
-export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: GitDiffSidebarProps) {
+export function GitDiffSidebar({ open, projectPath, operationStatus }: GitDiffSidebarProps) {
   const [diffCommits, setDiffCommits] = useState(1);
   const [diffRaw, setDiffRaw] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -110,13 +109,6 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
           title="Refresh diff"
         >
           <RefreshCw className="h-3.5 w-3.5" />
-        </button>
-        <button
-          onClick={onClose}
-          className="text-zinc-600 hover:text-zinc-300 transition-colors p-1 rounded hover:bg-zinc-900"
-          title="Close diff panel"
-        >
-          <X className="h-3.5 w-3.5" />
         </button>
       </div>
 

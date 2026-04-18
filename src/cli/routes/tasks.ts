@@ -90,10 +90,18 @@ export function registerTaskRoutes(app: Express, deps: TasksRouteDeps): void {
 
   app.post("/api/tasks/append", async (req, res) => {
     try {
-      const { title, description, files } = req.body as { title?: string; description?: string; files?: string[] };
+      const { title, description, files, agentId } = req.body as {
+        title?: string;
+        description?: string;
+        files?: string[];
+        agentId?: string | null;
+      };
       const projectRoot = deps.getProject();
       const result = await appendTask(projectRoot, { title, description, files });
-      res.json({ ok: true, taskId: result.taskId });
+      const assignments = agentId
+        ? await setTaskAgent(projectRoot, String(result.taskId), agentId)
+        : null;
+      res.json({ ok: true, taskId: result.taskId, assignments });
     } catch (err) {
       const mapped = toHttpError(err);
       res.status(mapped.status).json({ error: mapped.message });

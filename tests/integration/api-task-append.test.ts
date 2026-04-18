@@ -99,4 +99,30 @@ describe("api /tasks/append", () => {
     expect(parsed[0]?.title).toBe("Fix test audit issue");
     expect(parsed[1]?.title).toBe("Harden CI step");
   });
+
+  it("supports description-only task creation and optional implementer assignment", async () => {
+    const createRes = await fetch(`${baseUrl}/api/tasks/append`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description: "Audit auth token rotation and enforce expiry checks in middleware and background jobs.",
+        agentId: "default-implementer",
+      }),
+    });
+    expect(createRes.ok).toBe(true);
+    const createBody = (await createRes.json()) as {
+      ok?: boolean;
+      taskId?: number;
+      assignments?: Record<string, string> | null;
+    };
+    expect(createBody.ok).toBe(true);
+    expect(createBody.taskId).toBe(3);
+    expect(createBody.assignments?.["3"]).toBe("default-implementer");
+
+    const taskPlanPath = join(tempProject, ".bender", "tasks", "current.md");
+    const markdown = await readFile(taskPlanPath, "utf-8");
+    const parsed = parseTaskPlan(markdown);
+    expect(parsed).toHaveLength(3);
+    expect(parsed[2]?.title).toContain("Audit auth token rotation");
+  });
 });

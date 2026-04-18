@@ -11,6 +11,21 @@ export class TasksServiceError extends Error {
   }
 }
 
+function deriveTitleFromDescription(description: string): string {
+  const firstLine = description
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) ?? "";
+  const normalized = firstLine
+    .replace(/^[-*]\s+/, "")
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return "";
+  if (normalized.length <= 96) return normalized;
+  return `${normalized.slice(0, 93).trimEnd()}...`;
+}
+
 function normalizeTaskId(taskId: string): string {
   const normalizedTaskId = taskId.trim();
   if (!normalizedTaskId || !/^\d+$/.test(normalizedTaskId)) {
@@ -110,15 +125,19 @@ export async function appendTask(
   projectRoot: string,
   payload: { title?: string; description?: string; files?: string[] },
 ): Promise<{ taskId: number }> {
-  if (!payload.title) {
-    throw new TasksServiceError(400, "title is required");
+  const rawTitle = typeof payload.title === "string" ? payload.title.trim() : "";
+  const rawDescription = typeof payload.description === "string" ? payload.description.trim() : "";
+  const title = rawTitle || deriveTitleFromDescription(rawDescription);
+
+  if (!title) {
+    throw new TasksServiceError(400, "title or description is required");
   }
 
   const state = new StateManager(projectRoot);
   const existingPlan = await state.readCurrentTaskPlan();
   const next = appendTaskToCanonicalPlan(existingPlan, {
-    title: payload.title.trim(),
-    description: payload.description,
+    title,
+    description: rawDescription || undefined,
     files: payload.files,
   });
   await state.writeCurrentTaskPlan(next.plan);

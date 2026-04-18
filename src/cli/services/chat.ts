@@ -34,12 +34,21 @@ const CHAT_SYSTEM_PROMPT = [
   "If uncertain, state assumptions explicitly instead of hallucinating facts.",
 ].join("\n");
 
+const inFlightChatResponses = new Set<string>();
+
 export class ChatServiceError extends Error {
   status: number;
 
   constructor(status: number, message: string) {
     super(message);
     this.status = status;
+  }
+}
+
+class ChatOperationAbortedError extends Error {
+  constructor(message = "Chat action was interrupted.") {
+    super(message);
+    this.name = "ChatOperationAbortedError";
   }
 }
 
@@ -57,6 +66,22 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 function parseErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!error) return false;
+  if (error instanceof ChatOperationAbortedError) return true;
+  if (error instanceof Error) {
+    if (error.name === "AbortError") return true;
+    return /aborted|cancelled|canceled|interrupted|connection closed/i.test(error.message);
+  }
+  return false;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new ChatOperationAbortedError();
+  }
 }
 
 function isUiMessage(value: unknown): value is UIMessage {
@@ -145,37 +170,47 @@ function parseTaskId(value: number): number {
   return Math.floor(taskId);
 }
 
-function createCapturingAdapter(): UIAdapter {
+function createCapturingAdapter(signal?: AbortSignal): UIAdapter {
   const lines: string[] = [];
+  const ensureActive = () => throwIfAborted(signal);
   const push = (level: "info" | "success" | "warn" | "error", text: string) => {
+    ensureActive();
     lines.push(`[${level}] ${text}`);
   };
   const spinner = (text: string): SpinnerAdapter => {
     let current = text;
     return {
       get text() { return current; },
-      set text(v: string) { current = v; push("info", v); },
-      start: () => push("info", current),
-      stop: () => push("info", current),
-      succeed: (value?: string) => push("success", value ?? current),
-      fail: (value?: string) => push("error", value ?? current),
+      set text(v: string) { ensureActive(); current = v; push("info", v); },
+      start: () => { ensureActive(); push("info", current); },
+      stop: () => { ensureActive(); push("info", current); },
+      succeed: (value?: string) => { ensureActive(); push("success", value ?? current); },
+      fail: (value?: string) => { ensureActive(); push("error", value ?? current); },
     };
   };
 
   return {
-    header: (text) => push("info", text),
-    subheader: (text) => push("info", text),
-    info: (text) => push("info", text),
-    success: (text) => push("success", text),
-    warn: (text) => push("warn", text),
-    error: (text) => push("error", text),
+    header: (text) => { ensureActive(); push("info", text); },
+    subheader: (text) => { ensureActive(); push("info", text); },
+    info: (text) => { ensureActive(); push("info", text); },
+    success: (text) => { ensureActive(); push("success", text); },
+    warn: (text) => { ensureActive(); push("warn", text); },
+    error: (text) => { ensureActive(); push("error", text); },
     streamWriter: () => (chunk: string) => {
+      ensureActive();
       if (chunk.trim()) push("info", chunk.trim());
     },
     spinner,
-    confirm: async () => true,
-    promptMultiline: async () => "",
+    confirm: async () => {
+      ensureActive();
+      return true;
+    },
+    promptMultiline: async () => {
+      ensureActive();
+      return "";
+    },
     showFileOperations: (ops) => {
+      ensureActive();
       if (ops.length === 0) return;
       push("info", `File operations: ${ops.map((op) => `${op.action}:${op.path}`).join(", ")}`);
     },
@@ -202,13 +237,16 @@ async function readCurrentTasksSummary(projectRoot: string): Promise<Array<{
 
 export function createBenderChatTools(
   projectRoot: string,
+  signal?: AbortSignal,
 ): ToolSet {
   return {
     bender_list_tasks: tool({
       description: "List current task-plan tasks with IDs, titles, dependencies, and file targets.",
       inputSchema: z.object({}),
       execute: async () => {
+        throwIfAborted(signal);
         const tasks = await readCurrentTasksSummary(projectRoot);
+        throwIfAborted(signal);
         return {
           ok: true,
           count: tasks.length,
@@ -224,9 +262,11 @@ export function createBenderChatTools(
         description: z.string().optional(),
         files: z.array(z.string().min(1)).optional(),
       }),
-      execute: async ({ title, description, files }) => {
+      execute: async ({ title, description, files }, context?: { abortSignal?: AbortSignal }) => {
+        throwIfAborted(context?.abortSignal ?? signal);
         const result = await appendTask(projectRoot, { title, description, files });
         const tasks = await readCurrentTasksSummary(projectRoot);
+        throwIfAborted(context?.abortSignal ?? signal);
         const created = tasks.find((task) => task.id === result.taskId) ?? null;
         return {
           ok: true,
@@ -245,7 +285,8 @@ export function createBenderChatTools(
         dependencies: z.string().optional(),
         criteria: z.string().optional(),
       }),
-      execute: async ({ taskId, title, description, dependencies, criteria }) => {
+      execute: async ({ taskId, title, description, dependencies, criteria }, context?: { abortSignal?: AbortSignal }) => {
+        throwIfAborted(context?.abortSignal ?? signal);
         await patchTask(projectRoot, String(parseTaskId(taskId)), {
           title,
           description,
@@ -253,6 +294,7 @@ export function createBenderChatTools(
           criteria,
         });
         const tasks = await readCurrentTasksSummary(projectRoot);
+        throwIfAborted(context?.abortSignal ?? signal);
         const updated = tasks.find((task) => task.id === taskId) ?? null;
         return {
           ok: true,
@@ -268,7 +310,8 @@ export function createBenderChatTools(
         taskId: z.number().int().positive(),
         cascadeDependents: z.boolean().optional(),
       }),
-      execute: async ({ taskId, cascadeDependents }) => {
+      execute: async ({ taskId, cascadeDependents }, context?: { abortSignal?: AbortSignal }) => {
+        throwIfAborted(context?.abortSignal ?? signal);
         const deletedTaskIds = await deleteTask(projectRoot, String(parseTaskId(taskId)), Boolean(cascadeDependents));
         return {
           ok: true,
@@ -282,8 +325,11 @@ export function createBenderChatTools(
       inputSchema: z.object({
         taskId: z.number().int().positive(),
       }),
-      execute: async ({ taskId }) => {
-        const taskResult = await runTaskForChat(projectRoot, parseTaskId(taskId));
+      execute: async ({ taskId }, context?: { abortSignal?: AbortSignal }) => {
+        const effectiveSignal = context?.abortSignal ?? signal;
+        throwIfAborted(effectiveSignal);
+        const taskResult = await runTaskForChat(projectRoot, parseTaskId(taskId), effectiveSignal);
+        throwIfAborted(effectiveSignal);
         return {
           ok: true,
           ...taskResult,
@@ -296,8 +342,11 @@ export function createBenderChatTools(
       inputSchema: z.object({
         kind: z.enum(["security", "tests", "ci"]),
       }),
-      execute: async ({ kind }) => {
-        const auditResult = await runAuditForChat(projectRoot, kind);
+      execute: async ({ kind }, context?: { abortSignal?: AbortSignal }) => {
+        const effectiveSignal = context?.abortSignal ?? signal;
+        throwIfAborted(effectiveSignal);
+        const auditResult = await runAuditForChat(projectRoot, kind, effectiveSignal);
+        throwIfAborted(effectiveSignal);
         return {
           ok: true,
           ...auditResult,
@@ -307,8 +356,11 @@ export function createBenderChatTools(
     bender_run_analyze: tool({
       description: "Re-run project analyze to refresh brief and architecture from current code.",
       inputSchema: z.object({}),
-      execute: async () => {
-        const summary = await runAnalyzeForChat(projectRoot);
+      execute: async (_args, context?: { abortSignal?: AbortSignal }) => {
+        const effectiveSignal = context?.abortSignal ?? signal;
+        throwIfAborted(effectiveSignal);
+        const summary = await runAnalyzeForChat(projectRoot, effectiveSignal);
+        throwIfAborted(effectiveSignal);
         return {
           ok: true,
           ...summary,
@@ -337,15 +389,18 @@ function formatCommandResponse(
   ].join("\n");
 }
 
-async function runAnalyzeForChat(projectRoot: string): Promise<{
+async function runAnalyzeForChat(projectRoot: string, signal?: AbortSignal): Promise<{
   message: string;
   hasBrief: boolean;
   hasArchitecture: boolean;
 }> {
-  const captured = createCapturingAdapter();
+  throwIfAborted(signal);
+  const captured = createCapturingAdapter(signal);
   await runAnalyzeOperation(projectRoot, captured);
+  throwIfAborted(signal);
   const state = new StateManager(projectRoot);
   const context = await state.gatherContext();
+  throwIfAborted(signal);
   const hasBrief = Boolean(context.brief?.trim());
   const hasArchitecture = Boolean(context.architecture?.trim());
   return {
@@ -355,17 +410,20 @@ async function runAnalyzeForChat(projectRoot: string): Promise<{
   };
 }
 
-async function runTaskForChat(projectRoot: string, taskId: number): Promise<{
+async function runTaskForChat(projectRoot: string, taskId: number, signal?: AbortSignal): Promise<{
   taskId: number;
   completed: boolean;
   newlyCompleted: string[];
   message: string;
 }> {
+  throwIfAborted(signal);
   const state = new StateManager(projectRoot);
   const beforeCompleted = await state.readCompletedTasks();
   const beforeSet = new Set(beforeCompleted.map((task) => task.name));
-  const captured = createCapturingAdapter();
+  throwIfAborted(signal);
+  const captured = createCapturingAdapter(signal);
   await runImplementOperation(projectRoot, { taskId }, captured);
+  throwIfAborted(signal);
   const afterCompleted = await state.readCompletedTasks();
   const newlyCompleted = afterCompleted
     .filter((task) => !beforeSet.has(task.name))
@@ -381,6 +439,7 @@ async function runTaskForChat(projectRoot: string, taskId: number): Promise<{
 async function runAuditForChat(
   projectRoot: string,
   kind: "security" | "tests" | "ci",
+  signal?: AbortSignal,
 ): Promise<{
   kind: "security" | "tests" | "ci";
   summary: string | null;
@@ -388,11 +447,14 @@ async function runAuditForChat(
   issueCount: number;
   message: string;
 }> {
+  throwIfAborted(signal);
   const auditType = kind === "ci" ? "tests" : kind;
-  const captured = createCapturingAdapter();
+  const captured = createCapturingAdapter(signal);
   await runAuditOperation(projectRoot, auditType, captured);
+  throwIfAborted(signal);
   const state = new StateManager(projectRoot);
   const result = await state.readAudit(auditType);
+  throwIfAborted(signal);
   return {
     kind,
     summary: result?.summary ?? null,
@@ -547,10 +609,12 @@ function parseOperatorCommandFromText(text: string): OperatorCommand | null {
   return null;
 }
 
-async function executeOperatorCommand(projectRoot: string, command: OperatorCommand): Promise<string> {
+async function executeOperatorCommand(projectRoot: string, command: OperatorCommand, signal?: AbortSignal): Promise<string> {
+  throwIfAborted(signal);
   switch (command.type) {
     case "task-list": {
       const tasks = await readCurrentTasksSummary(projectRoot);
+      throwIfAborted(signal);
       if (tasks.length === 0) {
         return formatCommandResponse("/task list", ["No tasks found in the current task plan."]);
       }
@@ -564,35 +628,42 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
     }
 
     case "task-add": {
+      throwIfAborted(signal);
       const result = await appendTask(projectRoot, {
         title: command.title,
         description: command.description,
         files: command.files,
       });
+      throwIfAborted(signal);
       return formatCommandResponse("/task add", [`Added task ${result.taskId}: ${command.title}`]);
     }
 
     case "task-update": {
+      throwIfAborted(signal);
       await patchTask(projectRoot, String(parseTaskId(command.taskId)), {
         title: command.title,
         description: command.description,
         dependencies: command.dependencies,
         criteria: command.criteria,
       });
+      throwIfAborted(signal);
       return formatCommandResponse("/task update", [`Updated task ${command.taskId}.`]);
     }
 
     case "task-delete": {
+      throwIfAborted(signal);
       const deletedTaskIds = await deleteTask(
         projectRoot,
         String(parseTaskId(command.taskId)),
         command.cascadeDependents,
       );
+      throwIfAborted(signal);
       return formatCommandResponse("/task delete", [`Deleted task IDs: ${deletedTaskIds.join(", ")}`]);
     }
 
     case "task-run": {
-      const result = await runTaskForChat(projectRoot, parseTaskId(command.taskId));
+      const result = await runTaskForChat(projectRoot, parseTaskId(command.taskId), signal);
+      throwIfAborted(signal);
       if (result.completed) {
         return formatCommandResponse("/task run", [
           `Task ${command.taskId} executed and marked complete.`,
@@ -604,7 +675,8 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
     }
 
     case "audit-run": {
-      const result = await runAuditForChat(projectRoot, command.kind);
+      const result = await runAuditForChat(projectRoot, command.kind, signal);
+      throwIfAborted(signal);
       return formatCommandResponse(`/audit ${command.kind}`, [
         `Ran ${command.kind} audit.`,
         result?.summary ? `Summary: ${result.summary}` : "Summary: (none)",
@@ -614,7 +686,8 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
     }
 
     case "analyze-run": {
-      const result = await runAnalyzeForChat(projectRoot);
+      const result = await runAnalyzeForChat(projectRoot, signal);
+      throwIfAborted(signal);
       return formatCommandResponse("/analyze", [
         "Analyze completed.",
         `Brief available: ${result.hasBrief ? "yes" : "no"}`,
@@ -693,7 +766,7 @@ export async function createChatThread(
     title: normalizeTitle(input.title),
     provider: fallback.provider,
     model: fallback.model,
-    toolsEnabled: input.toolsEnabled !== false,
+    toolsEnabled: true,
   });
 }
 
@@ -714,7 +787,7 @@ export async function updateChatThread(
   const next: ChatThread = {
     ...thread,
     title: nextTitle,
-    ...(typeof input.toolsEnabled === "boolean" ? { toolsEnabled: input.toolsEnabled } : {}),
+    toolsEnabled: true,
     ...(typeof input.archived === "boolean" ? { archived: input.archived } : {}),
     updatedAt: Date.now(),
   };
@@ -742,12 +815,13 @@ export async function appendChatMessage(
   const config = await readEffectiveConfig(projectRoot);
   const selection = resolveStrongProviderAndModel(config);
   const activeThread: ChatThread = (
-    thread.provider !== selection.provider || thread.model !== selection.model
+    thread.provider !== selection.provider || thread.model !== selection.model || thread.toolsEnabled !== true
   )
     ? {
         ...thread,
         provider: selection.provider,
         model: selection.model,
+        toolsEnabled: true,
         updatedAt: Date.now(),
       }
     : thread;
@@ -782,18 +856,34 @@ export async function streamChatThreadResponse(
   rawThreadId: string | undefined,
   body: unknown,
   res: Response,
+  options?: { signal?: AbortSignal },
 ): Promise<void> {
+  const signal = options?.signal;
+  throwIfAborted(signal);
   const threadId = normalizeThreadId(rawThreadId);
+  const inFlightKey = `${projectRoot}::${threadId}`;
+  if (inFlightChatResponses.has(inFlightKey)) {
+    throw new ChatServiceError(409, "A chat action is already running for this thread. Stop it before sending another request.");
+  }
+  inFlightChatResponses.add(inFlightKey);
+  let releasedInFlight = false;
+  const releaseInFlight = () => {
+    if (releasedInFlight) return;
+    releasedInFlight = true;
+    inFlightChatResponses.delete(inFlightKey);
+  };
+  res.once("close", releaseInFlight);
   const { store, thread } = await requireThread(projectRoot, threadId);
   const config = await readEffectiveConfig(projectRoot);
   const selection = resolveStrongProviderAndModel(config);
   const activeThread: ChatThread = (
-    thread.provider !== selection.provider || thread.model !== selection.model
+    thread.provider !== selection.provider || thread.model !== selection.model || thread.toolsEnabled !== true
   )
     ? {
         ...thread,
         provider: selection.provider,
         model: selection.model,
+        toolsEnabled: true,
         updatedAt: Date.now(),
       }
     : thread;
@@ -832,9 +922,11 @@ export async function streamChatThreadResponse(
     if (isUiMessage(last) && last.role === "user") incomingUser = last;
   }
   if (incomingUser && !(await store.hasMessage(threadId, incomingUser.id))) {
+    throwIfAborted(signal);
     await appendChatMessage(projectRoot, threadId, { message: incomingUser });
   }
 
+  throwIfAborted(signal);
   const history = await store.listMessages(threadId);
   const uiMessages = history.map((row) => row.message);
   if (uiMessages.length === 0) {
@@ -853,43 +945,66 @@ export async function streamChatThreadResponse(
       commandType: operatorCommand.type,
     });
     try {
-      responseText = await executeOperatorCommand(projectRoot, operatorCommand);
+      responseText = await executeOperatorCommand(projectRoot, operatorCommand, signal);
+      throwIfAborted(signal);
       logger.info("Deterministic operator command completed", {
         threadId,
         commandType: operatorCommand.type,
       });
     } catch (err) {
+      if (isAbortLikeError(err) || signal?.aborted) {
+        logger.info("Deterministic operator command interrupted", {
+          threadId,
+          commandType: operatorCommand.type,
+        });
+        releaseInFlight();
+        return;
+      }
       logError(logger, "Deterministic operator command failed", err, {
         threadId,
         commandType: operatorCommand.type,
       });
       responseText = `Operator command failed: ${parseErrorMessage(err)}`;
     }
+    if (signal?.aborted || res.destroyed || res.writableEnded) {
+      logger.info("Skipping deterministic response stream after interruption", {
+        threadId,
+        commandType: operatorCommand.type,
+      });
+      releaseInFlight();
+      return;
+    }
     streamAssistantTextResponse(
       res,
       uiMessages,
       responseText,
       async (responseMessage) => {
-        const withMeta = attachMetadata(responseMessage, {
-          provider: activeThread.provider,
-          model: activeThread.model,
-          toolsEnabled: activeThread.toolsEnabled,
-          createdAt: Date.now(),
-        });
-        await store.appendMessage({
-          threadId,
-          provider: activeThread.provider,
-          model: activeThread.model,
-          toolsEnabled: activeThread.toolsEnabled,
-          message: withMeta,
-        });
-        await store.touchThread(threadId);
+        try {
+          if (signal?.aborted || res.destroyed || res.writableEnded) return;
+          const withMeta = attachMetadata(responseMessage, {
+            provider: activeThread.provider,
+            model: activeThread.model,
+            toolsEnabled: activeThread.toolsEnabled,
+            createdAt: Date.now(),
+          });
+          await store.appendMessage({
+            threadId,
+            provider: activeThread.provider,
+            model: activeThread.model,
+            toolsEnabled: activeThread.toolsEnabled,
+            message: withMeta,
+          });
+          await store.touchThread(threadId);
+        } finally {
+          releaseInFlight();
+        }
       },
     );
     return;
   }
   const state = new StateManager(projectRoot);
   const projectContext = await state.gatherContext();
+  throwIfAborted(signal);
 
   let runtime: RoleRuntime;
   try {
@@ -914,12 +1029,7 @@ export async function streamChatThreadResponse(
     });
     throw err;
   }
-  const benderTools = createBenderChatTools(projectRoot);
-  if (!activeThread.toolsEnabled) {
-    runtime.tools = undefined;
-    runtime.providerOptions = undefined;
-  }
-
+  const benderTools = createBenderChatTools(projectRoot, signal);
   const model = createModelForSelection(config, {
     provider: activeThread.provider,
     model: activeThread.model,
@@ -931,11 +1041,6 @@ export async function streamChatThreadResponse(
   };
   if (capabilities.supportsTools === false) {
     availableTools = undefined;
-  }
-  if (!activeThread.toolsEnabled) {
-    availableTools = capabilities.supportsTools === false
-      ? undefined
-      : benderTools;
   }
   logger.info("Starting chat model stream", {
     threadId,
@@ -957,6 +1062,16 @@ export async function streamChatThreadResponse(
   );
 
   let result;
+  let runtimeClosed = false;
+  const closeRuntime = async () => {
+    if (runtimeClosed) return;
+    runtimeClosed = true;
+    await runtime.close();
+  };
+  const abortRuntime = () => {
+    void closeRuntime();
+  };
+  signal?.addEventListener("abort", abortRuntime, { once: true });
   try {
     result = streamText({
       model,
@@ -966,20 +1081,35 @@ export async function streamChatThreadResponse(
       providerOptions: runtime.providerOptions,
       stopWhen: stepCountIs(5),
       maxOutputTokens: 2400,
+      abortSignal: signal,
     });
   } catch (err) {
+    signal?.removeEventListener("abort", abortRuntime);
+    if (isAbortLikeError(err) || signal?.aborted) {
+      releaseInFlight();
+      await closeRuntime();
+      return;
+    }
     logError(logger, "Failed to create chat stream", err, {
       threadId,
       provider: activeThread.provider,
       model: activeThread.model,
     });
-    await runtime.close();
+    await closeRuntime();
     throw err;
   }
 
   const stream = result.toUIMessageStream<UIMessage>({
     originalMessages: uiMessages,
     onError: (err) => {
+      if (isAbortLikeError(err) || signal?.aborted) {
+        logger.info("Chat stream interrupted", {
+          threadId,
+          provider: activeThread.provider,
+          model: activeThread.model,
+        });
+        return "";
+      }
       logError(logger, "Chat stream emitted error", err, {
         threadId,
         provider: activeThread.provider,
@@ -989,6 +1119,14 @@ export async function streamChatThreadResponse(
     },
     onFinish: async ({ responseMessage }) => {
       try {
+        if (signal?.aborted || res.destroyed || res.writableEnded) {
+          logger.info("Chat stream finished after interruption; skipping persistence", {
+            threadId,
+            provider: activeThread.provider,
+            model: activeThread.model,
+          });
+          return;
+        }
         const stats = summarizeResponseMessage(responseMessage);
         if (stats.textChars === 0 && stats.reasoningChars === 0 && stats.toolParts === 0) {
           logger.warn("Chat stream finished without visible assistant output", {
@@ -1019,6 +1157,7 @@ export async function streamChatThreadResponse(
           ...stats,
         });
       } catch (err) {
+        if (isAbortLikeError(err) || signal?.aborted) return;
         logError(logger, "Failed to persist streamed chat response", err, {
           threadId,
           provider: activeThread.provider,
@@ -1026,7 +1165,9 @@ export async function streamChatThreadResponse(
         });
         throw err;
       } finally {
-        await runtime.close();
+        signal?.removeEventListener("abort", abortRuntime);
+        releaseInFlight();
+        await closeRuntime();
       }
     },
   });

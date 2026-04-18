@@ -3,7 +3,7 @@ import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useProjectState } from "./hooks/useApi";
 import { useOperation } from "./hooks/useOperation";
 import { Sidebar, type View } from "./components/Sidebar";
-import { OperationDrawer, type InitModalSubmission } from "./components/OperationDrawer";
+import { OperationDrawer, type InitModalSubmission, type TaskCreateSubmission } from "./components/OperationDrawer";
 import { LoadingDots } from "./components/LoadingDots";
 import { GitDiffSidebar } from "./components/GitDiffSidebar";
 import { PlanView } from "./pages/PlanView";
@@ -14,14 +14,10 @@ import { SettingsView } from "./pages/SettingsView";
 import { AgentsView } from "./pages/AgentsView";
 import { EvalsView } from "./pages/EvalsView";
 
-interface PlanRunSubmission {
-  feature: string;
-  role: "analyzer" | "architect" | "planner" | "implementer" | "reviewer";
-  agentId?: string;
-  officeHoursMode?: "pressure-test" | "execution-plan";
-  askClarifyingQuestions: boolean;
-  requireArchitectureApproval: boolean;
-  requirePlanApproval: boolean;
+interface AppendTaskResponse {
+  ok?: boolean;
+  taskId?: number;
+  error?: string;
 }
 
 const VIEW_LABELS: Record<View, string> = {
@@ -85,8 +81,21 @@ export function App() {
     op.startOperation("/api/run/init", submission);
   }
 
-  function handleSubmitPlan(submission: PlanRunSubmission) {
-    op.startOperation("/api/run/plan", submission);
+  async function handleCreateTask(submission: TaskCreateSubmission) {
+    const res = await fetch("/api/tasks/append", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: submission.title,
+        description: submission.description,
+        agentId: submission.agentId,
+      }),
+    });
+    const body = await res.json().catch(() => ({})) as AppendTaskResponse;
+    if (!res.ok || !body.ok) {
+      throw new Error(body.error ?? `Failed to create task (${res.status})`);
+    }
+    await refresh();
   }
 
   return (
@@ -213,7 +222,7 @@ export function App() {
               onClear={op.clearOutput}
               onAbort={op.abort}
               onSubmitInit={handleSubmitInit}
-              onSubmitPlan={handleSubmitPlan}
+              onCreateTask={handleCreateTask}
             />
           </section>
 
@@ -221,7 +230,6 @@ export function App() {
             open={diffSidebarOpen}
             projectPath={state?.projectRoot ?? null}
             operationStatus={op.status}
-            onClose={() => setDiffSidebarOpen(false)}
           />
         </div>
       </main>
