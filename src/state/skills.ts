@@ -14,6 +14,8 @@ export interface SkillMeta {
 export interface SkillsRegistry {
   fetchedAt: number;
   skills: SkillMeta[];
+  /** True when the registry is served from stale cache because a network fetch failed. */
+  stale?: boolean;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -102,8 +104,17 @@ export async function fetchRegistry(force = false): Promise<SkillsRegistry> {
     await mkdir(cacheDir, { recursive: true });
   }
 
-  // List all skill directories
-  const items = (await githubGet(SKILLS_PATH)) as Array<{ name: string; type: string }>;
+  // List all skill directories — on network failure fall back to stale cache.
+  let items: Array<{ name: string; type: string }>;
+  try {
+    items = (await githubGet(SKILLS_PATH)) as Array<{ name: string; type: string }>;
+  } catch (networkErr) {
+    const stale = await readRegistry();
+    if (stale) {
+      return { ...stale, stale: true };
+    }
+    throw networkErr;
+  }
   const skillNames = items
     .filter((item) => item.type === "dir" && !item.name.startsWith("."))
     .map((item) => item.name);

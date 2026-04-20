@@ -117,6 +117,7 @@ export async function refreshSkillsRegistrySnapshot(): Promise<{ skills: unknown
 export async function getSkillsCatalog(projectRoot: string | null): Promise<{
   skills: SkillCatalogItem[];
   fetchedAt: number;
+  stale?: boolean;
   summary: SkillLibrarySummary;
 }> {
   const registry = await fetchSkillPackages({ projectRoot: projectRoot ?? undefined });
@@ -124,6 +125,7 @@ export async function getSkillsCatalog(projectRoot: string | null): Promise<{
   return {
     skills: catalog,
     fetchedAt: registry.fetchedAt,
+    stale: registry.stale === true ? true : undefined,
     summary: {
       total: catalog.length,
       curated: catalog.filter((s) => s.source === "curated").length,
