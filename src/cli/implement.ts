@@ -12,6 +12,7 @@ import { analyzeCommand } from "./analyze.js";
 import { createRoleRuntime, type RoleRuntime } from "../llm/runtime.js";
 import { getAllAgents, getEffectiveAgentForRole, type AgentConfig } from "../state/agents.js";
 import { readEffectiveConfig, type BenderConfig } from "../state/config.js";
+import { parseTaskPlanMarkdown, normalizeTaskId } from "../state/task-plan.js";
 import { createLogger, makeAdapterSink, toLoggerOptions, type Logger } from "../logger.js";
 import type { ModelSet } from "../llm/provider.js";
 import type { ProjectContext } from "../state/manager.js";
@@ -67,54 +68,13 @@ export async function maybeAutoReanalyze(
  * Parse a task plan markdown into structured task descriptions.
  */
 export function parseTaskPlan(planMarkdown: string): TaskDescription[] {
-  const tasks: TaskDescription[] = [];
-  const taskPattern = /###\s*Task\s*(\d+):\s*(.+?)\n([\s\S]*?)(?=\n###\s*Task|\n##\s|$)/g;
-
-  let match: RegExpExecArray | null;
-  while ((match = taskPattern.exec(planMarkdown)) !== null) {
-    const id = parseInt(match[1], 10);
-    const title = match[2].trim();
-    const body = match[3];
-
-    const descMatch = body.match(/\*\*Description\*\*:\s*([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
-    const description = descMatch ? descMatch[1].trim() : body.split("\n")[0];
-
-    const files: string[] = [];
-    const filesSection = body.match(/\*\*Files to create\/modify\*\*:\s*\n([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
-    if (filesSection) {
-      const section = filesSection[1];
-      const fileLines = section.match(/`([^`]+)`/g);
-      if (fileLines) {
-        files.push(...fileLines.map((f) => f.replace(/`/g, "").split(" — ")[0].trim()));
-      } else {
-        // Fallback for plain bullet lists without backticks.
-        const bullets = section
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => /^-\s+/.test(line))
-          .map((line) => line.replace(/^-\s+/, "").trim())
-          .filter((line) => line.length > 0);
-        for (const bullet of bullets) {
-          const normalized = bullet.replace(/^[`'"]|[`'"]$/g, "").trim();
-          if (
-            normalized.toLowerCase() === "(to be determined)"
-            || normalized.toLowerCase() === "tbd"
-            || normalized.toLowerCase() === "none"
-          ) {
-            continue;
-          }
-          files.push(normalized.split(" — ")[0].trim());
-        }
-      }
-    }
-
-    const criteriaMatch = body.match(/\*\*Acceptance criteria\*\*:\s*([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
-    const acceptanceCriteria = criteriaMatch ? criteriaMatch[1].trim() : "Task implemented and tests pass";
-
-    tasks.push({ id, title, description, files, acceptanceCriteria });
-  }
-
-  return tasks;
+  const parsed = parseTaskPlanMarkdown(planMarkdown);
+  return parsed.map((task) => ({
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    acceptanceCriteria: task.acceptanceCriteria,
+  }));
 }
 
 /**
@@ -282,8 +242,31 @@ async function ensureTaskBranch(
   adapter.info(`${exists ? "Switched to" : "Created and switched to"} branch: ${branchName}`);
 }
 
-export async function implementSingleTask(projectRoot: string, taskId: number, adapter: UIAdapter = terminalAdapter): Promise<void> {
-  adapter.header(`Bender Implement — Task ${taskId}`);
+async function setTaskStatus(
+  state: StateManager,
+  taskId: string,
+  status: "todo" | "in_progress" | "done",
+): Promise<void> {
+  const plan = await state.readCurrentTaskPlan();
+  if (!plan) return;
+  const hasTask = plan.tasks.some((task) => task.id === taskId);
+  if (!hasTask) return;
+  await state.writeCurrentTaskPlan({
+    ...plan,
+    generatedAt: new Date().toISOString(),
+    tasks: plan.tasks.map((task) => (task.id === taskId ? { ...task, status } : task)),
+  });
+}
+
+export async function implementSingleTask(projectRoot: string, taskId: string, adapter: UIAdapter = terminalAdapter): Promise<void> {
+  const normalizedTaskId = normalizeTaskId(taskId);
+  if (!normalizedTaskId) {
+    adapter.error(`Task id '${taskId}' is invalid. Expected format task-N.`);
+    adapter.cleanup();
+    return;
+  }
+
+  adapter.header(`Bender Implement — Task ${normalizedTaskId}`);
 
   const state = new StateManager(projectRoot);
   if (!state.isInitialized()) {
@@ -299,28 +282,31 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
     makeAdapterSink(adapter),
     toLoggerOptions(config.logging),
   );
-  logger.info("Starting task implementation", { taskId });
-  const currentTasks = await state.readCurrentTasks();
-
-  if (!currentTasks) {
+  logger.info("Starting task implementation", { taskId: normalizedTaskId });
+  const plan = await state.readCurrentTaskPlan();
+  if (!plan || plan.tasks.length === 0) {
     adapter.error("No task plan found. Run `bender plan` first.");
     adapter.cleanup();
     return;
   }
 
-  const tasks = parseTaskPlan(currentTasks);
-  const task = tasks.find((t) => t.id === taskId);
+  const tasks = plan.tasks.map((task) => ({
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    acceptanceCriteria: task.acceptanceCriteria,
+    status: task.status,
+    implementerAgentId: task.implementerAgentId,
+  }));
+  const task = tasks.find((t) => t.id === normalizedTaskId);
   if (!task) {
-    adapter.error(`Task ${taskId} not found in the current plan.`);
+    adapter.error(`Task ${normalizedTaskId} not found in the current plan.`);
     adapter.cleanup();
     return;
   }
 
   adapter.subheader(`Task ${task.id}: ${task.title}`);
   adapter.info(task.description);
-  if (task.files.length === 0) {
-    adapter.warn("Task has no explicit file targets. Add files in the task plan for more deterministic implementation output.");
-  }
 
   let models;
   try {
@@ -331,10 +317,9 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
     return;
   }
 
-  const taskAgents = await state.readTaskAgents();
   const allAgents = await getAllAgents();
   const defaultAgent = await getEffectiveAgentForRole("implementer");
-  const assignedAgentId = taskAgents[String(task.id)];
+  const assignedAgentId = task.implementerAgentId || "implementer";
   const assignedAgent = assignedAgentId
     ? allAgents.find((a) => a.id === assignedAgentId && a.baseRole === "implementer")
     : null;
@@ -375,6 +360,7 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
 
   try {
     const context = await state.gatherContext();
+    await setTaskStatus(state, task.id, "in_progress");
     adapter.info(
       `Using agent: ${agent.name} (${agent.modelTier}) · model ${formatTierModelLabel(config, agent.modelTier)}`,
     );
@@ -452,6 +438,7 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
       String(task.id),
       `# Task ${task.id}: ${task.title}\n\nCompleted: ${new Date().toISOString()}\n\nFiles: ${fileOps.map((op) => op.path).join(", ")}`,
     );
+    await setTaskStatus(state, task.id, "done");
 
     logger.info("Task completed", {
       taskId: task.id,
@@ -464,6 +451,11 @@ export async function implementSingleTask(projectRoot: string, taskId: number, a
     // Auto re-analyze if threshold reached
     await maybeAutoReanalyze(projectRoot, config, task, adapter);
   } finally {
+    const planAfterRun = await state.readCurrentTaskPlan();
+    const persistedStatus = planAfterRun?.tasks.find((entry) => entry.id === task.id)?.status;
+    if (persistedStatus === "in_progress") {
+      await setTaskStatus(state, task.id, "todo");
+    }
     await runtime.close();
   }
 
@@ -487,17 +479,24 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
     makeAdapterSink(adapter),
     toLoggerOptions(config.logging),
   );
-  const currentTasks = await state.readCurrentTasks();
-
-  if (!currentTasks) {
+  const plan = await state.readCurrentTaskPlan();
+  if (!plan || plan.tasks.length === 0) {
     adapter.error("No task plan found. Run `bender plan` or `bender init` first.");
     adapter.cleanup();
     return;
   }
-
-  const tasks = parseTaskPlan(currentTasks);
+  const tasks = plan.tasks
+    .filter((task) => task.status !== "done")
+    .map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      acceptanceCriteria: task.acceptanceCriteria,
+      status: task.status,
+      implementerAgentId: task.implementerAgentId,
+    }));
   if (tasks.length === 0) {
-    adapter.error("Could not parse any tasks from the plan. Check .bender/tasks/current.md format.");
+    adapter.info("All tasks are already marked done.");
     adapter.cleanup();
     return;
   }
@@ -526,7 +525,6 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
       adapter.info("Continuing without git commits.");
     }
   }
-  const taskAgents = await state.readTaskAgents();
   const allAgents = await getAllAgents();
   const defaultAgent = await getEffectiveAgentForRole("implementer");
   const reviewerAgent = await getEffectiveAgentForRole("reviewer");
@@ -535,7 +533,7 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
     if (gitEnabled) {
       await ensureTaskBranch(state, git, task, adapter);
     }
-    const assignedAgentId = taskAgents[String(task.id)];
+    const assignedAgentId = task.implementerAgentId || "implementer";
     const assignedAgent = assignedAgentId
       ? allAgents.find((a) => a.id === assignedAgentId && a.baseRole === "implementer")
       : null;
@@ -575,6 +573,7 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
 
     try {
       const context = await state.gatherContext();
+      await setTaskStatus(state, task.id, "in_progress");
 
       const spin = adapter.spinner(`Implementing task ${task.id}...`);
       spin.start();
@@ -660,6 +659,7 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
         String(task.id),
         `# Task ${task.id}: ${task.title}\n\nCompleted: ${new Date().toISOString()}\n\nFiles: ${fileOps.map((op) => op.path).join(", ")}`,
       );
+      await setTaskStatus(state, task.id, "done");
 
       completedTaskSummaries.push(`Task ${task.id}: ${task.title}`);
       logger.info("Task completed", {
@@ -671,6 +671,11 @@ export async function implementCommand(projectRoot: string, adapter: UIAdapter =
       // Auto re-analyze if threshold reached
       await maybeAutoReanalyze(projectRoot, config, task, adapter);
     } finally {
+      const planAfterRun = await state.readCurrentTaskPlan();
+      const persistedStatus = planAfterRun?.tasks.find((entry) => entry.id === task.id)?.status;
+      if (persistedStatus === "in_progress") {
+        await setTaskStatus(state, task.id, "todo");
+      }
       await runtime.close();
     }
   }

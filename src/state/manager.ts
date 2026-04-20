@@ -9,6 +9,7 @@ import {
   toCanonicalTaskPlan,
   type CanonicalTaskPlanDocument,
 } from "./task-plan.js";
+import type { WorkflowDefinition, WorkflowRun } from "../workflows/types.js";
 
 function nowTs(): number {
   return Date.now();
@@ -44,6 +45,8 @@ export class StateManager {
       join(this.benderDir, "tasks", "completed"),
       join(this.benderDir, "api-contracts"),
       join(this.benderDir, "sessions"),
+      join(this.benderDir, "workflows"),
+      join(this.benderDir, "workflow-runs"),
     ];
     for (const dir of dirs) {
       if (!existsSync(dir)) {
@@ -419,6 +422,85 @@ export class StateManager {
     return sessions;
   }
 
+  // --- Workflows ---
+
+  async readWorkflows(): Promise<WorkflowDefinition[]> {
+    const files = await this.listStateJsonFiles("workflows");
+    const workflows: WorkflowDefinition[] = [];
+    for (const file of files) {
+      const id = file.replace(/\.json$/i, "");
+      const item = await this.readWorkflow(id);
+      if (item) workflows.push(item);
+    }
+    return workflows.sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
+  }
+
+  async readWorkflow(id: string): Promise<WorkflowDefinition | null> {
+    const normalizedId = id.trim();
+    if (!normalizedId) return null;
+    const raw = await this.readFileOrNull(`workflows/${normalizedId}.json`);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return normalizeWorkflowDefinition(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  async writeWorkflow(def: WorkflowDefinition): Promise<void> {
+    const normalized = normalizeWorkflowDefinition(def);
+    if (!normalized) {
+      throw new Error("Invalid workflow definition payload");
+    }
+    await this.writeStateFile(`workflows/${normalized.id}.json`, JSON.stringify(normalized, null, 2));
+  }
+
+  async deleteWorkflow(id: string): Promise<void> {
+    const normalizedId = id.trim();
+    if (!normalizedId) return;
+    await this.deleteStateFile(`workflows/${normalizedId}.json`);
+  }
+
+  async readWorkflowRuns(workflowId?: string): Promise<WorkflowRun[]> {
+    const files = await this.listStateJsonFiles("workflow-runs");
+    const runs: WorkflowRun[] = [];
+    const filterId = workflowId?.trim();
+    for (const file of files) {
+      const id = file.replace(/\.json$/i, "");
+      const item = await this.readWorkflowRun(id);
+      if (!item) continue;
+      if (filterId && item.workflowId !== filterId) continue;
+      runs.push(item);
+    }
+    return runs.sort((a, b) => {
+      const aTs = a.finishedAt ?? a.startedAt;
+      const bTs = b.finishedAt ?? b.startedAt;
+      return bTs - aTs;
+    });
+  }
+
+  async readWorkflowRun(runId: string): Promise<WorkflowRun | null> {
+    const normalizedId = runId.trim();
+    if (!normalizedId) return null;
+    const raw = await this.readFileOrNull(`workflow-runs/${normalizedId}.json`);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return normalizeWorkflowRun(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  async writeWorkflowRun(run: WorkflowRun): Promise<void> {
+    const normalized = normalizeWorkflowRun(run);
+    if (!normalized) {
+      throw new Error("Invalid workflow run payload");
+    }
+    await this.writeStateFile(`workflow-runs/${normalized.id}.json`, JSON.stringify(normalized, null, 2));
+  }
+
   // --- Flows ---
 
   async readFlows(): Promise<string | null> {
@@ -503,6 +585,24 @@ export class StateManager {
     await writeFile(fullPath, content, "utf-8");
   }
 
+  private async deleteStateFile(relativePath: string): Promise<void> {
+    await this.db.init();
+    this.db.deleteKv(this.stateFileKey(relativePath));
+    const fullPath = join(this.benderDir, relativePath);
+    if (!existsSync(fullPath)) return;
+    const { rm } = await import("node:fs/promises");
+    await rm(fullPath, { force: true });
+  }
+
+  private async listStateJsonFiles(relativeDir: string): Promise<string[]> {
+    const fullDir = join(this.benderDir, relativeDir);
+    if (!existsSync(fullDir)) return [];
+    const entries = await readdir(fullDir);
+    return entries
+      .filter((name) => name.toLowerCase().endsWith(".json"))
+      .sort((a, b) => a.localeCompare(b));
+  }
+
   private stateFileKey(relativePath: string): string {
     return `state-file:${relativePath}`;
   }
@@ -534,6 +634,181 @@ export interface ProjectContext {
   decisions: string[];
   currentTasks: string | null;
   apiContracts: string | null;
+}
+
+function normalizeString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    const normalized = normalizeString(item);
+    if (normalized) out.push(normalized);
+  }
+  return [...new Set(out)];
+}
+
+function normalizeWorkflowDefinition(input: unknown): WorkflowDefinition | null {
+  if (!input || typeof input !== "object") return null;
+  const obj = input as Record<string, unknown>;
+  const id = normalizeString(obj.id);
+  const name = normalizeString(obj.name);
+  if (!id || !name) return null;
+  if (!Array.isArray(obj.steps)) return null;
+
+  const steps = obj.steps
+    .map((value) => {
+      if (!value || typeof value !== "object") return null;
+      const step = value as Record<string, unknown>;
+      const stepId = normalizeString(step.id);
+      const stepName = normalizeString(step.name);
+      const stepType = normalizeString(step.type);
+      if (!stepId || !stepName) return null;
+      if (
+        stepType !== "prompt"
+        && stepType !== "action"
+        && stepType !== "condition"
+        && stepType !== "extract"
+        && stepType !== "response"
+      ) {
+        return null;
+      }
+      const config = step.config && typeof step.config === "object" && !Array.isArray(step.config)
+        ? { ...(step.config as Record<string, unknown>) }
+        : {};
+      return {
+        id: stepId,
+        type: stepType,
+        name: stepName,
+        config,
+      };
+    })
+    .filter((step): step is WorkflowDefinition["steps"][number] => !!step);
+
+  if (steps.length === 0) return null;
+
+  const createdAt = typeof obj.createdAt === "number" && Number.isFinite(obj.createdAt)
+    ? Math.floor(obj.createdAt)
+    : nowTs();
+  const updatedAt = typeof obj.updatedAt === "number" && Number.isFinite(obj.updatedAt)
+    ? Math.floor(obj.updatedAt)
+    : createdAt;
+  const version = typeof obj.version === "number" && Number.isFinite(obj.version) && obj.version > 0
+    ? Math.floor(obj.version)
+    : 1;
+  const acceptanceCriteria = normalizeStringArray(obj.acceptanceCriteria);
+  const description = normalizeString(obj.description);
+
+  return {
+    id,
+    name,
+    ...(description ? { description } : {}),
+    ...(acceptanceCriteria.length > 0 ? { acceptanceCriteria } : {}),
+    version,
+    enabled: obj.enabled !== false,
+    ...(obj.inputSchema && typeof obj.inputSchema === "object" && !Array.isArray(obj.inputSchema)
+      ? { inputSchema: { ...(obj.inputSchema as Record<string, unknown>) } }
+      : {}),
+    ...(obj.outputSchema && typeof obj.outputSchema === "object" && !Array.isArray(obj.outputSchema)
+      ? { outputSchema: { ...(obj.outputSchema as Record<string, unknown>) } }
+      : {}),
+    steps,
+    createdAt,
+    updatedAt,
+  };
+}
+
+function normalizeWorkflowRun(input: unknown): WorkflowRun | null {
+  if (!input || typeof input !== "object") return null;
+  const obj = input as Record<string, unknown>;
+  const id = normalizeString(obj.id);
+  const workflowId = normalizeString(obj.workflowId);
+  const status = normalizeString(obj.status);
+  if (!id || !workflowId) return null;
+  if (status !== "queued" && status !== "running" && status !== "completed" && status !== "failed") {
+    return null;
+  }
+
+  const startedAt = typeof obj.startedAt === "number" && Number.isFinite(obj.startedAt)
+    ? Math.floor(obj.startedAt)
+    : nowTs();
+  const finishedAt = typeof obj.finishedAt === "number" && Number.isFinite(obj.finishedAt)
+    ? Math.floor(obj.finishedAt)
+    : undefined;
+  const inputPayload = obj.input && typeof obj.input === "object" && !Array.isArray(obj.input)
+    ? { ...(obj.input as Record<string, unknown>) }
+    : {};
+  const outputPayload = obj.output && typeof obj.output === "object" && !Array.isArray(obj.output)
+    ? { ...(obj.output as Record<string, unknown>) }
+    : undefined;
+  const error = normalizeString(obj.error) || undefined;
+
+  const stepsRaw = Array.isArray(obj.steps) ? obj.steps : [];
+  const steps = stepsRaw
+    .map((value) => {
+      if (!value || typeof value !== "object") return null;
+      const step = value as Record<string, unknown>;
+      const stepId = normalizeString(step.stepId);
+      const stepType = normalizeString(step.type);
+      const stepStatus = normalizeString(step.status);
+      if (!stepId) return null;
+      if (
+        stepType !== "prompt"
+        && stepType !== "action"
+        && stepType !== "condition"
+        && stepType !== "extract"
+        && stepType !== "response"
+      ) {
+        return null;
+      }
+      if (
+        stepStatus !== "running"
+        && stepStatus !== "completed"
+        && stepStatus !== "failed"
+        && stepStatus !== "skipped"
+      ) {
+        return null;
+      }
+      const stepStartedAt = typeof step.startedAt === "number" && Number.isFinite(step.startedAt)
+        ? Math.floor(step.startedAt)
+        : startedAt;
+      const stepFinishedAt = typeof step.finishedAt === "number" && Number.isFinite(step.finishedAt)
+        ? Math.floor(step.finishedAt)
+        : undefined;
+      const stepInput = step.input && typeof step.input === "object" && !Array.isArray(step.input)
+        ? { ...(step.input as Record<string, unknown>) }
+        : undefined;
+      const stepOutput = step.output && typeof step.output === "object" && !Array.isArray(step.output)
+        ? { ...(step.output as Record<string, unknown>) }
+        : undefined;
+      const stepError = normalizeString(step.error) || undefined;
+
+      return {
+        stepId,
+        type: stepType,
+        status: stepStatus,
+        ...(stepInput ? { input: stepInput } : {}),
+        ...(stepOutput ? { output: stepOutput } : {}),
+        ...(stepError ? { error: stepError } : {}),
+        startedAt: stepStartedAt,
+        ...(stepFinishedAt !== undefined ? { finishedAt: stepFinishedAt } : {}),
+      };
+    })
+    .filter((step): step is WorkflowRun["steps"][number] => !!step);
+
+  return {
+    id,
+    workflowId,
+    status,
+    input: inputPayload,
+    ...(outputPayload ? { output: outputPayload } : {}),
+    ...(error ? { error } : {}),
+    startedAt,
+    ...(finishedAt !== undefined ? { finishedAt } : {}),
+    steps,
+  };
 }
 
 function normalizeTaskGitHubLink(input: unknown): TaskGitHubLink | null {

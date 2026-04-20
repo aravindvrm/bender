@@ -41,27 +41,29 @@ describe("chat bender tools", () => {
     const added = await tools.bender_add_task.execute?.({
       title: "Set up chat command runner",
       description: "Wire tool calls to task services",
-      files: ["src/cli/services/chat.ts"],
-    }) as { taskId?: number };
-    expect(added.taskId).toBe(1);
+      acceptanceCriteria: ["Task updates persist in canonical plan"],
+    }) as { taskId?: string };
+    expect(added.taskId).toBe("task-1");
 
     const listAfterAdd = await tools.bender_list_tasks.execute?.({}) as {
       count?: number;
-      tasks?: Array<{ id: number; title: string }>;
+      tasks?: Array<{ id: string; title: string; status: string }>;
     };
     expect(listAfterAdd.count).toBe(1);
     expect(listAfterAdd.tasks?.[0]?.title).toContain("Set up chat command runner");
 
     const updated = await tools.bender_update_task.execute?.({
-      taskId: 1,
+      taskId: "task-1",
       title: "Update chat command runner",
-    }) as { updated?: { title?: string } };
+      status: "in_progress",
+    }) as { updated?: { title?: string; status?: string } };
     expect(updated.updated?.title).toBe("Update chat command runner");
+    expect(updated.updated?.status).toBe("in_progress");
 
     const deleted = await tools.bender_delete_task.execute?.({
-      taskId: 1,
-    }) as { deletedTaskIds?: number[] };
-    expect(deleted.deletedTaskIds).toEqual([1]);
+      taskId: "task-1",
+    }) as { deletedTaskIds?: string[] };
+    expect(deleted.deletedTaskIds).toEqual(["task-1"]);
 
     const listAfterDelete = await tools.bender_list_tasks.execute?.({}) as { count?: number };
     expect(listAfterDelete.count).toBe(0);

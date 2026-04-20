@@ -70,9 +70,9 @@ describe("api /tasks/append", () => {
       }),
     });
     expect(first.ok).toBe(true);
-    const firstBody = (await first.json()) as { ok?: boolean; taskId?: number };
+    const firstBody = (await first.json()) as { ok?: boolean; taskId?: string };
     expect(firstBody.ok).toBe(true);
-    expect(firstBody.taskId).toBe(1);
+    expect(firstBody.taskId).toBe("task-1");
 
     const second = await fetch(`${baseUrl}/api/tasks/append`, {
       method: "POST",
@@ -83,9 +83,9 @@ describe("api /tasks/append", () => {
       }),
     });
     expect(second.ok).toBe(true);
-    const secondBody = (await second.json()) as { ok?: boolean; taskId?: number };
+    const secondBody = (await second.json()) as { ok?: boolean; taskId?: string };
     expect(secondBody.ok).toBe(true);
-    expect(secondBody.taskId).toBe(2);
+    expect(secondBody.taskId).toBe("task-2");
 
     const taskPlanPath = join(tempProject, ".bender", "tasks", "current.md");
     const taskPlanJsonPath = join(tempProject, ".bender", "tasks", "current.json");
@@ -95,7 +95,7 @@ describe("api /tasks/append", () => {
 
     const parsed = parseTaskPlan(markdown);
     expect(parsed).toHaveLength(2);
-    expect(parsed.map((t) => t.id)).toEqual([1, 2]);
+    expect(parsed.map((t) => t.id)).toEqual(["task-1", "task-2"]);
     expect(parsed[0]?.title).toBe("Fix test audit issue");
     expect(parsed[1]?.title).toBe("Harden CI step");
   });
@@ -112,12 +112,12 @@ describe("api /tasks/append", () => {
     expect(createRes.ok).toBe(true);
     const createBody = (await createRes.json()) as {
       ok?: boolean;
-      taskId?: number;
+      taskId?: string;
       assignments?: Record<string, string> | null;
     };
     expect(createBody.ok).toBe(true);
-    expect(createBody.taskId).toBe(3);
-    expect(createBody.assignments?.["3"]).toBe("default-implementer");
+    expect(createBody.taskId).toBe("task-3");
+    expect(createBody.assignments?.["task-3"]).toBe("default-implementer");
 
     const taskPlanPath = join(tempProject, ".bender", "tasks", "current.md");
     const markdown = await readFile(taskPlanPath, "utf-8");

@@ -30,7 +30,7 @@ describe("github work item service", () => {
     const projectRoot = await makeProjectDir("bender-gh-work-items-list-");
     const state = new StateManager(projectRoot);
     await state.init();
-    await state.setTaskGitHubLink("1", {
+    await state.setTaskGitHubLink("task-1", {
       repoFullName: "acme/repo",
       issueNumber: 42,
     });
@@ -84,15 +84,15 @@ describe("github work item service", () => {
       version: 1,
       generatedAt: new Date().toISOString(),
       tasks: [{
-        id: 1,
+        id: "task-1",
         title: "Seed task",
         description: "Existing task",
-        files: ["src/seed.ts"],
-        dependencies: "None",
-        acceptanceCriteria: "done",
+        acceptanceCriteria: ["done"],
+        implementerAgentId: "implementer",
+        status: "todo",
       }],
     });
-    await state.setTaskGitHubLink("1", {
+    await state.setTaskGitHubLink("task-1", {
       repoFullName: "acme/repo",
       issueNumber: 41,
       issueUrl: "https://github.com/acme/repo/issues/41",
@@ -109,7 +109,7 @@ describe("github work item service", () => {
         title: "Implement issue #77",
         description: "Apply project-scoped ingestion updates.",
         dependencies: "1",
-        acceptanceCriteria: "All issue requirements implemented",
+        acceptanceCriteria: ["All issue requirements implemented"],
         suggestedFiles: ["src/cli/services/github-work-items.ts"],
       }],
     });
@@ -118,7 +118,7 @@ describe("github work item service", () => {
     expect(imported.imported).toEqual([
       {
         candidateId: "candidate-77",
-        taskId: 2,
+        taskId: "task-2",
         issueNumber: 77,
       },
     ]);
@@ -126,20 +126,20 @@ describe("github work item service", () => {
     const plan = await state.readCurrentTaskPlan();
     expect(plan?.tasks).toHaveLength(2);
     expect(plan?.tasks[1]?.title).toBe("Implement issue #77");
-    expect(plan?.tasks[1]?.dependencies).toBe("1");
-    expect(plan?.tasks[1]?.acceptanceCriteria).toBe("All issue requirements implemented");
+    expect(plan?.tasks[1]?.acceptanceCriteria).toContain("All issue requirements implemented");
+    expect(plan?.tasks[1]?.acceptanceCriteria).toContain("Dependency context from issue ingestion: 1");
 
     const links = await state.readTaskGitHubLinks();
-    expect(links["2"]?.repoFullName).toBe("acme/repo");
-    expect(links["2"]?.issueNumber).toBe(77);
-    expect(links["2"]?.issueUrl).toBe("https://github.com/acme/repo/issues/77");
+    expect(links["task-2"]?.repoFullName).toBe("acme/repo");
+    expect(links["task-2"]?.issueNumber).toBe(77);
+    expect(links["task-2"]?.issueUrl).toBe("https://github.com/acme/repo/issues/77");
   });
 
   it("rejects imports targeting a different repo", async () => {
     const projectRoot = await makeProjectDir("bender-gh-work-items-repo-mismatch-");
     const state = new StateManager(projectRoot);
     await state.init();
-    await state.setTaskGitHubLink("1", {
+    await state.setTaskGitHubLink("task-1", {
       repoFullName: "acme/repo",
       issueNumber: 10,
     });
@@ -165,4 +165,3 @@ describe("github work item service", () => {
     expect((thrown as Error).message).toContain("targets 'other/repo'");
   });
 });
-

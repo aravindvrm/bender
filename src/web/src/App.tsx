@@ -13,15 +13,17 @@ import { GitView } from "./pages/ChangesView";
 import { SettingsView } from "./pages/SettingsView";
 import { AgentsView } from "./pages/AgentsView";
 import { EvalsView } from "./pages/EvalsView";
+import { WorkflowsView } from "./pages/WorkflowsView";
 
 interface AppendTaskResponse {
   ok?: boolean;
-  taskId?: number;
+  taskId?: string;
   error?: string;
 }
 
 const VIEW_LABELS: Record<View, string> = {
   plan: "Tasks",
+  workflows: "Workflows",
   architecture: "Architecture",
   brief: "Overview",
   evals: "Evals",
@@ -192,6 +194,9 @@ export function App() {
                       onRunTask={(taskId) => op.startOperation("/api/run/implement", { taskId })}
                       onTasksChanged={refresh}
                     />
+                  )}
+                  {activeView === "workflows" && state && (
+                    <WorkflowsView />
                   )}
                   {activeView === "architecture" && state && (
                     <ArchitectureView

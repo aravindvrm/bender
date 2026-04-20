@@ -24,6 +24,7 @@ import { registerStateRoutes } from "./routes/state.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerTaskGitHubRoutes } from "./routes/task-github.js";
 import { registerTerminalRoutes } from "./routes/terminal.js";
+import { registerWorkflowRoutes } from "./routes/workflows.js";
 import {
   authCloneUrl,
   clearGitHubSession,
@@ -216,6 +217,12 @@ export async function startServer(initialProject?: string, port?: number): Promi
   });
   registerTaskGitHubRoutes(app, {
     getCurrentProject: () => currentProject,
+    readGitHubSession,
+    githubApi,
+  });
+  registerWorkflowRoutes(app, {
+    getCurrentProject: () => currentProject,
+    getProject,
     readGitHubSession,
     githubApi,
   });

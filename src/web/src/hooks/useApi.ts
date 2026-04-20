@@ -11,6 +11,18 @@ export interface ProjectState {
   schema: string | null;
   decisions: { name: string; content: string }[];
   currentTasks: string | null;
+  currentTaskPlan?: {
+    version: 1;
+    generatedAt: string;
+    tasks: Array<{
+      id: string;
+      title: string;
+      description: string;
+      acceptanceCriteria: string[];
+      implementerAgentId: string;
+      status: "todo" | "in_progress" | "done";
+    }>;
+  } | null;
   completedTasks: { name: string; content: string }[];
   taskAgents?: Record<string, string>;
   taskGitHubLinks?: Record<string, {

@@ -90,16 +90,29 @@ export function registerTaskRoutes(app: Express, deps: TasksRouteDeps): void {
 
   app.post("/api/tasks/append", async (req, res) => {
     try {
-      const { title, description, files, agentId } = req.body as {
+      const {
+        title,
+        description,
+        acceptanceCriteria,
+        implementerAgentId,
+        agentId,
+      } = req.body as {
         title?: string;
         description?: string;
-        files?: string[];
+        acceptanceCriteria?: string[];
+        implementerAgentId?: string;
         agentId?: string | null;
       };
+      const selectedAgentId = (implementerAgentId ?? agentId ?? "").trim() || undefined;
       const projectRoot = deps.getProject();
-      const result = await appendTask(projectRoot, { title, description, files });
-      const assignments = agentId
-        ? await setTaskAgent(projectRoot, String(result.taskId), agentId)
+      const result = await appendTask(projectRoot, {
+        title,
+        description,
+        acceptanceCriteria,
+        implementerAgentId: selectedAgentId,
+      });
+      const assignments = selectedAgentId
+        ? await setTaskAgent(projectRoot, result.taskId, selectedAgentId)
         : null;
       res.json({ ok: true, taskId: result.taskId, assignments });
     } catch (err) {
@@ -112,17 +125,31 @@ export function registerTaskRoutes(app: Express, deps: TasksRouteDeps): void {
     try {
       const projectRoot = deps.getProject();
       const { taskId } = req.params;
-      const { title, description, dependencies, criteria } = (req.body ?? {}) as {
+      const {
+        title,
+        description,
+        acceptanceCriteria,
+        criteria,
+        implementerAgentId,
+        agentId,
+        status,
+      } = (req.body ?? {}) as {
         title?: string;
         description?: string;
-        dependencies?: string;
+        acceptanceCriteria?: string[];
         criteria?: string;
+        implementerAgentId?: string;
+        agentId?: string;
+        status?: "todo" | "in_progress" | "done";
       };
+
       await patchTask(projectRoot, taskId, {
         title,
         description,
-        dependencies,
+        acceptanceCriteria,
         criteria,
+        implementerAgentId: implementerAgentId ?? agentId,
+        status,
       });
       res.json({ ok: true });
     } catch (err) {

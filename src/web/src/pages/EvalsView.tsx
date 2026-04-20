@@ -119,11 +119,10 @@ interface EvalSuiteRun {
 }
 
 interface ParsedPlanTask {
-  id: number;
+  id: string;
   title: string;
   description: string;
-  files: string[];
-  criteria: string;
+  acceptanceCriteria: string[];
 }
 
 interface EvalsViewProps {
@@ -136,51 +135,69 @@ interface EvalsViewProps {
   ) => void;
 }
 
-function parsePlanTasks(markdown: string | null): ParsedPlanTask[] {
+function parsePlanTasks(state: ProjectState): ParsedPlanTask[] {
+  if (state.currentTaskPlan?.tasks?.length) {
+    return state.currentTaskPlan.tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      acceptanceCriteria: Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : [],
+    }));
+  }
+
+  const markdown = state.currentTasks;
   if (!markdown) return [];
+
   const tasks: ParsedPlanTask[] = [];
-  const pattern = /###\s*Task\s*(\d+):\s*(.+?)\n([\s\S]*?)(?=\n###\s*Task|\n##\s|$)/g;
+  const pattern = /###\s*Task\s*([^:\n]+):\s*(.+?)\n([\s\S]*?)(?=\n###\s*Task|\n##\s|$)/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(markdown)) !== null) {
     const body = match[3];
+    const rawId = match[1].trim();
+    const normalizedId = /^task-\d+$/i.test(rawId)
+      ? rawId.toLowerCase()
+      : /^\d+$/.test(rawId)
+        ? `task-${rawId}`
+        : "";
+    if (!normalizedId) continue;
     const descMatch = body.match(/\*\*Description\*\*:\s*([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
-    const filesMatch = body.match(/`([^`]+\.[a-z0-9._/-]+)`/gi);
-    const criteriaMatch = body.match(/\*\*Acceptance criteria\*\*:\s*([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
+    const criteriaSection = body.match(/\*\*Acceptance criteria\*\*:\s*([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
+    const acceptanceCriteria = (criteriaSection?.[1] ?? "")
+      .split("\n")
+      .map((line) => line.trim().replace(/^[-*]\s+/, "").trim())
+      .filter(Boolean);
     tasks.push({
-      id: Number(match[1]),
+      id: normalizedId,
       title: match[2].trim(),
       description: descMatch?.[1]?.trim() ?? "",
-      files: filesMatch ? filesMatch.map((f) => f.replace(/`/g, "")) : [],
-      criteria: criteriaMatch?.[1]?.trim() ?? "",
+      acceptanceCriteria: acceptanceCriteria.length > 0 ? acceptanceCriteria : ["Task implemented and verified."],
     });
   }
   return tasks;
 }
 
-function evalTaskIdForPlanTask(taskId: number): string {
+function evalTaskIdForPlanTask(taskId: string): string {
   return `plan-task-${taskId}`;
 }
 
-function planTaskIdFromEvalTaskId(evalTaskId: string): number | null {
-  const match = evalTaskId.match(/^plan-task-(\d+)$/);
-  if (!match) return null;
-  const id = Number(match[1]);
-  return Number.isFinite(id) ? id : null;
+function planTaskIdFromEvalTaskId(evalTaskId: string): string | null {
+  const prefix = "plan-task-";
+  if (!evalTaskId.startsWith(prefix)) return null;
+  return evalTaskId.slice(prefix.length) || null;
 }
 
 function evalTaskPromptFromPlanTask(task: ParsedPlanTask): string {
-  const fileList = task.files.length > 0 ? task.files.map((f) => `- ${f}`).join("\n") : "- (not specified)";
+  const criteria = task.acceptanceCriteria.length > 0
+    ? task.acceptanceCriteria.map((entry) => `- ${entry}`).join("\n")
+    : "- Task implemented and verified.";
   return [
     `Implement Task ${task.id}: ${task.title}`,
     "",
     "Description:",
     task.description || "No description provided.",
     "",
-    "Files to create/modify:",
-    fileList,
-    "",
     "Acceptance criteria:",
-    task.criteria || "Task implemented and verified.",
+    criteria,
   ].join("\n");
 }
 
@@ -280,7 +297,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
   const [modelRefreshError, setModelRefreshError] = useState<string | null>(null);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
 
-  const [selectedPlanTaskIds, setSelectedPlanTaskIds] = useState<Set<number>>(new Set());
+  const [selectedPlanTaskIds, setSelectedPlanTaskIds] = useState<Set<string>>(new Set());
   const [selectedConfigIds, setSelectedConfigIds] = useState<Set<string>>(new Set());
   const [newSuiteName, setNewSuiteName] = useState("");
   const [selectedSuiteId, setSelectedSuiteId] = useState<string>("");
@@ -292,7 +309,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
   const [activeSuiteRunId, setActiveSuiteRunId] = useState<string | null>(null);
   const [activeSuiteRun, setActiveSuiteRun] = useState<{ suiteRun: EvalSuiteRun; taskRuns: EvalTaskRun[] } | null>(null);
 
-  const planTasks = useMemo(() => parsePlanTasks(state.currentTasks), [state.currentTasks]);
+  const planTasks = useMemo(() => parsePlanTasks(state), [state]);
   const planTaskById = useMemo(() => new Map(planTasks.map((t) => [t.id, t])), [planTasks]);
   const configById = useMemo(() => new Map(configs.map((c) => [c.id, c])), [configs]);
   const configNameById = useMemo(() => new Map(configs.map((c) => [c.id, c.name])), [configs]);
@@ -626,7 +643,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
     if (!selectedSuiteId) return;
     const suite = suites.find((s) => s.id === selectedSuiteId);
     if (!suite) return;
-    const next = new Set<number>();
+    const next = new Set<string>();
     for (const evalTaskId of suite.taskIds) {
       const id = planTaskIdFromEvalTaskId(evalTaskId);
       if (id !== null && planTaskById.has(id)) next.add(id);

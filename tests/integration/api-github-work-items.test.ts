@@ -127,7 +127,7 @@ describe("api github work-items routes", () => {
     });
     expect(seedTask.ok).toBe(true);
 
-    const linkSeedTask = await fetch(`${baseUrl}/api/tasks/links/1`, {
+    const linkSeedTask = await fetch(`${baseUrl}/api/tasks/links/task-1`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -152,7 +152,7 @@ describe("api github work-items routes", () => {
           title: "Implement issue import",
           description: "Add review-driven import flow.",
           dependencies: "1",
-          acceptanceCriteria: "Imported tasks linked to source issue",
+          acceptanceCriteria: ["Imported tasks linked to source issue"],
           suggestedFiles: ["src/cli/services/github-work-items.ts"],
         }],
       }),
@@ -160,10 +160,10 @@ describe("api github work-items routes", () => {
 
     expect(importResponse.ok).toBe(true);
     const importBody = await importResponse.json() as {
-      imported?: Array<{ candidateId: string; taskId: number; issueNumber: number }>;
+      imported?: Array<{ candidateId: string; taskId: string; issueNumber: number }>;
     };
     expect(importBody.imported).toEqual([
-      { candidateId: "candidate-2", taskId: 2, issueNumber: 2 },
+      { candidateId: "candidate-2", taskId: "task-2", issueNumber: 2 },
     ]);
 
     const linksResponse = await fetch(`${baseUrl}/api/tasks/links`);
@@ -171,13 +171,13 @@ describe("api github work-items routes", () => {
     const linksBody = await linksResponse.json() as {
       links?: Record<string, { issueNumber?: number; repoFullName?: string }>;
     };
-    expect(linksBody.links?.["2"]?.repoFullName).toBe("acme/repo");
-    expect(linksBody.links?.["2"]?.issueNumber).toBe(2);
+    expect(linksBody.links?.["task-2"]?.repoFullName).toBe("acme/repo");
+    expect(linksBody.links?.["task-2"]?.issueNumber).toBe(2);
 
     const stateResponse = await fetch(`${baseUrl}/api/state`);
     expect(stateResponse.ok).toBe(true);
     const stateBody = await stateResponse.json() as { currentTasks?: string | null };
-    expect(stateBody.currentTasks ?? "").toContain("### Task 2: Implement issue import");
+    expect(stateBody.currentTasks ?? "").toContain("### Task task-2: Implement issue import");
 
     await new Promise<void>((resolve, reject) => {
       server?.close((err) => {
@@ -193,4 +193,3 @@ describe("api github work-items routes", () => {
     delete process.env.BENDER_HOME_DIR;
   });
 });
-

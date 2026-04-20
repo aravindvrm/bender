@@ -92,7 +92,7 @@ export function registerRunRoutes(app: Express, deps: RunRouteDeps): void {
   });
 
   app.post("/api/run/implement", async (req, res) => {
-    const body = (req.body ?? {}) as { taskId?: number };
+    const body = (req.body ?? {}) as { taskId?: string };
     await deps.runOperation(res, async (adapter) => {
       await runImplementOperation(deps.getProject(), body, adapter);
     });

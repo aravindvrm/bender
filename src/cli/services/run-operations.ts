@@ -12,6 +12,13 @@ import { implementCommand, implementSingleTask } from "../implement.js";
 import { analyzeCommand } from "../analyze.js";
 import { runAuditWorkflow } from "./audits.js";
 import { generateFlows } from "../../roles/flowcharter.js";
+import { updateArchitecture } from "../../roles/architect.js";
+import { runOfficeHours, type OfficeHoursVerdict } from "../../roles/office-hours.js";
+import { generateFeaturePlan } from "../../roles/planner.js";
+import { reviewCode } from "../../roles/reviewer.js";
+import { GitOperations } from "../../git/operations.js";
+import { parseTaskPlanMarkdown, type CanonicalTaskPlanTask } from "../../state/task-plan.js";
+import { appendTask } from "./tasks.js";
 import { createLogger, logError, makeAdapterSink, toLoggerOptions } from "../../logger.js";
 import type { UIAdapter } from "../adapter.js";
 
@@ -19,6 +26,23 @@ interface RunInitDeps {
   getProject: () => string;
   setCurrentProject: (path: string) => void;
   normalizeUserPath: (input?: string) => string;
+}
+
+export interface IterativePlanOperationInput {
+  feature?: string;
+  mode?: "proposal" | "commit";
+  includeArchitectureImpact?: boolean;
+  officeHoursMode?: "off" | "pressure-test";
+}
+
+export interface IterativePlanOperationResult {
+  mode: "proposal" | "commit";
+  feature: string;
+  tasks: CanonicalTaskPlanTask[];
+  planMarkdown: string;
+  architectureImpact?: string;
+  officeHoursVerdict?: OfficeHoursVerdict | null;
+  appendedTaskIds?: string[];
 }
 
 export async function runInitOperation(
@@ -132,11 +156,11 @@ export async function runPlanOperation(
 
 export async function runImplementOperation(
   projectRoot: string,
-  input: { taskId?: number },
+  input: { taskId?: string },
   adapter: UIAdapter,
 ): Promise<void> {
   if (input.taskId !== undefined) {
-    await implementSingleTask(projectRoot, Number(input.taskId), adapter);
+    await implementSingleTask(projectRoot, String(input.taskId), adapter);
     return;
   }
   await implementCommand(projectRoot, adapter);
@@ -152,6 +176,200 @@ export async function runAuditOperation(
   adapter: UIAdapter,
 ): Promise<void> {
   await runAuditWorkflow(projectRoot, kind, adapter);
+}
+
+export async function runReviewOperation(
+  projectRoot: string,
+  input: {
+    taskTitle?: string;
+    staged?: boolean;
+    range?: string;
+  },
+  adapter: UIAdapter,
+): Promise<{ status: string; issueCount: number; message: string; raw: string }> {
+  const state = new StateManager(projectRoot);
+  const context = await state.gatherContext();
+  const config = await readEffectiveConfig(projectRoot);
+  const gitOps = new GitOperations(projectRoot);
+
+  if (!(await gitOps.isRepo())) {
+    throw new Error("Current project is not a git repository.");
+  }
+
+  const rawDiff = input.range?.trim()
+    ? await gitOps.getDiffRange(input.range.trim())
+    : await gitOps.getDiff(Boolean(input.staged));
+  const diff = rawDiff.trim();
+  if (!diff) {
+    adapter.info("No git diff detected for review.");
+    return {
+      status: "APPROVED",
+      issueCount: 0,
+      message: "No changes to review.",
+      raw: "No changes to review.",
+    };
+  }
+
+  const models = createModelSet(config);
+  const reviewerAgent = await getEffectiveAgentForRole("reviewer");
+  const runtime = await createRoleRuntime(
+    projectRoot,
+    config,
+    {
+      role: "reviewer",
+      taskDescription: input.taskTitle?.trim() || "Review current working changes",
+      pinnedSkills: reviewerAgent.pinnedSkills,
+      mcpServerIds: reviewerAgent.mcpServerIds,
+      capabilityPolicy: reviewerAgent.capabilityPolicy,
+      modelTier: reviewerAgent.modelTier,
+      systemPromptAddition: reviewerAgent.systemPromptAddition,
+    },
+    context.architecture ?? undefined,
+  );
+
+  try {
+    const result = await reviewCode(
+      getModelForTier(models, reviewerAgent.modelTier),
+      input.taskTitle?.trim() || "Current working changes",
+      [{ path: "git.diff", action: "modify", content: diff.slice(0, 120_000) }],
+      context,
+      runtime,
+    );
+    const message = result.status === "APPROVED"
+      ? "Review completed: no blocking issues."
+      : `Review completed: ${result.issues.length} issue(s) found.`;
+    adapter.info(message);
+    return {
+      status: result.status,
+      issueCount: result.issues.length,
+      message,
+      raw: result.raw,
+    };
+  } finally {
+    await runtime.close();
+  }
+}
+
+export async function runIterativePlanOperation(
+  projectRoot: string,
+  input: IterativePlanOperationInput,
+  adapter: UIAdapter,
+): Promise<IterativePlanOperationResult> {
+  const feature = input.feature?.trim();
+  if (!feature) {
+    throw new Error("feature is required");
+  }
+
+  const mode = input.mode === "commit" ? "commit" : "proposal";
+  const includeArchitectureImpact = input.includeArchitectureImpact !== false;
+  const officeHoursMode = input.officeHoursMode === "pressure-test" ? "pressure-test" : "off";
+
+  const state = new StateManager(projectRoot);
+  const context = await state.gatherContext();
+  if (!context.brief || !context.architecture) {
+    throw new Error("Project needs brief and architecture before iterative planning.");
+  }
+
+  const config = await readEffectiveConfig(projectRoot);
+  const models = createModelSet(config);
+  const plannerAgent = await getEffectiveAgentForRole("planner");
+  const architectAgent = await getEffectiveAgentForRole("architect");
+
+  const plannerRuntime = await createRoleRuntime(
+    projectRoot,
+    config,
+    {
+      role: "planner",
+      taskDescription: feature,
+      pinnedSkills: plannerAgent.pinnedSkills,
+      mcpServerIds: plannerAgent.mcpServerIds,
+      capabilityPolicy: plannerAgent.capabilityPolicy,
+      modelTier: plannerAgent.modelTier,
+      systemPromptAddition: plannerAgent.systemPromptAddition,
+    },
+    context.architecture ?? undefined,
+  );
+
+  try {
+    let officeHoursVerdict: OfficeHoursVerdict | null = null;
+    if (officeHoursMode === "pressure-test") {
+      const officeHours = await runOfficeHours(
+        getModelForTier(models, plannerAgent.modelTier),
+        feature,
+        context.brief,
+        context.architecture,
+        adapter.streamWriter(),
+        plannerRuntime,
+      );
+      officeHoursVerdict = officeHours.verdict;
+    }
+
+    let architectureImpact = "No architecture-impact review requested.";
+    if (includeArchitectureImpact) {
+      const architectRuntime = await createRoleRuntime(
+        projectRoot,
+        config,
+        {
+          role: "architect",
+          taskDescription: feature,
+          pinnedSkills: architectAgent.pinnedSkills,
+          mcpServerIds: architectAgent.mcpServerIds,
+          capabilityPolicy: architectAgent.capabilityPolicy,
+          modelTier: architectAgent.modelTier,
+          systemPromptAddition: architectAgent.systemPromptAddition,
+        },
+        context.architecture ?? undefined,
+      );
+      try {
+        const architectUpdate = await updateArchitecture(
+          getModelForTier(models, architectAgent.modelTier),
+          feature,
+          config,
+          context,
+          adapter.streamWriter(),
+          architectRuntime,
+        );
+        architectureImpact = architectUpdate.architectureUpdate.trim() || architectureImpact;
+      } finally {
+        await architectRuntime.close();
+      }
+    }
+
+    const planMarkdown = await generateFeaturePlan(
+      getModelForTier(models, plannerAgent.modelTier),
+      feature,
+      architectureImpact,
+      context,
+      adapter.streamWriter(),
+      plannerRuntime,
+    );
+    const tasks = parseTaskPlanMarkdown(planMarkdown);
+    const appendedTaskIds: string[] = [];
+
+    if (mode === "commit") {
+      for (const task of tasks) {
+        const created = await appendTask(projectRoot, {
+          title: task.title,
+          description: task.description,
+          acceptanceCriteria: task.acceptanceCriteria,
+          implementerAgentId: task.implementerAgentId,
+        });
+        appendedTaskIds.push(created.taskId);
+      }
+    }
+
+    return {
+      mode,
+      feature,
+      tasks,
+      planMarkdown,
+      ...(includeArchitectureImpact ? { architectureImpact } : {}),
+      ...(officeHoursMode === "pressure-test" ? { officeHoursVerdict } : {}),
+      ...(mode === "commit" ? { appendedTaskIds } : {}),
+    };
+  } finally {
+    await plannerRuntime.close();
+  }
 }
 
 export async function runFlowsOperation(projectRoot: string, adapter: UIAdapter): Promise<void> {

@@ -97,7 +97,6 @@ export function registerChatRoutes(app: Express, deps: ChatRouteDeps): void {
       if (!controller.signal.aborted) controller.abort();
     };
     req.on("aborted", abortRequest);
-    req.on("close", abortRequest);
     res.on("close", abortRequest);
     try {
       await streamChatThreadResponse(
@@ -116,7 +115,6 @@ export function registerChatRoutes(app: Express, deps: ChatRouteDeps): void {
       }
     } finally {
       req.off("aborted", abortRequest);
-      req.off("close", abortRequest);
       res.off("close", abortRequest);
     }
   });

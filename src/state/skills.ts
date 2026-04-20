@@ -27,6 +27,7 @@ const REGISTRY_TTL_MS = 24 * 60 * 60 * 1000;
 const GITHUB_ORG = "openai";
 const GITHUB_REPO = "skills";
 const SKILLS_PATH = "skills/.curated";
+const GITHUB_FETCH_TIMEOUT_MS = 4000;
 
 function getCacheDir(): string {
   return getBenderHomePath("skills-cache");
@@ -44,12 +45,25 @@ function getSkillCachePath(name: string): string {
 
 async function githubGet(path: string): Promise<unknown> {
   const url = `https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/contents/${path}`;
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "bender-app",
-    },
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GITHUB_FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "bender-app",
+      },
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") {
+      throw new Error(`GitHub request timed out after ${GITHUB_FETCH_TIMEOUT_MS}ms: ${path}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     throw new Error(`GitHub API ${res.status}: ${path}`);
   }

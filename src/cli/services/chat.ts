@@ -17,6 +17,7 @@ import { createLogger, logError, toLoggerOptions } from "../../logger.js";
 import { readEffectiveConfig, type BenderConfig } from "../../state/config.js";
 import { ChatStore, type ChatThread, type LlmProvider } from "../../state/chat.js";
 import { StateManager, formatContextForPrompt } from "../../state/manager.js";
+import { normalizeTaskId } from "../../state/task-plan.js";
 import { appendTask, deleteTask, patchTask } from "./tasks.js";
 import type { SpinnerAdapter, UIAdapter } from "../adapter.js";
 import { runAnalyzeOperation, runAuditOperation, runImplementOperation } from "./run-operations.js";
@@ -162,12 +163,12 @@ function makeUserUiMessage(text: string): UIMessage {
   };
 }
 
-function parseTaskId(value: number): number {
-  const taskId = Number(value);
-  if (!Number.isFinite(taskId) || taskId <= 0) {
-    throw new ChatServiceError(400, "taskId must be a positive integer");
+function parseTaskId(value: unknown): string {
+  const normalized = normalizeTaskId(value);
+  if (!normalized) {
+    throw new ChatServiceError(400, "taskId must be in format task-N or numeric legacy format");
   }
-  return Math.floor(taskId);
+  return normalized;
 }
 
 function createCapturingAdapter(signal?: AbortSignal): UIAdapter {
@@ -219,10 +220,10 @@ function createCapturingAdapter(signal?: AbortSignal): UIAdapter {
 }
 
 async function readCurrentTasksSummary(projectRoot: string): Promise<Array<{
-  id: number;
+  id: string;
   title: string;
-  dependencies: string;
-  files: string[];
+  status: "todo" | "in_progress" | "done";
+  implementerAgentId: string;
 }>> {
   const state = new StateManager(projectRoot);
   const plan = await state.readCurrentTaskPlan();
@@ -230,8 +231,8 @@ async function readCurrentTasksSummary(projectRoot: string): Promise<Array<{
   return plan.tasks.map((task) => ({
     id: task.id,
     title: task.title,
-    dependencies: task.dependencies,
-    files: task.files,
+    status: task.status,
+    implementerAgentId: task.implementerAgentId,
   }));
 }
 
@@ -241,7 +242,7 @@ export function createBenderChatTools(
 ): ToolSet {
   return {
     bender_list_tasks: tool({
-      description: "List current task-plan tasks with IDs, titles, dependencies, and file targets.",
+      description: "List current task-plan tasks with IDs, titles, status, and implementer agent assignment.",
       inputSchema: z.object({}),
       execute: async () => {
         throwIfAborted(signal);
@@ -260,11 +261,12 @@ export function createBenderChatTools(
       inputSchema: z.object({
         title: z.string().min(1),
         description: z.string().optional(),
-        files: z.array(z.string().min(1)).optional(),
+        acceptanceCriteria: z.array(z.string().min(1)).optional(),
+        implementerAgentId: z.string().optional(),
       }),
-      execute: async ({ title, description, files }, context?: { abortSignal?: AbortSignal }) => {
+      execute: async ({ title, description, acceptanceCriteria, implementerAgentId }, context?: { abortSignal?: AbortSignal }) => {
         throwIfAborted(context?.abortSignal ?? signal);
-        const result = await appendTask(projectRoot, { title, description, files });
+        const result = await appendTask(projectRoot, { title, description, acceptanceCriteria, implementerAgentId });
         const tasks = await readCurrentTasksSummary(projectRoot);
         throwIfAborted(context?.abortSignal ?? signal);
         const created = tasks.find((task) => task.id === result.taskId) ?? null;
@@ -277,28 +279,33 @@ export function createBenderChatTools(
     }),
 
     bender_update_task: tool({
-      description: "Update an existing task's title/description/dependencies/acceptance criteria.",
+      description: "Update an existing task's title/description/status/acceptance criteria/implementer assignment.",
       inputSchema: z.object({
-        taskId: z.number().int().positive(),
+        taskId: z.string().min(1),
         title: z.string().optional(),
         description: z.string().optional(),
-        dependencies: z.string().optional(),
+        acceptanceCriteria: z.array(z.string().min(1)).optional(),
         criteria: z.string().optional(),
+        status: z.enum(["todo", "in_progress", "done"]).optional(),
+        implementerAgentId: z.string().optional(),
       }),
-      execute: async ({ taskId, title, description, dependencies, criteria }, context?: { abortSignal?: AbortSignal }) => {
+      execute: async ({ taskId, title, description, acceptanceCriteria, criteria, status, implementerAgentId }, context?: { abortSignal?: AbortSignal }) => {
         throwIfAborted(context?.abortSignal ?? signal);
-        await patchTask(projectRoot, String(parseTaskId(taskId)), {
+        const normalizedTaskId = parseTaskId(taskId);
+        await patchTask(projectRoot, normalizedTaskId, {
           title,
           description,
-          dependencies,
+          acceptanceCriteria,
           criteria,
+          status,
+          implementerAgentId,
         });
         const tasks = await readCurrentTasksSummary(projectRoot);
         throwIfAborted(context?.abortSignal ?? signal);
-        const updated = tasks.find((task) => task.id === taskId) ?? null;
+        const updated = tasks.find((task) => task.id === normalizedTaskId) ?? null;
         return {
           ok: true,
-          taskId,
+          taskId: normalizedTaskId,
           updated,
         };
       },
@@ -307,12 +314,12 @@ export function createBenderChatTools(
     bender_delete_task: tool({
       description: "Delete a task by ID. Optionally cascade-delete dependent tasks.",
       inputSchema: z.object({
-        taskId: z.number().int().positive(),
+        taskId: z.string().min(1),
         cascadeDependents: z.boolean().optional(),
       }),
       execute: async ({ taskId, cascadeDependents }, context?: { abortSignal?: AbortSignal }) => {
         throwIfAborted(context?.abortSignal ?? signal);
-        const deletedTaskIds = await deleteTask(projectRoot, String(parseTaskId(taskId)), Boolean(cascadeDependents));
+        const deletedTaskIds = await deleteTask(projectRoot, parseTaskId(taskId), Boolean(cascadeDependents));
         return {
           ok: true,
           deletedTaskIds,
@@ -323,7 +330,7 @@ export function createBenderChatTools(
     bender_run_task: tool({
       description: "Execute a specific task implementation by task ID using Bender's implementer workflow.",
       inputSchema: z.object({
-        taskId: z.number().int().positive(),
+        taskId: z.string().min(1),
       }),
       execute: async ({ taskId }, context?: { abortSignal?: AbortSignal }) => {
         const effectiveSignal = context?.abortSignal ?? signal;
@@ -372,10 +379,10 @@ export function createBenderChatTools(
 
 type OperatorCommand =
   | { type: "task-list" }
-  | { type: "task-add"; title: string; description?: string; files?: string[] }
-  | { type: "task-update"; taskId: number; title?: string; description?: string; dependencies?: string; criteria?: string }
-  | { type: "task-delete"; taskId: number; cascadeDependents: boolean }
-  | { type: "task-run"; taskId: number }
+  | { type: "task-add"; title: string; description?: string; acceptanceCriteria?: string[]; implementerAgentId?: string }
+  | { type: "task-update"; taskId: string; title?: string; description?: string; acceptanceCriteria?: string[]; criteria?: string; status?: "todo" | "in_progress" | "done"; implementerAgentId?: string }
+  | { type: "task-delete"; taskId: string; cascadeDependents: boolean }
+  | { type: "task-run"; taskId: string }
   | { type: "audit-run"; kind: "security" | "tests" | "ci" }
   | { type: "analyze-run" };
 
@@ -410,8 +417,8 @@ async function runAnalyzeForChat(projectRoot: string, signal?: AbortSignal): Pro
   };
 }
 
-async function runTaskForChat(projectRoot: string, taskId: number, signal?: AbortSignal): Promise<{
-  taskId: number;
+async function runTaskForChat(projectRoot: string, taskId: string, signal?: AbortSignal): Promise<{
+  taskId: string;
   completed: boolean;
   newlyCompleted: string[];
   message: string;
@@ -540,16 +547,16 @@ function parseOperatorCommandFromText(text: string): OperatorCommand | null {
   }
 
   {
-    const run = input.match(/^\/task\s+run\s+(\d+)$/i);
-    if (run) return { type: "task-run", taskId: Number.parseInt(run[1], 10) };
+    const run = input.match(/^\/task\s+run\s+([a-z0-9_-]+)$/i);
+    if (run) return { type: "task-run", taskId: parseTaskId(run[1]) };
   }
 
   {
-    const del = input.match(/^\/task\s+delete\s+(\d+)(\s+cascade)?$/i);
+    const del = input.match(/^\/task\s+delete\s+([a-z0-9_-]+)(\s+cascade)?$/i);
     if (del) {
       return {
         type: "task-delete",
-        taskId: Number.parseInt(del[1], 10),
+        taskId: parseTaskId(del[1]),
         cascadeDependents: Boolean(del[2]),
       };
     }
@@ -570,28 +577,30 @@ function parseOperatorCommandFromText(text: string): OperatorCommand | null {
       const fields = parseKeyValueFields(body);
       const title = fields.title ?? body.split(";")[0]?.trim();
       if (!title) return null;
-      const files = fields.files
-        ? fields.files.split(",").map((value) => value.trim()).filter(Boolean)
+      const acceptanceCriteria = fields.criteria
+        ? fields.criteria.split("|").map((value) => value.trim()).filter(Boolean)
         : undefined;
       return {
         type: "task-add",
         title,
         ...(fields.description ? { description: fields.description } : {}),
-        ...(files && files.length > 0 ? { files } : {}),
+        ...(acceptanceCriteria && acceptanceCriteria.length > 0 ? { acceptanceCriteria } : {}),
+        ...(fields.agent ? { implementerAgentId: fields.agent } : {}),
       };
     }
   }
 
   {
-    const update = input.match(/^\/task\s+update\s+(\d+)\s+(.+)$/i);
+    const update = input.match(/^\/task\s+update\s+([a-z0-9_-]+)\\s+(.+)$/i);
     if (update) {
-      const taskId = Number.parseInt(update[1], 10);
+      const taskId = parseTaskId(update[1]);
       const fields = parseKeyValueFields(update[2]);
       if (
         fields.title === undefined
         && fields.description === undefined
-        && fields.dependencies === undefined
         && fields.criteria === undefined
+        && fields.status === undefined
+        && fields.agent === undefined
       ) {
         return null;
       }
@@ -600,8 +609,9 @@ function parseOperatorCommandFromText(text: string): OperatorCommand | null {
         taskId,
         ...(fields.title ? { title: fields.title } : {}),
         ...(fields.description ? { description: fields.description } : {}),
-        ...(fields.dependencies ? { dependencies: fields.dependencies } : {}),
         ...(fields.criteria ? { criteria: fields.criteria } : {}),
+        ...(fields.status ? { status: fields.status as "todo" | "in_progress" | "done" } : {}),
+        ...(fields.agent ? { implementerAgentId: fields.agent } : {}),
       };
     }
   }
@@ -619,7 +629,7 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
         return formatCommandResponse("/task list", ["No tasks found in the current task plan."]);
       }
       const lines = tasks.slice(0, 30).map((task) => (
-        `${task.id}. ${task.title} | deps: ${task.dependencies || "None"}`
+        `${task.id} | ${task.status} | ${task.title} | agent: ${task.implementerAgentId}`
       ));
       return formatCommandResponse("/task list", [
         `Current tasks (${tasks.length}):`,
@@ -632,7 +642,8 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
       const result = await appendTask(projectRoot, {
         title: command.title,
         description: command.description,
-        files: command.files,
+        acceptanceCriteria: command.acceptanceCriteria,
+        implementerAgentId: command.implementerAgentId,
       });
       throwIfAborted(signal);
       return formatCommandResponse("/task add", [`Added task ${result.taskId}: ${command.title}`]);
@@ -640,11 +651,13 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
 
     case "task-update": {
       throwIfAborted(signal);
-      await patchTask(projectRoot, String(parseTaskId(command.taskId)), {
+      await patchTask(projectRoot, parseTaskId(command.taskId), {
         title: command.title,
         description: command.description,
-        dependencies: command.dependencies,
+        acceptanceCriteria: command.acceptanceCriteria,
         criteria: command.criteria,
+        status: command.status,
+        implementerAgentId: command.implementerAgentId,
       });
       throwIfAborted(signal);
       return formatCommandResponse("/task update", [`Updated task ${command.taskId}.`]);
@@ -654,7 +667,7 @@ async function executeOperatorCommand(projectRoot: string, command: OperatorComm
       throwIfAborted(signal);
       const deletedTaskIds = await deleteTask(
         projectRoot,
-        String(parseTaskId(command.taskId)),
+        parseTaskId(command.taskId),
         command.cascadeDependents,
       );
       throwIfAborted(signal);

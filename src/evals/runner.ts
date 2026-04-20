@@ -520,11 +520,10 @@ async function executeTaskForConfig(params: ExecuteTaskParams): Promise<EvalTask
     if (execution.role === "implementer") {
       const context = await state.gatherContext();
       const evalTask: TaskDescription = {
-        id: 0,
+        id: "task-eval",
         title: task.name,
         description: task.prompt,
-        files: [],
-        acceptanceCriteria: "Implement task successfully.",
+        acceptanceCriteria: ["Implement task successfully."],
       };
       const fileOps = await implementTask(
         model,

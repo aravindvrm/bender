@@ -1,6 +1,6 @@
 import { GitOperations } from "../../git/operations.js";
 import { StateManager, type TaskGitHubLink } from "../../state/manager.js";
-import type { CanonicalTaskPlanTask } from "../../state/task-plan.js";
+import { normalizeTaskId, type CanonicalTaskPlanTask } from "../../state/task-plan.js";
 import { parseGitHubRepoFullName, taskSlugFromTitle } from "./github-utils.js";
 
 interface GitHubSession {
@@ -21,25 +21,24 @@ export class TaskGitHubServiceError extends Error {
   }
 }
 
-function requireNumericTaskId(taskId: string): string {
-  const normalizedTaskId = taskId.trim();
-  if (!normalizedTaskId || !/^\d+$/.test(normalizedTaskId)) {
-    throw new TaskGitHubServiceError(400, "taskId must be numeric");
+function requireTaskId(taskId: string): string {
+  const normalizedTaskId = normalizeTaskId(taskId);
+  if (!normalizedTaskId) {
+    throw new TaskGitHubServiceError(400, "taskId must be in format task-N or numeric legacy format");
   }
   return normalizedTaskId;
 }
 
 function taskDetailsBody(task: CanonicalTaskPlanTask): string {
-  const fileLines = task.files.length > 0
-    ? task.files.map((file) => `  - \`${file}\``)
-    : ["  - (to be determined)"];
-
+  const criteriaLines = task.acceptanceCriteria.length > 0
+    ? task.acceptanceCriteria.map((entry) => `  - ${entry}`)
+    : ["  - Task implemented and tests pass"];
   return [
     `- **Description**: ${task.description}`,
-    "- **Files to create/modify**:",
-    ...fileLines,
-    `- **Dependencies**: ${task.dependencies}`,
-    `- **Acceptance criteria**: ${task.acceptanceCriteria}`,
+    `- **Status**: ${task.status}`,
+    `- **Implementer Agent**: ${task.implementerAgentId}`,
+    "- **Acceptance criteria**:",
+    ...criteriaLines,
   ].join("\n");
 }
 
@@ -48,10 +47,9 @@ async function requireTaskFromPlan(state: StateManager, taskId: string): Promise
   if (!plan || plan.tasks.length === 0) {
     throw new TaskGitHubServiceError(400, "No current task plan found");
   }
-  const id = Number(taskId);
-  const task = plan.tasks.find((entry) => entry.id === id);
+  const task = plan.tasks.find((entry) => entry.id === taskId);
   if (!task) {
-    throw new TaskGitHubServiceError(404, `Task ${id} not found`);
+    throw new TaskGitHubServiceError(404, `Task ${taskId} not found`);
   }
   return task;
 }
@@ -74,7 +72,7 @@ export async function createTaskIssue(
   payload: { repoFullName?: string },
   deps: TaskGitHubDeps,
 ): Promise<{ issueNumber: number; issueUrl: string; link: TaskGitHubLink | null }> {
-  const normalizedTaskId = requireNumericTaskId(taskId);
+  const normalizedTaskId = requireTaskId(taskId);
   const state = new StateManager(projectRoot);
   if (!state.isInitialized()) {
     throw new TaskGitHubServiceError(400, "Project is not initialized");
@@ -131,7 +129,7 @@ export async function createTaskBranch(
   taskId: string,
   payload: { branchName?: string },
 ): Promise<{ branchName: string; created: boolean; link: TaskGitHubLink | null }> {
-  const normalizedTaskId = requireNumericTaskId(taskId);
+  const normalizedTaskId = requireTaskId(taskId);
   const state = new StateManager(projectRoot);
   if (!state.isInitialized()) {
     throw new TaskGitHubServiceError(400, "Project is not initialized");
@@ -171,7 +169,7 @@ export async function createTaskPr(
   payload: { repoFullName?: string; head?: string; title?: string; base?: string; body?: string },
   deps: TaskGitHubDeps,
 ): Promise<{ prNumber: number; prUrl: string; link: TaskGitHubLink | null }> {
-  const normalizedTaskId = requireNumericTaskId(taskId);
+  const normalizedTaskId = requireTaskId(taskId);
   const session = await deps.readGitHubSession();
   if (!session?.accessToken) {
     throw new TaskGitHubServiceError(401, "Not connected to GitHub");
@@ -230,7 +228,7 @@ export async function commentTaskPr(
   payload: { body?: string; repoFullName?: string; prNumber?: number },
   deps: TaskGitHubDeps,
 ): Promise<{ commentUrl: string; link: TaskGitHubLink | null }> {
-  const normalizedTaskId = requireNumericTaskId(taskId);
+  const normalizedTaskId = requireTaskId(taskId);
   const session = await deps.readGitHubSession();
   if (!session?.accessToken) {
     throw new TaskGitHubServiceError(401, "Not connected to GitHub");

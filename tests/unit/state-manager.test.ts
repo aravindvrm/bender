@@ -43,7 +43,7 @@ describe("state/manager", () => {
     expect(await state.readArchitecture()).toContain("Arch text");
     expect(await state.readConventions()).toContain("strict TypeScript");
     expect(await state.readSchema()).toContain("create table users");
-    expect(await state.readCurrentTasks()).toContain("Task 1");
+    expect(await state.readCurrentTasks()).toContain("Task task-1");
     expect(await state.readApiContracts()).toContain("openapi");
     expect(await state.readFlows()).toContain("flowchart");
     expect((await state.readDecisions()).length).toBe(1);
@@ -65,9 +65,9 @@ describe("state/manager", () => {
     expect(existsSync(jsonPath)).toBe(true);
     expect(existsSync(mdPath)).toBe(true);
 
-    const json = JSON.parse(await readFile(jsonPath, "utf-8")) as { tasks?: Array<{ id?: number }> };
-    expect(json.tasks?.[0]?.id).toBe(1);
-    expect(await state.readCurrentTasks()).toContain("### Task 1: Ship");
+    const json = JSON.parse(await readFile(jsonPath, "utf-8")) as { tasks?: Array<{ id?: string }> };
+    expect(json.tasks?.[0]?.id).toBe("task-1");
+    expect(await state.readCurrentTasks()).toContain("### Task task-1: Ship");
   });
 
   it("migrates markdown-only task plan into canonical current.json", async () => {
@@ -88,8 +88,8 @@ describe("state/manager", () => {
     expect(markdown).toContain("Legacy plan");
     expect(existsSync(jsonPath)).toBe(true);
 
-    const json = JSON.parse(await readFile(jsonPath, "utf-8")) as { tasks?: Array<{ id?: number; title?: string }> };
-    expect(json.tasks?.[0]).toMatchObject({ id: 4, title: "Legacy plan" });
+    const json = JSON.parse(await readFile(jsonPath, "utf-8")) as { tasks?: Array<{ id?: string; title?: string }> };
+    expect(json.tasks?.[0]).toMatchObject({ id: "task-4", title: "Legacy plan" });
   });
 
   it("recovers from corrupted current.json by falling back to markdown", async () => {
@@ -109,8 +109,8 @@ describe("state/manager", () => {
     const markdown = await state.readCurrentTasks();
     expect(markdown).toContain("Markdown fallback");
 
-    const repaired = JSON.parse(await readFile(jsonPath, "utf-8")) as { tasks?: Array<{ id?: number; title?: string }> };
-    expect(repaired.tasks?.[0]).toMatchObject({ id: 2, title: "Markdown fallback" });
+    const repaired = JSON.parse(await readFile(jsonPath, "utf-8")) as { tasks?: Array<{ id?: string; title?: string }> };
+    expect(repaired.tasks?.[0]).toMatchObject({ id: "task-2", title: "Markdown fallback" });
   });
 
   it("manages per-task agent assignments", async () => {

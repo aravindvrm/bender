@@ -87,6 +87,7 @@ export async function getProjectState(projectRoot: string): Promise<Record<strin
     schema: context.schema,
     decisions,
     currentTasks: context.currentTasks,
+    currentTaskPlan,
     completedTasks,
     taskAgents,
     taskGitHubLinks: mergedTaskGitHubLinks,

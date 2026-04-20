@@ -2,37 +2,31 @@ import { describe, expect, it } from "vitest";
 import { parseTaskPlan } from "../../src/cli/implement.js";
 
 describe("cli/implement parseTaskPlan", () => {
-  it("parses file targets from plain bullet list when backticks are absent", () => {
+  it("parses canonical task ids and acceptance criteria lists", () => {
     const markdown = [
-      "### Task 1: Add API tests",
+      "### Task task-1: Add API tests",
       "- **Description**: Add endpoint coverage",
-      "- **Files to create/modify**:",
-      "  - tests/api/test_endpoints.py",
-      "  - sable/tool_server.py",
-      "- **Dependencies**: None",
-      "- **Acceptance criteria**: Tests pass",
+      "- **Acceptance criteria**:",
+      "  - Tests pass",
+      "  - No regressions",
     ].join("\n");
 
     const tasks = parseTaskPlan(markdown);
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.files).toEqual([
-      "tests/api/test_endpoints.py",
-      "sable/tool_server.py",
-    ]);
+    expect(tasks[0]?.id).toBe("task-1");
+    expect(tasks[0]?.acceptanceCriteria).toEqual(["Tests pass", "No regressions"]);
   });
 
-  it("ignores placeholder file bullets", () => {
+  it("migrates legacy numeric ids and single-line criteria", () => {
     const markdown = [
       "### Task 2: Placeholder task",
       "- **Description**: placeholder",
-      "- **Files to create/modify**:",
-      "  - (to be determined)",
-      "- **Dependencies**: None",
       "- **Acceptance criteria**: Done",
     ].join("\n");
 
     const tasks = parseTaskPlan(markdown);
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.files).toEqual([]);
+    expect(tasks[0]?.id).toBe("task-2");
+    expect(tasks[0]?.acceptanceCriteria).toEqual(["Done"]);
   });
 });

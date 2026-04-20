@@ -46,7 +46,7 @@ export interface GitHubWorkItem {
   milestone?: string;
   createdAt?: string;
   updatedAt?: string;
-  alreadyLinkedTaskIds: number[];
+  alreadyLinkedTaskIds: string[];
 }
 
 export interface ListGitHubWorkItemsInput {
@@ -69,7 +69,7 @@ export interface ExtractionCandidate {
   title: string;
   description: string;
   dependencies: string;
-  acceptanceCriteria: string;
+  acceptanceCriteria: string[];
   suggestedFiles: string[];
   rationale?: string;
   notes?: string;
@@ -91,13 +91,13 @@ interface RuntimeRoleInputs {
 }
 
 interface SimilarTaskMatch {
-  taskId: number;
+  taskId: string;
   title: string;
   score: number;
 }
 
 interface ListLinkedIssueMapResult {
-  byIssueNumber: Map<number, number[]>;
+  byIssueNumber: Map<number, string[]>;
   taskTitlePool: CanonicalTaskPlanTask[];
 }
 
@@ -159,7 +159,7 @@ function normalizeIssueAssignees(issue: GitHubIssueApiResponse): string[] {
 function normalizeGitHubIssue(
   issue: GitHubIssueApiResponse,
   repoFullName: string,
-  alreadyLinkedTaskIds: number[],
+  alreadyLinkedTaskIds: string[],
 ): GitHubWorkItem | null {
   if (!issue || issue.pull_request) return null;
   const issueNumber = Number(issue.number);
@@ -293,17 +293,21 @@ async function resolveProjectRepoFullName(projectRoot: string, state: StateManag
 
 async function listLinkedIssues(state: StateManager, repoFullName: string): Promise<ListLinkedIssueMapResult> {
   const links = await state.readTaskGitHubLinks();
-  const byIssueNumber = new Map<number, number[]>();
+  const byIssueNumber = new Map<number, string[]>();
 
   for (const [taskId, link] of Object.entries(links)) {
     if ((link.repoFullName ?? "").trim() !== repoFullName) continue;
     const issueNumber = Number(link.issueNumber);
     if (!Number.isFinite(issueNumber)) continue;
-    const numericTaskId = Number(taskId);
-    if (!Number.isFinite(numericTaskId)) continue;
+    const normalizedTaskId = /^task-\d+$/i.test(taskId)
+      ? taskId.toLowerCase()
+      : /^\d+$/.test(taskId)
+        ? `task-${taskId}`
+        : "";
+    if (!normalizedTaskId) continue;
 
     const existing = byIssueNumber.get(issueNumber) ?? [];
-    existing.push(numericTaskId);
+    existing.push(normalizedTaskId);
     byIssueNumber.set(issueNumber, existing);
   }
 
@@ -367,7 +371,10 @@ function parseSelectedWorkItems(input: ExtractGitHubWorkItemsInput): GitHubWorkI
       createdAt: raw.createdAt,
       updatedAt: raw.updatedAt,
       alreadyLinkedTaskIds: Array.isArray(raw.alreadyLinkedTaskIds)
-        ? raw.alreadyLinkedTaskIds.filter((value) => Number.isFinite(value)).map((value) => Number(value))
+        ? raw.alreadyLinkedTaskIds
+          .map((value) => String(value).trim())
+          .filter((value) => /^task-\d+$/i.test(value) || /^\d+$/.test(value))
+          .map((value) => (/^\d+$/.test(value) ? `task-${value}` : value.toLowerCase()))
         : [],
     });
   }
@@ -411,7 +418,9 @@ function parseImportCandidates(input: ImportGitHubWorkItemsInput): ExtractionCan
       title,
       description: String(item.description ?? "").trim(),
       dependencies: String(item.dependencies ?? "").trim() || "None",
-      acceptanceCriteria: String(item.acceptanceCriteria ?? "").trim() || "Task implemented and tests pass",
+      acceptanceCriteria: Array.isArray(item.acceptanceCriteria)
+        ? item.acceptanceCriteria.map((value) => String(value).trim()).filter(Boolean)
+        : [String(item.acceptanceCriteria ?? "").trim() || "Task implemented and tests pass"],
       suggestedFiles: Array.isArray(item.suggestedFiles)
         ? item.suggestedFiles.map((value) => String(value).trim()).filter(Boolean)
         : [],
@@ -437,7 +446,7 @@ function fallbackCandidateFromIssue(workItem: GitHubWorkItem): ExtractionCandida
     title: `Address GitHub issue #${workItem.issueNumber}: ${workItem.title}`,
     description: workItem.body || "Implement the request described in the linked GitHub issue.",
     dependencies: "None",
-    acceptanceCriteria: "Issue intent is implemented and verified.",
+    acceptanceCriteria: ["Issue intent is implemented and verified."],
     suggestedFiles: [],
     warnings: [],
   };
@@ -669,9 +678,9 @@ export async function extractGitHubWorkItems(
       ? parsedTasks.map((task) => ({
         title: task.title,
         description: task.description,
-        dependencies: task.dependencies,
         acceptanceCriteria: task.acceptanceCriteria,
-        files: task.files,
+        files: [] as string[],
+        dependencies: "None",
       }))
       : [{
         title: fallback.title,
@@ -725,12 +734,12 @@ export async function extractGitHubWorkItems(
 export async function importGitHubWorkItems(
   projectRoot: string,
   input: ImportGitHubWorkItemsInput,
-): Promise<{ repoFullName: string; imported: Array<{ candidateId: string; taskId: number; issueNumber: number }> }> {
+): Promise<{ repoFullName: string; imported: Array<{ candidateId: string; taskId: string; issueNumber: number }> }> {
   const state = new StateManager(projectRoot);
   const repoFullName = await resolveProjectRepoFullName(projectRoot, state);
   const candidates = parseImportCandidates(input);
 
-  const imported: Array<{ candidateId: string; taskId: number; issueNumber: number }> = [];
+  const imported: Array<{ candidateId: string; taskId: string; issueNumber: number }> = [];
 
   for (const candidate of candidates) {
     if (candidate.repoFullName && candidate.repoFullName !== repoFullName) {
@@ -743,17 +752,19 @@ export async function importGitHubWorkItems(
     const created = await appendTask(projectRoot, {
       title: candidate.title,
       description: candidate.description,
-      files: candidate.suggestedFiles,
+      acceptanceCriteria: candidate.acceptanceCriteria,
     });
 
-    if (candidate.dependencies !== "None" || candidate.acceptanceCriteria !== "Task implemented and tests pass") {
-      await patchTask(projectRoot, String(created.taskId), {
-        dependencies: candidate.dependencies,
-        criteria: candidate.acceptanceCriteria,
+    if (candidate.dependencies !== "None") {
+      await patchTask(projectRoot, created.taskId, {
+        acceptanceCriteria: [
+          ...candidate.acceptanceCriteria,
+          `Dependency context from issue ingestion: ${candidate.dependencies}`,
+        ],
       });
     }
 
-    await setTaskLink(projectRoot, String(created.taskId), {
+    await setTaskLink(projectRoot, created.taskId, {
       repoFullName,
       issueNumber: candidate.sourceIssueNumber,
       issueUrl: candidate.sourceIssueUrl,

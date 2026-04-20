@@ -1,18 +1,14 @@
 import type { LanguageModel } from "ai";
 import { runRoleStreaming } from "./base.js";
-import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import type { ProjectContext } from "../state/manager.js";
 import { formatContextForPrompt } from "../state/manager.js";
 import type { RoleExecutionOptions } from "./base.js";
 
 export interface TaskDescription {
-  id: number;
+  id: string;
   title: string;
   description: string;
-  files: string[];
-  acceptanceCriteria: string;
+  acceptanceCriteria: string[];
 }
 
 export interface FileOperation {
@@ -29,6 +25,14 @@ function normalizePathCandidate(raw: string): string {
     .trim();
 }
 
+function renderAcceptanceCriteria(criteria: string[]): string {
+  const normalized = criteria
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  if (normalized.length === 0) return "- Task implemented and tests pass";
+  return normalized.map((item) => `- ${item}`).join("\n");
+}
+
 /**
  * Implement a single task: generate code for all files in the task.
  */
@@ -41,26 +45,13 @@ export async function implementTask(
   options?: RoleExecutionOptions,
 ): Promise<FileOperation[]> {
   const contextStr = formatContextForPrompt(existingContext);
-
-  // Read existing files that will be modified
-  const existingFileContents: string[] = [];
-  for (const filePath of task.files) {
-    const fullPath = join(projectRoot, filePath);
-    if (existsSync(fullPath)) {
-      const content = await readFile(fullPath, "utf-8");
-      existingFileContents.push(`### Existing file: ${filePath}\n\`\`\`\n${content}\n\`\`\``);
-    }
-  }
-
-  const existingFilesSection = existingFileContents.length > 0
-    ? `\n\n## Existing Files (to be modified)\n\n${existingFileContents.join("\n\n")}`
-    : "";
+  const existingFilesSection = "";
 
   const result = await runRoleStreaming(
     model,
     "implementer",
     `${contextStr}${existingFilesSection}`,
-    `Implement the following task:\n\n**Task ${task.id}: ${task.title}**\n\n${task.description}\n\n**Files to create/modify:**\n${task.files.map((f) => `- \`${f}\``).join("\n")}\n\n**Acceptance criteria:** ${task.acceptanceCriteria}\n\nProduce complete file contents for every file listed above, following the exact output format specified in your instructions.`,
+    `Implement the following task:\n\n**Task ${task.id}: ${task.title}**\n\n${task.description}\n\n**Acceptance criteria:**\n${renderAcceptanceCriteria(task.acceptanceCriteria)}\n\nChoose the minimal set of files required to complete the task and produce complete file contents using the required output format.`,
     onChunk,
     options,
   );

@@ -7,6 +7,7 @@ import {
   FileText,
   CirclePlus,
   FolderTree,
+  GitBranch,
   GitCompareArrows,
   MonitorCog,
   ScanEye,
@@ -17,7 +18,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-export type View = "plan" | "architecture" | "brief" | "evals" | "git" | "agents" | "settings";
+export type View = "plan" | "workflows" | "architecture" | "brief" | "evals" | "git" | "agents" | "settings";
 
 function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -89,12 +90,15 @@ const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "brief", label: "Overview", icon: FileText },
   { id: "agents", label: "Agents", icon: Bot },
   { id: "plan", label: "Tasks", icon: MonitorCog },
+  { id: "workflows", label: "Workflows", icon: GitBranch },
   { id: "architecture", label: "Architecture", icon: FolderTree },
   { id: "git", label: "Git", icon: GitCompareArrows },
 ];
 
 export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGlobalAction, operationStatus, operationLabel }: SidebarProps) {
-  const taskCount = state?.currentTasks?.match(/###\s*Task\s*\d+/g)?.length ?? 0;
+  const taskCount = state?.currentTaskPlan?.tasks?.length
+    ?? state?.currentTasks?.match(/###\s*Task\s+[^:\n]+/g)?.length
+    ?? 0;
   const decisionCount = state?.decisions?.length ?? 0;
   const llmProvider = llmProviderLabel(state?.config?.llm);
   const tierModels = useMemo(() => {

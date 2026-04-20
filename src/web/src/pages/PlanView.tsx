@@ -1,24 +1,24 @@
 import { useEffect, useState } from "react";
 import type { ProjectState } from "../hooks/useApi";
 import { MarkdownView } from "../components/MarkdownView";
-import { Play, Sparkles, Search, ChevronDown, Lock, Pencil, Trash2, Save, X, GitBranch } from "lucide-react";
+import { Play, Sparkles, Search, ChevronDown, Pencil, Trash2, Save, X, GitBranch } from "lucide-react";
 import { GitHubIssueImportDialog } from "../components/GitHubIssueImportDialog";
 
 interface PlanViewProps {
   state: ProjectState;
   onImplement: () => void;
   onNewTask: () => void;
-  onRunTask: (taskId: number) => void;
+  onRunTask: (taskId: string) => void;
   onTasksChanged?: () => Promise<void> | void;
 }
 
 interface ParsedTask {
-  id: number;
+  id: string;
   title: string;
   description: string;
-  files: string[];
-  dependencies: string;
-  criteria: string;
+  acceptanceCriteria: string[];
+  implementerAgentId: string;
+  status: "todo" | "in_progress" | "done";
 }
 
 interface AgentOption {
@@ -39,61 +39,44 @@ interface TaskGitHubLink {
   lastSyncedAt?: number;
 }
 
-function parseTasks(markdown: string): ParsedTask[] {
-  const tasks: ParsedTask[] = [];
-  const pattern = /###\s*Task\s*(\d+):\s*(.+?)\n([\s\S]*?)(?=\n###\s*Task|\n##\s|$)/g;
-  let match: RegExpExecArray | null;
+type TaskStatus = ParsedTask["status"];
 
-  while ((match = pattern.exec(markdown)) !== null) {
-    const body = match[3];
-    const descMatch = body.match(/\*\*Description\*\*:\s*([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
-    const filesMatch = body.match(/`([^`]+\.[a-z]+)`/g);
-    const depsMatch = body.match(/\*\*Dependencies\*\*:\s*(.+)/);
-    const criteriaMatch = body.match(/\*\*Acceptance criteria\*\*:\s*([\s\S]*?)(?=\n-\s*\*\*|\n###|$)/);
-
-    tasks.push({
-      id: parseInt(match[1]),
-      title: match[2].trim(),
-      description: descMatch ? descMatch[1].trim() : "",
-      files: filesMatch ? filesMatch.map((f) => f.replace(/`/g, "")) : [],
-      dependencies: depsMatch ? depsMatch[1].trim() : "None",
-      criteria: criteriaMatch ? criteriaMatch[1].trim() : "",
-    });
-  }
-  return tasks;
+function parseCriteriaInput(value: string): string[] {
+  const items = value
+    .split("\n")
+    .map((line) => line.trim().replace(/^[-*]\s+/, "").trim())
+    .filter(Boolean);
+  if (items.length > 0) return items;
+  return ["Task implemented and tests pass"];
 }
 
-function isTaskCompleted(taskId: number, completedTasks: { name: string; content: string }[]): boolean {
-  return completedTasks.some((t) => t.content.includes(`Task ${taskId}:`));
+function stringifyCriteria(criteria: string[]): string {
+  if (criteria.length === 0) return "";
+  return criteria.map((item) => `- ${item}`).join("\n");
 }
 
-function getTaskCompletionProof(taskId: number, completedTasks: { name: string; content: string }[]): string | null {
-  const pattern = new RegExp(`\\bTask\\s*${taskId}\\s*:`, "i");
+function taskNumericSuffix(taskId: string): string | null {
+  const match = taskId.match(/^task-(\d+)$/i);
+  return match ? match[1] : null;
+}
+
+function isTaskCompleted(task: ParsedTask, completedTasks: { name: string; content: string }[]): boolean {
+  if (task.status === "done") return true;
+  const legacyId = taskNumericSuffix(task.id);
+  return completedTasks.some((entry) => {
+    if (entry.content.includes(`Task ${task.id}:`)) return true;
+    return legacyId ? entry.content.includes(`Task ${legacyId}:`) : false;
+  });
+}
+
+function getTaskCompletionProof(task: ParsedTask, completedTasks: { name: string; content: string }[]): string | null {
+  const legacyId = taskNumericSuffix(task.id);
   for (let i = completedTasks.length - 1; i >= 0; i -= 1) {
     const entry = completedTasks[i];
-    if (pattern.test(entry.content)) {
-      return entry.content.trim();
-    }
+    if (entry.content.includes(`Task ${task.id}:`)) return entry.content.trim();
+    if (legacyId && entry.content.includes(`Task ${legacyId}:`)) return entry.content.trim();
   }
   return null;
-}
-
-function parseDependencyIds(depStr: string): number[] {
-  if (!depStr || depStr.trim().toLowerCase() === "none") return [];
-  const matches = depStr.match(/\d+/g);
-  return matches ? matches.map(Number) : [];
-}
-
-type TaskRunStatus = "completed" | "runnable" | "blocked";
-
-function getTaskRunStatus(
-  task: ParsedTask,
-  completedTasks: { name: string; content: string }[],
-): TaskRunStatus {
-  if (isTaskCompleted(task.id, completedTasks)) return "completed";
-  const depIds = parseDependencyIds(task.dependencies);
-  const allDepsComplete = depIds.every((id) => isTaskCompleted(id, completedTasks));
-  return allDepsComplete ? "runnable" : "blocked";
 }
 
 type StatusFilter = "all" | "completed" | "pending";
@@ -101,17 +84,17 @@ type StatusFilter = "all" | "completed" | "pending";
 export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChanged }: PlanViewProps) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [taskAgents, setTaskAgents] = useState<Record<string, string>>(state.taskAgents ?? {});
   const [taskGitHubLinks, setTaskGitHubLinks] = useState<Record<string, TaskGitHubLink>>(state.taskGitHubLinks ?? {});
-  const [assigningTaskId, setAssigningTaskId] = useState<number | null>(null);
+  const [assigningTaskId, setAssigningTaskId] = useState<string | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [githubError, setGithubError] = useState<string | null>(null);
-  const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
-  const [deleteDialogTaskId, setDeleteDialogTaskId] = useState<number | null>(null);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [deleteDialogTaskId, setDeleteDialogTaskId] = useState<string | null>(null);
   const [showGitHubIssueImportDialog, setShowGitHubIssueImportDialog] = useState(false);
 
   useEffect(() => {
@@ -167,25 +150,22 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
     );
   }
 
-  if (!state.currentTasks) {
-    return renderEmptyState();
-  }
-
-  const tasks = parseTasks(state.currentTasks);
+  const tasks = (state.currentTaskPlan?.tasks ?? []) as ParsedTask[];
   if (tasks.length === 0) {
     return renderEmptyState();
   }
-  const summaryMatch = state.currentTasks.match(/##\s*Summary\s*\n([\s\S]*?)(?=\n##)/);
-  const riskMatch = state.currentTasks.match(/##\s*Risk Notes\s*\n([\s\S]*?)$/);
+
+  const summaryMatch = state.currentTasks?.match(/##\s*Summary\s*\n([\s\S]*?)(?=\n##)/);
+  const riskMatch = state.currentTasks?.match(/##\s*Risk Notes\s*\n([\s\S]*?)$/);
 
   const tasksWithStatus = tasks.map((task) => ({
     ...task,
-    completed: isTaskCompleted(task.id, state.completedTasks),
-    runStatus: getTaskRunStatus(task, state.completedTasks),
-    completionProof: getTaskCompletionProof(task.id, state.completedTasks),
-    assignedAgentId: taskAgents[String(task.id)] ?? "",
-    githubLink: taskGitHubLinks[String(task.id)] ?? null,
+    completed: isTaskCompleted(task, state.completedTasks),
+    completionProof: getTaskCompletionProof(task, state.completedTasks),
+    assignedAgentId: taskAgents[task.id] ?? task.implementerAgentId ?? "implementer",
+    githubLink: taskGitHubLinks[task.id] ?? null,
   }));
+
   const filtered = tasksWithStatus.filter((task) => {
     if (statusFilter === "completed" && !task.completed) return false;
     if (statusFilter === "pending" && task.completed) return false;
@@ -199,13 +179,13 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
   const completedCount = tasksWithStatus.filter((t) => t.completed).length;
   const progress = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
 
-  async function assignAgent(taskId: number, agentId: string) {
-    const previous = taskAgents[String(taskId)] ?? "";
+  async function assignAgent(taskId: string, agentId: string) {
+    const previous = taskAgents[taskId] ?? "";
     setAssignError(null);
     setAssigningTaskId(taskId);
-    setTaskAgents((prev) => ({ ...prev, [String(taskId)]: agentId }));
+    setTaskAgents((prev) => ({ ...prev, [taskId]: agentId }));
     try {
-      const res = await fetch(`/api/tasks/agents/${taskId}`, {
+      const res = await fetch(`/api/tasks/agents/${encodeURIComponent(taskId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agentId: agentId || null }),
@@ -213,8 +193,9 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Failed to assign agent");
       setTaskAgents(body.assignments ?? {});
+      await onTasksChanged?.();
     } catch (err) {
-      setTaskAgents((prev) => ({ ...prev, [String(taskId)]: previous }));
+      setTaskAgents((prev) => ({ ...prev, [taskId]: previous }));
       setAssignError((err as Error).message);
     } finally {
       setAssigningTaskId(null);
@@ -222,12 +203,18 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
   }
 
   async function saveTaskEdits(
-    taskId: number,
-    updates: { title: string; description: string; dependencies: string; criteria: string },
+    taskId: string,
+    updates: {
+      title: string;
+      description: string;
+      acceptanceCriteria: string[];
+      status: TaskStatus;
+      implementerAgentId?: string;
+    },
   ) {
     setEditError(null);
     try {
-      const res = await fetch(`/api/tasks/${taskId}`, {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updates),
@@ -241,14 +228,14 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
     }
   }
 
-  async function deleteTask(taskId: number, cascadeDependents: boolean) {
+  async function deleteTask(taskId: string) {
     setDeleteError(null);
     setDeletingTaskId(taskId);
     try {
-      const res = await fetch(`/api/tasks/${taskId}`, {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cascadeDependents }),
+        body: JSON.stringify({ cascadeDependents: false }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Failed to delete task");
@@ -261,13 +248,13 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
     }
   }
 
-  async function saveTaskGitHubLink(taskId: number, link: Partial<TaskGitHubLink>) {
+  async function saveTaskGitHubLink(taskId: string, link: Partial<TaskGitHubLink>) {
     setGithubError(null);
-    const previous = taskGitHubLinks[String(taskId)] ?? {};
+    const previous = taskGitHubLinks[taskId] ?? {};
     const optimistic = { ...previous, ...link };
-    setTaskGitHubLinks((prev) => ({ ...prev, [String(taskId)]: optimistic }));
+    setTaskGitHubLinks((prev) => ({ ...prev, [taskId]: optimistic }));
     try {
-      const res = await fetch(`/api/tasks/links/${taskId}`, {
+      const res = await fetch(`/api/tasks/links/${encodeURIComponent(taskId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(link),
@@ -277,16 +264,16 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       setTaskGitHubLinks(body.links ?? {});
       await onTasksChanged?.();
     } catch (err) {
-      setTaskGitHubLinks((prev) => ({ ...prev, [String(taskId)]: previous }));
+      setTaskGitHubLinks((prev) => ({ ...prev, [taskId]: previous }));
       setGithubError((err as Error).message);
       throw err;
     }
   }
 
-  async function createTaskIssue(taskId: number, repoFullName?: string) {
+  async function createTaskIssue(taskId: string, repoFullName?: string) {
     setGithubError(null);
     try {
-      const res = await fetch(`/api/tasks/${taskId}/github/issue`, {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/github/issue`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repoFullName }),
@@ -294,7 +281,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Failed to create linked issue");
       if (body.link) {
-        setTaskGitHubLinks((prev) => ({ ...prev, [String(taskId)]: body.link as TaskGitHubLink }));
+        setTaskGitHubLinks((prev) => ({ ...prev, [taskId]: body.link as TaskGitHubLink }));
       }
       await onTasksChanged?.();
     } catch (err) {
@@ -303,10 +290,10 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
     }
   }
 
-  async function createTaskBranch(taskId: number, branchName?: string) {
+  async function createTaskBranch(taskId: string, branchName?: string) {
     setGithubError(null);
     try {
-      const res = await fetch(`/api/tasks/${taskId}/github/branch`, {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/github/branch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ branchName }),
@@ -314,7 +301,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Failed to create/switch task branch");
       if (body.link) {
-        setTaskGitHubLinks((prev) => ({ ...prev, [String(taskId)]: body.link as TaskGitHubLink }));
+        setTaskGitHubLinks((prev) => ({ ...prev, [taskId]: body.link as TaskGitHubLink }));
       }
       await onTasksChanged?.();
     } catch (err) {
@@ -323,10 +310,10 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
     }
   }
 
-  async function createTaskPR(taskId: number, repoFullName?: string, head?: string) {
+  async function createTaskPR(taskId: string, repoFullName?: string, head?: string) {
     setGithubError(null);
     try {
-      const res = await fetch(`/api/tasks/${taskId}/github/pr`, {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/github/pr`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repoFullName, head }),
@@ -334,7 +321,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Failed to open linked PR");
       if (body.link) {
-        setTaskGitHubLinks((prev) => ({ ...prev, [String(taskId)]: body.link as TaskGitHubLink }));
+        setTaskGitHubLinks((prev) => ({ ...prev, [taskId]: body.link as TaskGitHubLink }));
       }
       await onTasksChanged?.();
     } catch (err) {
@@ -345,7 +332,6 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
-      {/* Header row */}
       <div className="flex items-center justify-between">
         <div className="space-y-0.5">
           <h2 className="text-base font-semibold text-zinc-100">Task Plan</h2>
@@ -378,7 +364,6 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
         </div>
       </div>
 
-      {/* Progress bar */}
       <div className="flex items-center gap-3">
         <div className="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
           <div
@@ -391,7 +376,6 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
         </span>
       </div>
 
-      {/* Filter bar */}
       <div className="flex items-center gap-2">
         <StatusSelect value={statusFilter} onChange={setStatusFilter} />
         <div className="relative flex-1 max-w-xs">
@@ -410,10 +394,8 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
       {githubError && <p className="text-xs text-red-400">{githubError}</p>}
 
-      {/* Table */}
       <div className="border border-zinc-800 rounded-xl overflow-hidden">
-        {/* Table header */}
-        <div className="grid grid-cols-[1fr_88px_120px_140px] gap-3 px-4 py-2.5 bg-zinc-900/60 border-b border-zinc-800">
+        <div className="grid grid-cols-[1fr_120px_120px_140px] gap-3 px-4 py-2.5 bg-zinc-900/60 border-b border-zinc-800">
           <span className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Task</span>
           <span className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Status</span>
           <span className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Progress</span>
@@ -427,7 +409,6 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
             <TaskRow
               key={task.id}
               task={task}
-              allTasks={tasksWithStatus}
               agents={agents}
               assigning={assigningTaskId === task.id}
               isLast={idx === filtered.length - 1}
@@ -446,7 +427,6 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
         )}
       </div>
 
-      {/* Risk notes */}
       {riskMatch && (
         <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-lg">
           <h3 className="text-xs font-medium text-amber-400 mb-1.5 uppercase tracking-wider">Risk Notes</h3>
@@ -457,10 +437,9 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       {deleteDialogTaskId !== null && (
         <DeleteTaskDialog
           taskId={deleteDialogTaskId}
-          allTasks={tasksWithStatus}
           deleting={deletingTaskId === deleteDialogTaskId}
           onCancel={() => setDeleteDialogTaskId(null)}
-          onConfirm={(cascade) => void deleteTask(deleteDialogTaskId, cascade)}
+          onConfirm={() => void deleteTask(deleteDialogTaskId)}
         />
       )}
 
@@ -477,12 +456,10 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
 interface TaskRowProps {
   task: ParsedTask & {
     completed: boolean;
-    runStatus: TaskRunStatus;
     completionProof: string | null;
     assignedAgentId: string;
     githubLink: TaskGitHubLink | null;
   };
-  allTasks: (ParsedTask & { completed: boolean })[];
   agents: AgentOption[];
   assigning: boolean;
   isLast: boolean;
@@ -490,7 +467,13 @@ interface TaskRowProps {
   onToggleExpand: () => void;
   onRun: () => void;
   onAssignAgent: (agentId: string) => void;
-  onSaveEdits: (updates: { title: string; description: string; dependencies: string; criteria: string }) => Promise<void>;
+  onSaveEdits: (updates: {
+    title: string;
+    description: string;
+    acceptanceCriteria: string[];
+    status: TaskStatus;
+    implementerAgentId?: string;
+  }) => Promise<void>;
   onDelete: () => void;
   onSaveGitHubLink: (link: Partial<TaskGitHubLink>) => Promise<void>;
   onCreateIssue: (repoFullName?: string) => Promise<void>;
@@ -500,7 +483,6 @@ interface TaskRowProps {
 
 function TaskRow({
   task,
-  allTasks,
   agents,
   assigning,
   isLast,
@@ -515,14 +497,14 @@ function TaskRow({
   onCreateBranch,
   onCreatePR,
 }: TaskRowProps) {
-  const progress = task.completed ? 100 : 0;
-  const barColor = task.completed ? "bg-emerald-500" : "bg-zinc-700";
+  const progress = task.completed ? 100 : task.status === "in_progress" ? 50 : 0;
+  const barColor = task.completed ? "bg-emerald-500" : task.status === "in_progress" ? "bg-amber-500" : "bg-zinc-700";
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draftTitle, setDraftTitle] = useState(task.title);
   const [draftDescription, setDraftDescription] = useState(task.description);
-  const [draftDependencies, setDraftDependencies] = useState(task.dependencies);
-  const [draftCriteria, setDraftCriteria] = useState(task.criteria);
+  const [draftCriteria, setDraftCriteria] = useState(stringifyCriteria(task.acceptanceCriteria));
+  const [draftStatus, setDraftStatus] = useState<TaskStatus>(task.status);
   const [draftRepoFullName, setDraftRepoFullName] = useState(task.githubLink?.repoFullName ?? "");
   const [draftBranchName, setDraftBranchName] = useState(task.githubLink?.branchName ?? "");
   const [savingGitHubLink, setSavingGitHubLink] = useState(false);
@@ -530,44 +512,40 @@ function TaskRow({
   const [creatingBranch, setCreatingBranch] = useState(false);
   const [creatingPR, setCreatingPR] = useState(false);
 
-  const statusLabel = task.completed ? "Completed" : "Pending";
+  const statusLabel = task.status === "done" ? "Done" : task.status === "in_progress" ? "In Progress" : "Todo";
   const statusColors: Record<string, string> = {
-    Completed: "text-emerald-400 bg-emerald-500/10",
-    Pending: "text-zinc-500 bg-zinc-800",
+    Done: "text-emerald-400 bg-emerald-500/10",
+    "In Progress": "text-amber-300 bg-amber-500/10",
+    Todo: "text-zinc-500 bg-zinc-800",
   };
-
-  const blockedByIds = parseDependencyIds(task.dependencies).filter(
-    (id) => !allTasks.find((t) => t.id === id)?.completed,
-  );
 
   useEffect(() => {
     setDraftTitle(task.title);
     setDraftDescription(task.description);
-    setDraftDependencies(task.dependencies);
-    setDraftCriteria(task.criteria);
+    setDraftCriteria(stringifyCriteria(task.acceptanceCriteria));
+    setDraftStatus(task.status);
     setDraftRepoFullName(task.githubLink?.repoFullName ?? "");
     setDraftBranchName(task.githubLink?.branchName ?? "");
-  }, [task.id, task.title, task.description, task.dependencies, task.criteria, task.githubLink?.repoFullName, task.githubLink?.branchName]);
+  }, [task.id, task.title, task.description, task.acceptanceCriteria, task.status, task.githubLink?.repoFullName, task.githubLink?.branchName]);
 
-  const showMutableControls = !task.completed;
+  const showMutableControls = task.status !== "done";
 
   useEffect(() => {
-    if (task.completed) {
+    if (!showMutableControls) {
       setEditing(false);
     }
-  }, [task.completed]);
+  }, [showMutableControls]);
 
   return (
     <>
       <div
-        className={`grid grid-cols-[1fr_88px_120px_140px] gap-3 px-4 py-3.5 items-center transition-colors hover:bg-zinc-900/40 ${
+        className={`grid grid-cols-[1fr_120px_120px_140px] gap-3 px-4 py-3.5 items-center transition-colors hover:bg-zinc-900/40 ${
           !isLast ? "border-b border-zinc-800/60" : ""
         } ${expanded ? "bg-zinc-900/40" : ""}`}
       >
-        {/* Task name */}
         <div className="min-w-0">
           <div className="flex items-baseline gap-2">
-            <span className="text-[11px] text-zinc-600 font-mono shrink-0">#{task.id}</span>
+            <span className="text-[11px] text-zinc-600 font-mono shrink-0">{task.id}</span>
             <span className={`text-sm font-medium truncate ${task.completed ? "text-zinc-500 line-through decoration-zinc-700" : "text-zinc-200"}`}>
               {task.title}
             </span>
@@ -577,14 +555,12 @@ function TaskRow({
           )}
         </div>
 
-        {/* Status badge */}
         <div>
           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${statusColors[statusLabel]}`}>
             {statusLabel}
           </span>
         </div>
 
-        {/* Progress bar */}
         <div className="flex items-center gap-2.5">
           <div className="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
             <div
@@ -595,9 +571,8 @@ function TaskRow({
           <span className="text-xs text-zinc-500 tabular-nums w-8 text-right">{progress}%</span>
         </div>
 
-        {/* Action */}
         <div className="flex items-center justify-end gap-1.5">
-          {task.runStatus === "runnable" && (
+          {!task.completed && (
             <button
               onClick={onRun}
               title="Run this task"
@@ -606,14 +581,6 @@ function TaskRow({
               <Play className="h-3 w-3 text-zinc-400" />
               Run
             </button>
-          )}
-          {task.runStatus === "blocked" && (
-            <span
-              title={`Waiting on: Task${blockedByIds.length > 1 ? "s" : ""} ${blockedByIds.join(", ")}`}
-              className="flex items-center justify-center w-7 h-7 rounded-md border border-zinc-800 text-zinc-600 cursor-default"
-            >
-              <Lock className="h-3 w-3" />
-            </span>
           )}
           <button
             onClick={onToggleExpand}
@@ -626,7 +593,6 @@ function TaskRow({
         </div>
       </div>
 
-      {/* Expanded detail panel */}
       {expanded && (
         <div className={`px-4 pb-4 pt-1 bg-zinc-900/40 space-y-3 ${!isLast ? "border-b border-zinc-800/60" : ""}`}>
           {showMutableControls && editing ? (
@@ -644,19 +610,24 @@ function TaskRow({
                 className="w-full max-w-2xl bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-xs text-zinc-300"
                 placeholder="Task description"
               />
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-w-2xl">
-                <input
-                  value={draftDependencies}
-                  onChange={(e) => setDraftDependencies(e.target.value)}
-                  className="select-flat px-3 py-1.5 text-xs"
-                  placeholder="Dependencies, e.g. 1,2 or None"
-                />
-                <input
-                  value={draftCriteria}
-                  onChange={(e) => setDraftCriteria(e.target.value)}
-                  className="select-flat px-3 py-1.5 text-xs"
-                  placeholder="Acceptance criteria"
-                />
+              <textarea
+                value={draftCriteria}
+                onChange={(e) => setDraftCriteria(e.target.value)}
+                rows={4}
+                className="w-full max-w-2xl bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-xs text-zinc-300 font-mono"
+                placeholder="- Acceptance criterion 1"
+              />
+              <div className="relative w-56">
+                <select
+                  value={draftStatus}
+                  onChange={(e) => setDraftStatus(e.target.value as TaskStatus)}
+                  className="select-flat w-full pl-2 pr-7 py-1 text-xs"
+                >
+                  <option value="todo">todo</option>
+                  <option value="in_progress">in_progress</option>
+                  <option value="done">done</option>
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
               </div>
             </div>
           ) : (
@@ -665,44 +636,14 @@ function TaskRow({
             )
           )}
 
-          {task.files.length > 0 && (
-            <div className="ml-6 flex flex-wrap gap-1.5">
-              {task.files.map((file) => (
-                <span key={file} className="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">
-                  {file}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {!editing && task.dependencies !== "None" && (
-            <div className="ml-6 flex items-start gap-2">
-              {task.runStatus === "blocked" && <Lock className="h-3 w-3 text-zinc-600 mt-0.5 shrink-0" />}
-              <p className="text-xs text-zinc-500">
-                {task.runStatus === "blocked" ? (
-                  <>
-                    <span className="text-zinc-600">Blocked by: </span>
-                    {blockedByIds.map((id, i) => (
-                      <span key={id}>
-                        {i > 0 && ", "}
-                        <span className="text-zinc-400 font-mono">#{id}</span>
-                      </span>
-                    ))}
-                  </>
-                ) : (
-                  <>
-                    <span className="text-zinc-600">Depends on: </span>
-                    <span className="text-zinc-600">{task.dependencies}</span>
-                  </>
-                )}
-              </p>
-            </div>
-          )}
-
-          {!editing && task.criteria && (
+          {!editing && task.acceptanceCriteria.length > 0 && (
             <div className="ml-6">
               <p className="text-xs text-zinc-600 mb-1">Acceptance criteria</p>
-              <p className="text-xs text-zinc-400 leading-relaxed">{task.criteria}</p>
+              <ul className="text-xs text-zinc-400 leading-relaxed list-disc ml-4">
+                {task.acceptanceCriteria.map((item, idx) => (
+                  <li key={`${task.id}-criterion-${idx}`}>{item}</li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -869,8 +810,9 @@ function TaskRow({
                           await onSaveEdits({
                             title: draftTitle.trim(),
                             description: draftDescription.trim(),
-                            dependencies: draftDependencies.trim() || "None",
-                            criteria: draftCriteria.trim(),
+                            acceptanceCriteria: parseCriteriaInput(draftCriteria),
+                            status: draftStatus,
+                            implementerAgentId: task.assignedAgentId || undefined,
                           });
                           setEditing(false);
                         } finally {
@@ -888,8 +830,8 @@ function TaskRow({
                         setEditing(false);
                         setDraftTitle(task.title);
                         setDraftDescription(task.description);
-                        setDraftDependencies(task.dependencies);
-                        setDraftCriteria(task.criteria);
+                        setDraftCriteria(stringifyCriteria(task.acceptanceCriteria));
+                        setDraftStatus(task.status);
                       }}
                       className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
                     >
@@ -907,65 +849,25 @@ function TaskRow({
   );
 }
 
-function collectDependentTaskIds(taskId: number, allTasks: ParsedTask[]): number[] {
-  const selected = new Set<number>([taskId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const task of allTasks) {
-      if (selected.has(task.id)) continue;
-      const deps = parseDependencyIds(task.dependencies);
-      if (deps.some((dep) => selected.has(dep))) {
-        selected.add(task.id);
-        changed = true;
-      }
-    }
-  }
-  selected.delete(taskId);
-  return Array.from(selected).sort((a, b) => a - b);
-}
-
 function DeleteTaskDialog({
   taskId,
-  allTasks,
   deleting,
   onCancel,
   onConfirm,
 }: {
-  taskId: number;
-  allTasks: ParsedTask[];
+  taskId: string;
   deleting: boolean;
   onCancel: () => void;
-  onConfirm: (cascade: boolean) => void;
+  onConfirm: () => void;
 }) {
-  const dependentTaskIds = collectDependentTaskIds(taskId, allTasks);
-  const [cascade, setCascade] = useState(dependentTaskIds.length > 0);
-
-  useEffect(() => {
-    setCascade(dependentTaskIds.length > 0);
-  }, [taskId, dependentTaskIds.length]);
-
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
       <div className="w-full max-w-lg bg-zinc-900 border border-zinc-700 rounded-lg">
         <div className="px-4 py-3 border-b border-zinc-800">
-          <h3 className="text-sm font-medium text-zinc-100">Delete Task #{taskId}</h3>
+          <h3 className="text-sm font-medium text-zinc-100">Delete {taskId}</h3>
         </div>
         <div className="px-4 py-4 space-y-3 text-sm">
-          <p className="text-zinc-300">This will remove Task #{taskId} from the current plan.</p>
-          {dependentTaskIds.length > 0 && (
-            <label className="flex items-start gap-2 text-zinc-300">
-              <input
-                type="checkbox"
-                checked={cascade}
-                onChange={(e) => setCascade(e.target.checked)}
-                className="mt-0.5"
-              />
-              <span>
-                Also delete dependent tasks: {dependentTaskIds.map((id) => `#${id}`).join(", ")}
-              </span>
-            </label>
-          )}
+          <p className="text-zinc-300">This will remove {taskId} from the current plan.</p>
         </div>
         <div className="px-4 py-3 border-t border-zinc-800 flex justify-end gap-2">
           <button
@@ -976,7 +878,7 @@ function DeleteTaskDialog({
             Cancel
           </button>
           <button
-            onClick={() => onConfirm(cascade)}
+            onClick={onConfirm}
             disabled={deleting}
             className="px-3 py-1.5 text-xs border border-red-900/60 text-red-200 hover:bg-red-950/30 disabled:opacity-50"
           >
