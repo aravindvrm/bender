@@ -198,6 +198,15 @@ function withEndpointFallback(
   return wrapped as LanguageModel;
 }
 
+function isOfficialOpenAiHost(baseURL: string): boolean {
+  try {
+    const host = new URL(baseURL).hostname.toLowerCase();
+    return host === "api.openai.com" || host.endsWith(".api.openai.com");
+  } catch {
+    return false;
+  }
+}
+
 function resolveOpenAiCompatibleModel(
   modelId: string,
   cfg: ProviderConfig,
@@ -207,10 +216,22 @@ function resolveOpenAiCompatibleModel(
   const baseCandidates = resolveOpenAiCompatibleBaseUrlCandidatesForModel(cfg, modelId);
   const fallbackAttempts: Array<{ style: "chat" | "responses"; baseURL: string }> = [];
   for (const baseURL of baseCandidates) {
+    // For non-OpenAI hosts (LM Studio, llama.cpp, vLLM, text-generation-webui,
+    // etc.) the `/responses` endpoint is OpenAI-specific and rarely
+    // implemented. Probing it surfaces misleading errors and can mask the real
+    // chat-completions failure. So:
+    //   - If the user's *explicit* primary style is "responses", honor it
+    //     (we assume they configured it on purpose, e.g. a self-hosted server
+    //     that does implement the Responses API).
+    //   - Otherwise we never auto-fall-back from chat → responses on
+    //     non-OpenAI hosts.
+    const isOpenAiHost = isOfficialOpenAiHost(baseURL);
     if (style === "chat") {
-      fallbackAttempts.push({ style: "chat", baseURL }, { style: "responses", baseURL });
+      fallbackAttempts.push({ style: "chat", baseURL });
+      if (isOpenAiHost) fallbackAttempts.push({ style: "responses", baseURL });
     } else {
-      fallbackAttempts.push({ style: "responses", baseURL }, { style: "chat", baseURL });
+      fallbackAttempts.push({ style: "responses", baseURL });
+      fallbackAttempts.push({ style: "chat", baseURL });
     }
   }
 
@@ -224,14 +245,15 @@ function resolveOpenAiCompatibleModel(
   }
 
   if (uniqueAttempts.length === 0) {
-    uniqueAttempts.push({ style, baseURL: normalizeOpenAiCompatibleBaseUrl(cfg.baseUrl) });
+    const baseURL = normalizeOpenAiCompatibleBaseUrl(cfg.baseUrl);
+    uniqueAttempts.push({ style, baseURL });
   }
 
   const toFactory = (attempt: { style: "chat" | "responses"; baseURL: string }) => () => {
     const provider = createOpenAI({
       baseURL: attempt.baseURL,
       apiKey,
-      fetch: withTimeoutFetch(LOCAL_PROVIDER_TIMEOUT_MS),
+      fetch: withDiagnosticFetch(withTimeoutFetch(LOCAL_PROVIDER_TIMEOUT_MS), attempt.baseURL),
     });
     return attempt.style === "chat"
       ? provider.chat(modelId) as LanguageModel
@@ -242,6 +264,102 @@ function resolveOpenAiCompatibleModel(
     toFactory(uniqueAttempts[0]!),
     uniqueAttempts.slice(1).map((attempt) => toFactory(attempt)),
   );
+}
+
+/**
+ * Wraps a fetch implementation so that JSON bodies from OpenAI-compatible
+ * endpoints are sanity-checked before the AI SDK tries to parse them. When the
+ * payload is clearly malformed (missing `choices`, missing/typo'd `usage`
+ * fields, `message: null`, etc.) we throw an explicit error with the raw body
+ * snippet attached, so debugging a local server becomes tractable rather than
+ * surfacing a cryptic "data shape mismatch" / Zod validation trace.
+ */
+function withDiagnosticFetch(inner: typeof fetch, baseURL: string): typeof fetch {
+  return async (input, init) => {
+    const response = await inner(input, init);
+    // Only inspect chat-completions/responses endpoints, only for successful
+    // JSON responses, and never for streams (they're consumed elsewhere).
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : (input as Request).url;
+    const shouldInspect = response.ok
+      && !response.headers.get("content-type")?.includes("event-stream")
+      && (url.includes("/chat/completions") || url.endsWith("/responses"));
+    if (!shouldInspect) return response;
+
+    let raw: string;
+    try {
+      raw = await response.clone().text();
+    } catch {
+      return response;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const snippet = raw.slice(0, 500);
+      throw new Error(
+        `OpenAI-compatible endpoint at ${baseURL} returned non-JSON body. `
+        + `Raw body (truncated): ${snippet}`,
+      );
+    }
+
+    const diagnostic = diagnoseOpenAiCompatiblePayload(parsed, url);
+    if (diagnostic) {
+      const snippet = raw.slice(0, 500);
+      throw new Error(
+        `OpenAI-compatible endpoint at ${baseURL} returned an incompatible payload: `
+        + `${diagnostic}. Raw body (truncated): ${snippet}`,
+      );
+    }
+
+    return response;
+  };
+}
+
+function diagnoseOpenAiCompatiblePayload(payload: unknown, url: string): string | null {
+  if (!payload || typeof payload !== "object") {
+    return "payload is not a JSON object";
+  }
+  const body = payload as Record<string, unknown>;
+  if ("error" in body && body.error) {
+    return null; // let the AI SDK surface the provider error verbatim
+  }
+  if (url.endsWith("/responses")) {
+    if (!("output" in body) && !("output_text" in body) && !("id" in body)) {
+      return "responses payload missing `output`/`output_text`/`id`";
+    }
+    return null;
+  }
+  // chat-completions path
+  const choices = body.choices;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return "chat payload missing non-empty `choices` array";
+  }
+  const first = choices[0] as Record<string, unknown> | undefined;
+  const message = first?.message as Record<string, unknown> | null | undefined;
+  const delta = first?.delta; // streaming chunks have `delta`, not `message`
+  if (message === null) {
+    return "chat payload has `choices[0].message: null`";
+  }
+  if (!message && !delta) {
+    return "chat payload missing `choices[0].message`";
+  }
+  if (message && message.content === null && !message.tool_calls) {
+    return "chat payload has `message.content: null` with no `tool_calls`";
+  }
+  const usage = body.usage as Record<string, unknown> | undefined;
+  if (usage && typeof usage === "object") {
+    const hasInput = "prompt_tokens" in usage || "input_tokens" in usage;
+    const hasOutput = "completion_tokens" in usage || "output_tokens" in usage;
+    if (!hasInput || !hasOutput) {
+      return `usage present but missing token fields (got keys: ${Object.keys(usage).join(",")})`;
+    }
+  }
+  return null;
 }
 
 function withTimeoutFetch(timeoutMs: number): typeof fetch {

@@ -96,4 +96,47 @@ describe("cli/services/llm-models", () => {
     expect(caps.supportsJson).toBe(false);
     expect(caps.supportsTools).toBe(false);
   });
+
+  it("rejects chat payload with null message content (LM Studio edge case)", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/chat/completions")) {
+        // LM Studio occasionally returns { choices: [{ message: null }] }
+        // — previously this passed validation and blew up downstream.
+        return jsonResponse({ choices: [{ message: null }] });
+      }
+      if (url.endsWith("/v1/responses")) {
+        return jsonResponse({ error: "not supported" }, 404);
+      }
+      return jsonResponse({ error: "unexpected endpoint" }, 404);
+    });
+
+    const result = await detectOpenAiCompatibleCapabilities("http://localhost:1234/v1", ["broken-model"]);
+    const caps = result["broken-model"];
+    expect(caps.apiStyle).toBe("auto");
+    expect(caps.errors?.length).toBeGreaterThan(0);
+  });
+
+  it("rejects chat payload with malformed usage object", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/chat/completions")) {
+        // Usage present but missing standard token keys — would break
+        // the AI SDK's usage mapper silently.
+        return jsonResponse({
+          choices: [{ message: { content: "ok" } }],
+          usage: { tokens_in: 10, tokens_out: 5 },
+        });
+      }
+      if (url.endsWith("/v1/responses")) {
+        return jsonResponse({ error: "not supported" }, 404);
+      }
+      return jsonResponse({ error: "unexpected endpoint" }, 404);
+    });
+
+    const result = await detectOpenAiCompatibleCapabilities("http://localhost:1234/v1", ["weird-usage-model"]);
+    const caps = result["weird-usage-model"];
+    expect(caps.apiStyle).toBe("auto");
+    expect(caps.errors?.length).toBeGreaterThan(0);
+  });
 });

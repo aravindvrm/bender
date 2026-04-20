@@ -167,7 +167,10 @@ describe("openai-compatible model wiring", () => {
     expect(openAiChatSpy).toHaveBeenCalledTimes(3);
   });
 
-  it("falls back from chat to responses when chat endpoint is rejected", async () => {
+  it("does NOT silently fall back from chat to responses on non-OpenAI hosts", async () => {
+    // LM Studio, llama.cpp, etc. don't implement /v1/responses. Previously we
+    // would probe it anyway and surface a misleading error. Now chat failures
+    // propagate so the diagnostic fetch wrapper can report the real cause.
     const chatGenerate = vi.fn(async () => {
       throw new Error("Unexpected endpoint or method. (POST /chat/completions)");
     });
@@ -203,6 +206,65 @@ describe("openai-compatible model wiring", () => {
         "openai-compatible": {
           baseUrl: "http://localhost:1234/v1",
           apiKey: "",
+        },
+      },
+      mcp: { enabled: false, servers: [] },
+      skills: { enabled: false, enabledSkills: [], paths: [], maxChars: 12000 },
+      stack: {
+        template: "nextjs-saas",
+        framework: "next.js",
+        database: "postgres",
+        orm: "drizzle",
+        auth: "next-auth",
+        styling: "tailwind",
+        language: "typescript",
+      },
+      deploy: {},
+      test: {},
+    };
+
+    const models = createModelSet(config);
+    await expect(
+      (models.default as { doGenerate: (options: unknown) => Promise<unknown> }).doGenerate({}),
+    ).rejects.toThrow(/chat\/completions/);
+    // chat is tried per base-URL candidate (both /v1 and bare host), but
+    // responses is NEVER tried as an auto-fallback on non-OpenAI hosts.
+    expect(chatGenerate.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(responsesGenerate).not.toHaveBeenCalled();
+  });
+
+  it("DOES fall back from chat to responses on api.openai.com", async () => {
+    const chatGenerate = vi.fn(async () => {
+      throw new Error("Unexpected endpoint or method. (POST /chat/completions)");
+    });
+    const responsesGenerate = vi.fn(async () => ({ text: "ok" }));
+
+    openAiChatSpy.mockImplementation(() => ({
+      provider: "openai-compatible",
+      modelId: "chat-model",
+      doGenerate: chatGenerate,
+      doStream: vi.fn(),
+    }) as never);
+    openAiResponsesSpy.mockImplementation(() => ({
+      provider: "openai-compatible",
+      modelId: "responses-model",
+      doGenerate: responsesGenerate,
+      doStream: vi.fn(),
+    }) as never);
+
+    const config: BenderConfig = {
+      llm: {
+        provider: "openai-compatible",
+        models: {
+          fast: "fast-local",
+          default: "default-local",
+          strong: "strong-local",
+        },
+      },
+      providers: {
+        "openai-compatible": {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-test",
         },
       },
       mcp: { enabled: false, servers: [] },

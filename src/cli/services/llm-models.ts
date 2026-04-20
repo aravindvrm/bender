@@ -69,7 +69,28 @@ function hasErrorEnvelope(value: unknown): boolean {
 function isChatSuccessPayload(value: unknown): value is OpenAiCompatibleChatResponse {
   if (!isObjectRecord(value)) return false;
   if (hasErrorEnvelope(value)) return false;
-  return Array.isArray((value as OpenAiCompatibleChatResponse).choices);
+  const choices = (value as OpenAiCompatibleChatResponse).choices;
+  if (!Array.isArray(choices) || choices.length === 0) return false;
+  const first = choices[0];
+  if (!first || typeof first !== "object") return false;
+  const message = first.message;
+  // A valid chat completion has either message.content (string) or
+  // message.tool_calls — `null` message means the server produced nothing we
+  // can consume (which is what LM Studio occasionally emits on bad prompts).
+  if (!message || typeof message !== "object") return false;
+  const hasContent = typeof message.content === "string" && message.content.length >= 0;
+  const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+  if (!hasContent && !hasToolCalls) return false;
+  // Usage is optional, but if present it must contain recognizable token keys
+  // so the Vercel AI SDK can map them to inputTokens/outputTokens.
+  const usage = (value as Record<string, unknown>).usage;
+  if (usage && typeof usage === "object" && !Array.isArray(usage)) {
+    const u = usage as Record<string, unknown>;
+    const hasInput = "prompt_tokens" in u || "input_tokens" in u;
+    const hasOutput = "completion_tokens" in u || "output_tokens" in u;
+    if (!hasInput || !hasOutput) return false;
+  }
+  return true;
 }
 
 function isResponsesSuccessPayload(value: unknown): boolean {
