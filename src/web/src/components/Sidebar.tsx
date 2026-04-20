@@ -34,8 +34,23 @@ function displayProviderName(provider?: string): string {
   if (p === "google") return "Google";
   if (p === "groq") return "Groq";
   if (p === "ollama") return "Ollama";
-  if (p === "openai-compatible") return "OpenAI-Compatible (Local)";
+  if (p === "openai-compatible") return "Local";
   return provider ?? "—";
+}
+
+/** Shorten a long model name to its most recognisable segment.
+ *  e.g. "devstral-small-2-24b-instruct-2512" → "devstral-small-2-24b"
+ *  e.g. "claude-sonnet-4-5-20250930" → "claude-sonnet-4-5"
+ */
+function shortenModelName(name: string): string {
+  if (!name || name === "—") return name;
+  // Strip trailing date-like or build suffixes (e.g. -20250930, -2512, -instruct-2512)
+  const stripped = name
+    .replace(/-\d{8}$/, "")       // -20251231 trailing date
+    .replace(/-\d{4}$/, "")       // -2512 build suffix
+    .replace(/-instruct(-\d+)?$/, "") // -instruct or -instruct-2512
+    .replace(/-preview$/, "");    // -preview suffix
+  return stripped || name;
 }
 
 function resolveTierProvider(
@@ -234,13 +249,17 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
               <button
                 key={item.id}
                 onClick={() => onViewChange(item.id)}
-                className={`w-full flex items-center gap-2.5 rounded-none px-4 py-2 text-sm transition-colors ${
+                className={`w-full flex items-center gap-2.5 px-4 py-[7px] text-sm transition-colors relative ${
                   isActive
-                    ? "bg-zinc-800/80 text-zinc-100"
-                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+                    ? "bg-zinc-800/70 text-zinc-100"
+                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/30"
                 }`}
               >
-                <Icon className={`h-4 w-4 shrink-0 ${isActive ? "text-zinc-300" : "text-zinc-500"}`} />
+                {/* Left accent bar on active */}
+                {isActive && (
+                  <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-zinc-300 rounded-full" />
+                )}
+                <Icon className={`h-[15px] w-[15px] shrink-0 ${isActive ? "text-zinc-200" : "text-zinc-500"}`} />
                 <span className="flex-1 text-left text-[13px]">{item.label}</span>
                 {badge !== null && badge > 0 && (
                   <span className={`text-[11px] font-medium px-1.5 py-0.5 rounded-full ${
@@ -283,18 +302,17 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
                 </span>
               </div>
               <div className="space-y-0.5 pb-0.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-zinc-600">fast</span>
-                  <span className="text-[10px] text-zinc-500 font-mono truncate max-w-[150px]">{tierModels.fast}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-zinc-600">default</span>
-                  <span className="text-[10px] text-zinc-500 font-mono truncate max-w-[150px]">{tierModels.default}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-zinc-600">strong</span>
-                  <span className="text-[10px] text-zinc-500 font-mono truncate max-w-[150px]">{tierModels.strong}</span>
-                </div>
+                {(["fast", "default", "strong"] as const).map((tier) => (
+                  <div key={tier} className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] text-zinc-600 shrink-0">{tier}</span>
+                    <span
+                      title={tierModels[tier] !== "—" ? tierModels[tier] : undefined}
+                      className="text-[10px] text-zinc-500 font-mono truncate"
+                    >
+                      {shortenModelName(tierModels[tier])}
+                    </span>
+                  </div>
+                ))}
               </div>
             </>
           ) : hasProject ? (

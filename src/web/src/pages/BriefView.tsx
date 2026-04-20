@@ -52,10 +52,17 @@ const DEFERRED_PATTERNS = [
 export function BriefView({ state }: BriefViewProps) {
   if (!state.brief) {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-500">
-        <div className="text-center">
-          <p className="text-base font-medium text-zinc-400">No project brief</p>
-          <p className="text-sm mt-1 text-zinc-500">Run <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">bender analyze</code> to generate one</p>
+      <div className="flex items-center justify-center min-h-[320px]">
+        <div className="text-center max-w-xs space-y-3">
+          <div className="mx-auto w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-3">
+            <svg className="w-4.5 h-4.5 text-zinc-600" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+            </svg>
+          </div>
+          <p className="text-[13px] font-medium text-zinc-300">No project brief yet</p>
+          <p className="text-xs text-zinc-500 leading-relaxed">
+            Run <code className="bg-zinc-800/80 px-1.5 py-0.5 rounded text-zinc-300 text-[11px]">bender analyze</code> or use the scan icon in the left rail to generate your project brief and architecture.
+          </p>
         </div>
       </div>
     );

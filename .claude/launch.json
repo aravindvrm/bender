@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "bender-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:web"],
+      "port": 3141
+    },
+    {
       "name": "bender-open",
       "runtimeExecutable": "node",
       "runtimeArgs": ["dist/cli/index.js", "open", "--dir", "/tmp/bender-e2e-test"],

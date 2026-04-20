@@ -969,23 +969,28 @@ export function SettingsView() {
 
   return (
     <div className="max-w-2xl space-y-8">
-      <section>
-        <div className="flex items-center gap-3 px-3 py-2 bg-zinc-900 rounded-md">
-          <span className="text-xs text-zinc-500">Scope</span>
-          <span className="text-xs text-zinc-300 ml-auto">{configScope === "global" ? "Global settings" : "Project settings"}</span>
+      {/* Scope banner */}
+      <section className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full border ${
+            configScope === "project"
+              ? "bg-zinc-800 border-zinc-700 text-zinc-300"
+              : "bg-zinc-900 border-zinc-800 text-zinc-500"
+          }`}>
+            {configScope === "project" ? "Project settings" : "Global settings"}
+          </span>
         </div>
         {projectRoot && (
-          <div className="flex items-center gap-3 px-3 py-2 bg-zinc-900 rounded-md mt-2">
-            <span className="text-xs text-zinc-500">Project</span>
-            <span className="text-xs text-zinc-300 font-mono ml-auto">{projectRoot}</span>
-          </div>
+          <span className="text-[11px] text-zinc-600 font-mono truncate ml-auto" title={projectRoot}>
+            {projectRoot}
+          </span>
         )}
       </section>
 
-      <div className="h-px bg-zinc-800" />
+      <div className="h-px bg-zinc-800/60" />
 
       <section>
-        <h3 className="text-sm font-semibold text-zinc-300 mb-1">GitHub</h3>
+        <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-[0.1em] mb-1">GitHub</h3>
         <p className="text-xs text-zinc-600 mb-4">
           Machine-level GitHub auth config used by project picker and Git workflows.
         </p>
@@ -1085,7 +1090,7 @@ export function SettingsView() {
       <div className="h-px bg-zinc-800" />
 
       <section>
-        <h3 className="text-sm font-semibold text-zinc-300 mb-1">MCP Connectors</h3>
+        <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-[0.1em] mb-1">MCP Connectors</h3>
         <p className="text-xs text-zinc-600 mb-3">
           Configure curated connectors and review runtime health/capabilities in one place.
         </p>
@@ -1181,7 +1186,7 @@ export function SettingsView() {
 
       {/* Per-provider API keys */}
       <section>
-        <h3 className="text-sm font-semibold text-zinc-300 mb-1">API Keys</h3>
+        <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-[0.1em] mb-1">API Keys</h3>
         <p className="text-xs text-zinc-600 mb-4">
           Configure provider credentials/endpoints first. Provider dropdowns only list configured providers.
         </p>
@@ -1224,7 +1229,7 @@ export function SettingsView() {
 
       {/* Provider selection + model tiers */}
       <section>
-        <h3 className="text-sm font-semibold text-zinc-300 mb-4">LLM Provider & Models</h3>
+        <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-[0.1em] mb-4">LLM Provider & Models</h3>
         <div className="space-y-4">
           {modelRefreshError && (
             <p className="text-xs text-red-400">{modelRefreshError}</p>
@@ -1309,7 +1314,7 @@ export function SettingsView() {
       <div className="h-px bg-zinc-800" />
 
       <section>
-        <h3 className="text-sm font-semibold text-zinc-300 mb-1">Agents</h3>
+        <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-[0.1em] mb-1">Agents</h3>
         <p className="text-xs text-zinc-600">
           Configure role defaults, pinned skills, and capability policy in the <span className="text-zinc-400">Agents</span> tab.
         </p>
@@ -1334,7 +1339,7 @@ export function SettingsView() {
 
       {/* Auto re-analyze */}
       <section>
-        <h3 className="text-sm font-semibold text-zinc-300 mb-1">Auto Re-analyze</h3>
+        <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-[0.1em] mb-1">Auto Re-analyze</h3>
         <p className="text-xs text-zinc-500 mb-4">Automatically re-run the architecture analyzer after a series of major task completions (schema, auth, API changes).</p>
         <div className="space-y-3">
           <Field label="Enabled">
@@ -1369,7 +1374,7 @@ export function SettingsView() {
 
       {/* Logging */}
       <section>
-        <h3 className="text-sm font-semibold text-zinc-300 mb-1">Logging</h3>
+        <h3 className="text-[11px] font-semibold text-zinc-400 uppercase tracking-[0.1em] mb-1">Logging</h3>
         <p className="text-xs text-zinc-500 mb-4">
           Configure structured logs and console mirroring. Token usage metrics are always recorded for session counters.
         </p>

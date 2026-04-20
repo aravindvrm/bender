@@ -118,23 +118,28 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
   function renderEmptyState() {
     return (
       <>
-        <div className="flex items-center justify-center h-full text-zinc-500">
-          <div className="text-center space-y-4">
-            <p className="text-base font-medium text-zinc-400">No task plan</p>
-            <p className="text-sm text-zinc-500">Describe a feature or change to generate tasks.</p>
-            <div className="flex items-center justify-center gap-2">
+        <div className="flex items-center justify-center min-h-[320px]">
+          <div className="text-center max-w-xs space-y-3">
+            <div className="mx-auto w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-3">
+              <Sparkles className="w-4 h-4 text-zinc-600" />
+            </div>
+            <p className="text-[13px] font-medium text-zinc-300">No tasks yet</p>
+            <p className="text-xs text-zinc-500 leading-relaxed">
+              Describe a feature or change and Bender will break it into a structured, agent-ready task plan.
+            </p>
+            <div className="flex items-center justify-center gap-2 pt-1">
               <button
                 onClick={onNewTask}
-                className="flex items-center gap-1.5 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-100 hover:bg-white border border-zinc-200 rounded-lg text-xs font-medium text-zinc-900 transition-colors"
               >
-                <Sparkles className="h-4 w-4 text-zinc-400" />
+                <Sparkles className="h-3.5 w-3.5" />
                 New Task
               </button>
               <button
                 onClick={() => setShowGitHubIssueImportDialog(true)}
-                className="flex items-center gap-1.5 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-200 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs font-medium text-zinc-300 transition-colors"
               >
-                <GitBranch className="h-4 w-4 text-zinc-400" />
+                <GitBranch className="h-3.5 w-3.5" />
                 Import GitHub Issues
               </button>
             </div>

@@ -820,10 +820,17 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
 
   if (!state.architecture) {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-500">
-        <div className="text-center">
-          <p className="text-lg">No architecture yet</p>
-          <p className="text-sm mt-1">Run <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">bender init</code></p>
+      <div className="flex items-center justify-center min-h-[320px]">
+        <div className="text-center max-w-xs space-y-3">
+          <div className="mx-auto w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-3">
+            <svg className="w-4 h-4 text-zinc-600" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />
+            </svg>
+          </div>
+          <p className="text-[13px] font-medium text-zinc-300">No architecture yet</p>
+          <p className="text-xs text-zinc-500 leading-relaxed">
+            Run <code className="bg-zinc-800/80 px-1.5 py-0.5 rounded text-zinc-300 text-[11px]">bender analyze</code> to generate the architecture map, stack overview, and ADRs.
+          </p>
         </div>
       </div>
     );

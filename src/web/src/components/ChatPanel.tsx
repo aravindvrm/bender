@@ -352,7 +352,9 @@ export function ChatPanel({ projectPath, clearToken = 0 }: ChatPanelProps) {
       <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
         {loadingMessages && <LoadingDots size={18} label="Loading chat…" textClassName="text-xs text-zinc-500" />}
         {!loadingMessages && visibleMessages.length === 0 && (
-          <p className="text-xs text-zinc-500 italic">No messages yet.</p>
+          <div className="flex flex-col items-center justify-center h-full min-h-[80px] gap-2 select-none">
+            <p className="text-[11px] text-zinc-600 italic">Ask anything about your project…</p>
+          </div>
         )}
         {!loadingMessages && visibleMessages.map((message) => {
           const text = messageToText(message);

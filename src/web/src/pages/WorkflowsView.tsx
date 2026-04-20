@@ -11,6 +11,7 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
+import { JsonEditor } from "../components/JsonEditor";
 
 type WorkflowStepType = "prompt" | "action" | "condition" | "extract" | "response";
 type WorkflowRunStatus = "queued" | "running" | "completed" | "failed";
@@ -758,35 +759,27 @@ export function WorkflowsView() {
                   </div>
                 </div>
 
-                <label className="space-y-1.5 block">
-                  <span className="text-[11px] text-zinc-500 uppercase tracking-[0.08em]">Steps (JSON)</span>
-                  <textarea
-                    rows={14}
-                    value={editor.stepsText}
-                    onChange={(e) => updateEditor("stepsText", e.target.value)}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-[12px] font-mono text-zinc-200 outline-none focus:border-zinc-300/70"
-                  />
-                </label>
+                <JsonEditor
+                  label="Steps (JSON)"
+                  rows={14}
+                  value={editor.stepsText}
+                  onChange={(v) => updateEditor("stepsText", v)}
+                  placeholder="[]"
+                />
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                  <label className="space-y-1.5 block">
-                    <span className="text-[11px] text-zinc-500 uppercase tracking-[0.08em]">Input Schema (JSON)</span>
-                    <textarea
-                      rows={6}
-                      value={editor.inputSchemaText}
-                      onChange={(e) => updateEditor("inputSchemaText", e.target.value)}
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-[12px] font-mono text-zinc-200 outline-none focus:border-zinc-300/70"
-                    />
-                  </label>
-                  <label className="space-y-1.5 block">
-                    <span className="text-[11px] text-zinc-500 uppercase tracking-[0.08em]">Output Schema (JSON)</span>
-                    <textarea
-                      rows={6}
-                      value={editor.outputSchemaText}
-                      onChange={(e) => updateEditor("outputSchemaText", e.target.value)}
-                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-[12px] font-mono text-zinc-200 outline-none focus:border-zinc-300/70"
-                    />
-                  </label>
+                  <JsonEditor
+                    label="Input Schema (JSON)"
+                    rows={6}
+                    value={editor.inputSchemaText}
+                    onChange={(v) => updateEditor("inputSchemaText", v)}
+                  />
+                  <JsonEditor
+                    label="Output Schema (JSON)"
+                    rows={6}
+                    value={editor.outputSchemaText}
+                    onChange={(v) => updateEditor("outputSchemaText", v)}
+                  />
                 </div>
               </>
             )}
@@ -807,12 +800,11 @@ export function WorkflowsView() {
               </button>
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-[0.08em] text-zinc-500 mb-1">Run Input (JSON)</div>
-              <textarea
+              <JsonEditor
+                label="Run Input (JSON)"
                 rows={5}
                 value={runInputText}
-                onChange={(e) => setRunInputText(e.target.value)}
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-[11px] font-mono text-zinc-200 outline-none focus:border-zinc-300/70"
+                onChange={setRunInputText}
               />
             </div>
           </div>

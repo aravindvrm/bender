@@ -256,11 +256,11 @@ export function OperationDrawer({
   const [activeTab, setActiveTab] = useState<"console" | "terminal" | "chat">("console");
   const [chatClearToken, setChatClearToken] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
-  const [drawerHeight, setDrawerHeight] = useState(288);
+  const [drawerHeight, setDrawerHeight] = useState(220);
   const [isResizing, setIsResizing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const resizeStartYRef = useRef(0);
-  const resizeStartHeightRef = useRef(288);
+  const resizeStartHeightRef = useRef(220);
   const isRunning = status === "running";
 
   const visibleLines = lines;
@@ -471,7 +471,9 @@ export function OperationDrawer({
         {!collapsed && activeTab === "console" && (
           <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-0.5">
             {visibleLines.length === 0 && (
-              <p className="text-zinc-600 italic">Starting…</p>
+              <p className="text-zinc-700 italic select-none">
+                {status === "idle" ? "Ready." : "Starting…"}
+              </p>
             )}
             {visibleLines.map((line, i) => (
               <OutputLineView
