@@ -34,6 +34,8 @@ export interface SkillPackageMeta {
 export interface SkillPackageRegistry {
   fetchedAt: number;
   packages: SkillPackageMeta[];
+  /** True when curated skills were served from stale cache due to a network failure. */
+  stale?: boolean;
 }
 
 export interface SkillPackageFetchOptions {
@@ -219,6 +221,7 @@ export async function fetchSkillPackages(options: SkillPackageFetchOptions = {})
   const local = await buildLocalPackages(options.projectRoot);
   return {
     fetchedAt: Date.now(),
+    stale: curated?.stale === true,
     packages: [...(curated?.skills ?? []).map(fromCuratedSkill), ...local]
       .sort((a, b) => a.name.localeCompare(b.name)),
   };

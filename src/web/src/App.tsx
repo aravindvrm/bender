@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useProjectState } from "./hooks/useApi";
 import { useOperation } from "./hooks/useOperation";
@@ -6,14 +6,17 @@ import { Sidebar, type View } from "./components/Sidebar";
 import { OperationDrawer, type InitModalSubmission, type TaskCreateSubmission } from "./components/OperationDrawer";
 import { LoadingDots } from "./components/LoadingDots";
 import { GitDiffSidebar } from "./components/GitDiffSidebar";
-import { PlanView } from "./pages/PlanView";
-import { ArchitectureView } from "./pages/ArchitectureView";
-import { BriefView } from "./pages/BriefView";
-import { GitView } from "./pages/ChangesView";
-import { SettingsView } from "./pages/SettingsView";
-import { AgentsView } from "./pages/AgentsView";
-import { EvalsView } from "./pages/EvalsView";
-import { WorkflowsView } from "./pages/WorkflowsView";
+
+// Lazy-load all page views so their heavy vendor deps (mermaid, katex, cytoscape)
+// are only fetched when the user first navigates to that view.
+const PlanView = lazy(() => import("./pages/PlanView").then((m) => ({ default: m.PlanView })));
+const ArchitectureView = lazy(() => import("./pages/ArchitectureView").then((m) => ({ default: m.ArchitectureView })));
+const BriefView = lazy(() => import("./pages/BriefView").then((m) => ({ default: m.BriefView })));
+const GitView = lazy(() => import("./pages/ChangesView").then((m) => ({ default: m.GitView })));
+const SettingsView = lazy(() => import("./pages/SettingsView").then((m) => ({ default: m.SettingsView })));
+const AgentsView = lazy(() => import("./pages/AgentsView").then((m) => ({ default: m.AgentsView })));
+const EvalsView = lazy(() => import("./pages/EvalsView").then((m) => ({ default: m.EvalsView })));
+const WorkflowsView = lazy(() => import("./pages/WorkflowsView").then((m) => ({ default: m.WorkflowsView })));
 
 interface AppendTaskResponse {
   ok?: boolean;
@@ -204,39 +207,45 @@ export function App() {
                   </div>
                 </div>
               ) : (
-                <div className="p-5">
-                  {activeView === "brief" && state && (
-                    <BriefView state={state} />
-                  )}
-                  {activeView === "evals" && state && (
-                    <EvalsView
-                      state={state}
-                      onNewTask={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
-                      runOperation={(url, body, options) => op.startOperation(url, body, options)}
-                    />
-                  )}
-                  {activeView === "plan" && state && (
-                    <PlanView
-                      state={state}
-                      onImplement={() => op.startOperation("/api/run/implement", {})}
-                      onNewTask={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
-                      onRunTask={(taskId) => op.startOperation("/api/run/implement", { taskId })}
-                      onTasksChanged={refresh}
-                    />
-                  )}
-                  {activeView === "workflows" && state && (
-                    <WorkflowsView />
-                  )}
-                  {activeView === "architecture" && state && (
-                    <ArchitectureView
-                      state={state}
-                      runOperation={(url, body, options) => op.startOperation(url, body, options)}
-                    />
-                  )}
-                  {activeView === "git" && state && <GitView state={state} onStateChange={refresh} />}
-                  {activeView === "agents" && <AgentsView />}
-                  {activeView === "settings" && <SettingsView />}
-                </div>
+                <Suspense fallback={
+                  <div className="flex items-center justify-center h-full min-h-[200px]">
+                    <LoadingDots size={20} label="Loading…" textClassName="text-xs text-zinc-600" />
+                  </div>
+                }>
+                  <div className="p-5">
+                    {activeView === "brief" && state && (
+                      <BriefView state={state} />
+                    )}
+                    {activeView === "evals" && state && (
+                      <EvalsView
+                        state={state}
+                        onNewTask={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
+                        runOperation={(url, body, options) => op.startOperation(url, body, options)}
+                      />
+                    )}
+                    {activeView === "plan" && state && (
+                      <PlanView
+                        state={state}
+                        onImplement={() => op.startOperation("/api/run/implement", {})}
+                        onNewTask={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
+                        onRunTask={(taskId) => op.startOperation("/api/run/implement", { taskId })}
+                        onTasksChanged={refresh}
+                      />
+                    )}
+                    {activeView === "workflows" && state && (
+                      <WorkflowsView />
+                    )}
+                    {activeView === "architecture" && state && (
+                      <ArchitectureView
+                        state={state}
+                        runOperation={(url, body, options) => op.startOperation(url, body, options)}
+                      />
+                    )}
+                    {activeView === "git" && state && <GitView state={state} onStateChange={refresh} />}
+                    {activeView === "agents" && <AgentsView />}
+                    {activeView === "settings" && <SettingsView />}
+                  </div>
+                </Suspense>
               )}
             </div>
 

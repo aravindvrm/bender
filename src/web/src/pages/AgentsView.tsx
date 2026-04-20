@@ -162,6 +162,7 @@ export function AgentsView() {
   const [selectedByRole, setSelectedByRole] = useState<Partial<Record<BaseRole, string>>>({});
   const [promptSnippets, setPromptSnippets] = useState<Partial<Record<BaseRole, string>>>({});
   const [skillsRefreshing, setSkillsRefreshing] = useState(false);
+  const [skillsStale, setSkillsStale] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [savingRole, setSavingRole] = useState<BaseRole | null>(null);
@@ -191,15 +192,16 @@ export function AgentsView() {
 
   const [customEdits, setCustomEdits] = useState<Record<string, AgentConfig>>({});
 
-  async function loadSkillsCatalog(options?: { forceCuratedRefresh?: boolean }): Promise<{ skills: SkillMeta[]; summary: SkillLibrarySummary | null }> {
+  async function loadSkillsCatalog(options?: { forceCuratedRefresh?: boolean }): Promise<{ skills: SkillMeta[]; summary: SkillLibrarySummary | null; stale: boolean }> {
     const forceCuratedRefresh = !!options?.forceCuratedRefresh;
     try {
       const catalogRes = await fetch("/api/skills/catalog");
-      const catalogBody = await catalogRes.json() as { skills?: SkillMeta[]; summary?: SkillLibrarySummary; error?: string };
+      const catalogBody = await catalogRes.json() as { skills?: SkillMeta[]; summary?: SkillLibrarySummary; stale?: boolean; error?: string };
       if (catalogRes.ok) {
         return {
           skills: Array.isArray(catalogBody.skills) ? catalogBody.skills : [],
           summary: catalogBody.summary ?? null,
+          stale: catalogBody.stale === true,
         };
       }
     } catch {
@@ -223,7 +225,7 @@ export function AgentsView() {
         // Keep initial result on refresh failure.
       }
     }
-    return { skills: resolvedSkills, summary: null };
+    return { skills: resolvedSkills, summary: null, stale: false };
   }
 
   async function loadData() {
@@ -253,6 +255,7 @@ export function AgentsView() {
       );
       setSkills(skillsCatalog.skills);
       setSkillLibrarySummary(skillsCatalog.summary);
+      setSkillsStale(skillsCatalog.stale);
       setSelectedByRole(selectionsBody.selectedByRole ?? {});
       setPromptSnippets(snippetsBody.snippets ?? {});
 
@@ -530,6 +533,7 @@ export function AgentsView() {
       const catalog = await loadSkillsCatalog();
       setSkills(catalog.skills);
       setSkillLibrarySummary(catalog.summary);
+      setSkillsStale(catalog.stale);
       setNotice(`Created skill package: ${body.name ?? trimmedName}`);
     } catch (err) {
       setError((err as Error).message);
@@ -564,6 +568,7 @@ export function AgentsView() {
       const catalog = await loadSkillsCatalog();
       setSkills(catalog.skills);
       setSkillLibrarySummary(catalog.summary);
+      setSkillsStale(catalog.stale);
       setNotice(`Imported skill package: ${body.name ?? "skill"}`);
     } catch (err) {
       setError((err as Error).message);
@@ -581,6 +586,7 @@ export function AgentsView() {
       const catalog = await loadSkillsCatalog({ forceCuratedRefresh: true });
       setSkills(catalog.skills);
       setSkillLibrarySummary(catalog.summary);
+      setSkillsStale(catalog.stale);
       setNotice("Skills refreshed.");
     } catch (err) {
       setError((err as Error).message);
@@ -653,7 +659,11 @@ export function AgentsView() {
 
       <AccordionSection
         title="Skill Library"
-        description="Curated defaults stay lean; extend the user/project library for custom agents."
+        description={
+          skillsStale
+            ? "Showing cached skills · offline"
+            : "Curated defaults stay lean; extend the user/project library for custom agents."
+        }
         count={skills.length}
         open={openSections["skill-library"]}
         onToggle={() => toggleSection("skill-library")}
