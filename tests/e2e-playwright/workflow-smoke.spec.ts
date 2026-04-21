@@ -2,9 +2,24 @@ import { expect, test } from "@playwright/test";
 
 /**
  * Workflow smoke tests.
- * Covers: navigate to Workflows, verify list panel renders, create a new
- * workflow draft, fill in a name, save it, and confirm it appears in the list.
+ *
+ * IMPORTANT: The server auto-seeds three built-in workflows on every project
+ * (issue-extract-candidates, task-to-implement, review-current-changes) via
+ * ensureBuiltinWorkflows(). Tests MUST assume these are present — do not
+ * assert on "No workflows found." in a freshly initialised project.
+ *
+ * We also install a dialog auto-accept handler because the "New" and "Delete"
+ * buttons issue window.confirm() when there are unsaved edits; Playwright
+ * defaults to dismissing dialogs, which would make tests return early.
  */
+
+// One of the auto-seeded built-in workflows (stable across CI runs).
+const BUILTIN_WORKFLOW_NAME = "Task -> Implement";
+
+test.beforeEach(async ({ page }) => {
+  // Accept any confirm() dialogs (e.g. "Discard unsaved workflow edits?").
+  page.on("dialog", (dialog) => { void dialog.accept(); });
+});
 
 test("workflows view loads and shows list panel", async ({ page }) => {
   await page.goto("/");
@@ -12,15 +27,14 @@ test("workflows view loads and shows list panel", async ({ page }) => {
   await page.getByRole("button", { name: "Workflows" }).click();
   await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
 
-  // The left panel with the search box must be present
+  // The left panel with the search box must be present.
   const searchBox = page.getByPlaceholder("Search workflows...");
   await expect(searchBox).toBeVisible({ timeout: 8000 });
 
-  // The list either shows existing workflows or the empty state
-  await expect.poll(async () => {
-    const text = await page.locator("body").innerText();
-    return text.includes("No workflows found.") || text.includes("workflow-");
-  }, { timeout: 8000, intervals: [200, 400, 800] }).toBeTruthy();
+  // Wait for the list to finish loading and at least one built-in workflow
+  // (auto-seeded by the server) to appear. This is our guaranteed signal that
+  // the list panel has populated correctly.
+  await expect(page.getByText(BUILTIN_WORKFLOW_NAME)).toBeVisible({ timeout: 8000 });
 });
 
 test("create new workflow draft and save it", async ({ page }) => {
@@ -28,34 +42,40 @@ test("create new workflow draft and save it", async ({ page }) => {
 
   await page.getByRole("button", { name: "Workflows" }).click();
 
-  // Wait for the editor panel header
+  // Wait for the editor panel header.
   await expect(page.getByText("Workflow Editor")).toBeVisible({ timeout: 8000 });
 
-  // Click "New" to create a draft
-  await page.getByRole("button", { name: "New" }).click();
+  // Also wait for the list to populate so subsequent "appears in list" check
+  // has a deterministic baseline.
+  await expect(page.getByText(BUILTIN_WORKFLOW_NAME)).toBeVisible({ timeout: 8000 });
 
-  // The editor should now show a draft with "New Workflow" as the default name
+  // Click "New" to create a draft. The confirm() dialog (if any) is auto-
+  // accepted by the beforeEach handler. Use exact match to avoid colliding
+  // with the sidebar "New Project" button.
+  await page.getByRole("button", { name: "New", exact: true }).click();
+
+  // The editor should now show the draft's Name and ID fields.
   const nameInput = page.locator('label:has-text("Name") input');
   await expect(nameInput).toBeVisible({ timeout: 4000 });
 
-  // Set a unique name for the test workflow
   const wfName = `pw-smoke-${Date.now()}`;
   await nameInput.fill(wfName);
 
-  // Also give it a unique ID to avoid collisions on repeated runs
   const idInput = page.locator('label:has-text("ID") input');
   await expect(idInput).toBeVisible();
   const wfId = `pw-smoke-id-${Date.now()}`;
   await idInput.fill(wfId);
 
-  // Save the workflow
+  // Save the workflow.
   await page.getByRole("button", { name: "Save" }).click();
 
-  // Success message should appear
+  // Success message should appear.
   await expect(page.getByText(`Workflow '${wfName}' saved.`)).toBeVisible({ timeout: 8000 });
 
-  // The workflow should now appear in the left list panel
-  await expect(page.getByText(wfName)).toBeVisible({ timeout: 4000 });
+  // The workflow should now appear in the left list panel (aside). Scope the
+  // lookup there so the success banner in the main column does not cause a
+  // strict-mode match-both collision.
+  await expect(page.locator("aside").getByText(wfName)).toBeVisible({ timeout: 4000 });
 });
 
 test("workflow search filters the list", async ({ page }) => {
@@ -66,18 +86,20 @@ test("workflow search filters the list", async ({ page }) => {
   const searchBox = page.getByPlaceholder("Search workflows...");
   await expect(searchBox).toBeVisible({ timeout: 8000 });
 
-  // Type a query that is unlikely to match anything
-  await searchBox.fill("zzz-no-match-xyz");
+  // Wait for the auto-seeded built-in to appear — our baseline signal that
+  // the list has finished loading.
+  const builtin = page.getByText(BUILTIN_WORKFLOW_NAME);
+  await expect(builtin).toBeVisible({ timeout: 8000 });
 
-  await expect.poll(async () => {
-    const text = await page.locator("body").innerText();
-    return text.includes("No workflows found.");
-  }, { timeout: 4000, intervals: [150, 300] }).toBeTruthy();
+  // Type a query that cannot match anything.
+  await searchBox.fill("zzz-no-match-xyz-unique");
 
-  // Clear and verify list re-populates (or stays at "No workflows found." if DB is empty)
+  // "No workflows found." is the only matcher that appears for non-empty
+  // server state + no-match search.
+  await expect(page.getByText("No workflows found.")).toBeVisible({ timeout: 4000 });
+  await expect(builtin).not.toBeVisible();
+
+  // Clear the search — built-in should re-appear.
   await searchBox.fill("");
-  await expect.poll(async () => {
-    const text = await page.locator("body").innerText();
-    return text.includes("No workflows found.") || text.includes("workflow-") || text.includes("pw-smoke");
-  }, { timeout: 4000, intervals: [150, 300] }).toBeTruthy();
+  await expect(builtin).toBeVisible({ timeout: 4000 });
 });
