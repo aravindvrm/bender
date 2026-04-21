@@ -32,7 +32,8 @@ describe("chat bender tools", () => {
       tasks: [],
     });
 
-    const tools = createBenderChatTools(projectRoot) as Record<string, { execute?: (input: unknown) => Promise<unknown> }>;
+    // createBenderChatTools is now async — must await
+    const tools = await createBenderChatTools(projectRoot) as Record<string, { execute?: (input: unknown) => Promise<unknown> }>;
     expect(typeof tools.bender_run_analyze?.execute).toBe("function");
 
     const listBefore = await tools.bender_list_tasks.execute?.({});
@@ -67,5 +68,88 @@ describe("chat bender tools", () => {
 
     const listAfterDelete = await tools.bender_list_tasks.execute?.({}) as { count?: number };
     expect(listAfterDelete.count).toBe(0);
+  });
+
+  it("rejects an unknown implementerAgentId on bender_add_task", async () => {
+    const projectRoot = await makeProjectRoot();
+    const state = new StateManager(projectRoot);
+    await state.init();
+    await state.writeCurrentTaskPlan({
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      tasks: [],
+    });
+
+    const tools = await createBenderChatTools(projectRoot) as Record<string, { execute?: (input: unknown) => Promise<unknown> }>;
+
+    // Simulates the LLM hallucinating an agent that doesn't exist
+    const result = await tools.bender_add_task.execute?.({
+      title: "ML model training pipeline",
+      implementerAgentId: "data-scientist",
+    }) as { ok: boolean; error?: string; taskId?: string };
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/Unknown implementerAgentId/);
+    expect(result.taskId).toBeUndefined();
+
+    // Task must NOT have been persisted with the bad agent ID
+    const listResult = await tools.bender_list_tasks.execute?.({}) as { count: number };
+    expect(listResult.count).toBe(0);
+  });
+
+  it("rejects an unknown implementerAgentId on bender_update_task", async () => {
+    const projectRoot = await makeProjectRoot();
+    const state = new StateManager(projectRoot);
+    await state.init();
+    await state.writeCurrentTaskPlan({
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      tasks: [],
+    });
+
+    const tools = await createBenderChatTools(projectRoot) as Record<string, { execute?: (input: unknown) => Promise<unknown> }>;
+
+    // Create a valid task first
+    await tools.bender_add_task.execute?.({ title: "Real task" });
+
+    // Attempt to reassign to a hallucinated agent
+    const result = await tools.bender_update_task.execute?.({
+      taskId: "task-1",
+      implementerAgentId: "fictional-ml-expert",
+    }) as { ok: boolean; error?: string };
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/Unknown implementerAgentId/);
+  });
+
+  it("allows valid builtin agent IDs on bender_add_task", async () => {
+    const projectRoot = await makeProjectRoot();
+    const state = new StateManager(projectRoot);
+    await state.init();
+    await state.writeCurrentTaskPlan({
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      tasks: [],
+    });
+
+    const tools = await createBenderChatTools(projectRoot) as Record<string, { execute?: (input: unknown) => Promise<unknown> }>;
+
+    // "default-implementer" is always present as a builtin agent
+    const result = await tools.bender_add_task.execute?.({
+      title: "Implement feature X",
+      implementerAgentId: "default-implementer",
+    }) as { ok: boolean; taskId?: string };
+
+    expect(result.ok).toBe(true);
+    expect(result.taskId).toBe("task-1");
+  });
+
+  it("tool descriptions include available agent IDs", async () => {
+    const projectRoot = await makeProjectRoot();
+    const tools = await createBenderChatTools(projectRoot) as Record<string, { description?: string }>;
+
+    // Both task tools should mention agent IDs so the LLM has them in context
+    expect(tools.bender_add_task.description).toMatch(/default-implementer/);
+    expect(tools.bender_update_task.description).toMatch(/default-implementer/);
   });
 });

@@ -19,6 +19,7 @@ import { ChatStore, type ChatThread, type LlmProvider } from "../../state/chat.j
 import { StateManager, formatContextForPrompt } from "../../state/manager.js";
 import { normalizeTaskId } from "../../state/task-plan.js";
 import { appendTask, deleteTask, patchTask } from "./tasks.js";
+import { getAllAgents } from "../../state/agents.js";
 import type { SpinnerAdapter, UIAdapter } from "../adapter.js";
 import { runAnalyzeOperation, runAuditOperation, runImplementOperation } from "./run-operations.js";
 
@@ -30,6 +31,7 @@ const CHAT_SYSTEM_PROMPT = [
   "You are Bender Operator, the fixed project assistant for this repository.",
   "You can execute built-in Bender actions via tools: list/add/update/delete tasks, run a task, run audits, and run project analysis.",
   "When the user asks to perform one of those actions, call the appropriate Bender tool instead of only describing what to do.",
+  "AGENT IDs: When specifying an implementerAgentId, you MUST use an exact agent ID from the list shown in the tool description. Never invent, guess, or paraphrase agent names. If unsure which agent fits, omit implementerAgentId entirely rather than fabricating one.",
   "Use external MCP tools only when needed for repository/external context, not for core Bender task/audit actions.",
   "After each tool call, summarize what changed and provide the resulting IDs/status clearly.",
   "If uncertain, state assumptions explicitly instead of hallucinating facts.",
@@ -236,10 +238,29 @@ async function readCurrentTasksSummary(projectRoot: string): Promise<Array<{
   }));
 }
 
-export function createBenderChatTools(
+export async function createBenderChatTools(
   projectRoot: string,
   signal?: AbortSignal,
-): ToolSet {
+): Promise<ToolSet> {
+  // Fetch the real agent list once so descriptions and validation use live data.
+  const agents = await getAllAgents().catch(() => []);
+  const agentLines = agents.map((a) => `  • ${a.id}  (${a.name}, role: ${a.baseRole})`).join("\n");
+  const agentHint = agents.length > 0
+    ? `Available agents — use the exact id value:\n${agentLines}\nOmit implementerAgentId to use the project default.`
+    : "No agents configured — omit implementerAgentId.";
+
+  function validateAgentId(id: string | undefined): { ok: false; error: string } | null {
+    const trimmed = id?.trim();
+    if (!trimmed) return null; // omitted → always valid
+    const known = agents.find((a) => a.id === trimmed);
+    if (known) return null;
+    const validIds = agents.map((a) => a.id).join(", ");
+    return {
+      ok: false,
+      error: `Unknown implementerAgentId "${trimmed}". Valid ids are: ${validIds || "none"}. Omit the field to use the project default.`,
+    };
+  }
+
   return {
     bender_list_tasks: tool({
       description: "List current task-plan tasks with IDs, titles, status, and implementer agent assignment.",
@@ -257,7 +278,7 @@ export function createBenderChatTools(
     }),
 
     bender_add_task: tool({
-      description: "Append a new task into the current task plan.",
+      description: `Append a new task into the current task plan.\n${agentHint}`,
       inputSchema: z.object({
         title: z.string().min(1),
         description: z.string().optional(),
@@ -266,7 +287,9 @@ export function createBenderChatTools(
       }),
       execute: async ({ title, description, acceptanceCriteria, implementerAgentId }, context?: { abortSignal?: AbortSignal }) => {
         throwIfAborted(context?.abortSignal ?? signal);
-        const result = await appendTask(projectRoot, { title, description, acceptanceCriteria, implementerAgentId });
+        const agentErr = validateAgentId(implementerAgentId);
+        if (agentErr) return agentErr;
+        const result = await appendTask(projectRoot, { title, description, acceptanceCriteria, implementerAgentId: implementerAgentId?.trim() || undefined });
         const tasks = await readCurrentTasksSummary(projectRoot);
         throwIfAborted(context?.abortSignal ?? signal);
         const created = tasks.find((task) => task.id === result.taskId) ?? null;
@@ -279,7 +302,7 @@ export function createBenderChatTools(
     }),
 
     bender_update_task: tool({
-      description: "Update an existing task's title/description/status/acceptance criteria/implementer assignment.",
+      description: `Update an existing task's title/description/status/acceptance criteria/implementer assignment.\n${agentHint}`,
       inputSchema: z.object({
         taskId: z.string().min(1),
         title: z.string().optional(),
@@ -291,6 +314,8 @@ export function createBenderChatTools(
       }),
       execute: async ({ taskId, title, description, acceptanceCriteria, criteria, status, implementerAgentId }, context?: { abortSignal?: AbortSignal }) => {
         throwIfAborted(context?.abortSignal ?? signal);
+        const agentErr = validateAgentId(implementerAgentId);
+        if (agentErr) return agentErr;
         const normalizedTaskId = parseTaskId(taskId);
         await patchTask(projectRoot, normalizedTaskId, {
           title,
@@ -298,7 +323,7 @@ export function createBenderChatTools(
           acceptanceCriteria,
           criteria,
           status,
-          implementerAgentId,
+          implementerAgentId: implementerAgentId?.trim() || undefined,
         });
         const tasks = await readCurrentTasksSummary(projectRoot);
         throwIfAborted(context?.abortSignal ?? signal);
@@ -1042,7 +1067,7 @@ export async function streamChatThreadResponse(
     });
     throw err;
   }
-  const benderTools = createBenderChatTools(projectRoot, signal);
+  const benderTools = await createBenderChatTools(projectRoot, signal);
   const model = createModelForSelection(config, {
     provider: activeThread.provider,
     model: activeThread.model,
