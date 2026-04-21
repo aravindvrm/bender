@@ -70,8 +70,10 @@ export function App() {
   const hasProject = !!state?.projectRoot;
   const isInitialized = state?.initialized ?? false;
   const allowsNoProject = activeView === "settings" || activeView === "agents";
+  // Workflows self-initialise their SQLite store on first access; no full bender init needed.
+  const allowsUninitialized = activeView === "workflows";
   const needsProject = !hasProject && !allowsNoProject;
-  const needsInit = hasProject && !isInitialized && !allowsNoProject;
+  const needsInit = hasProject && !isInitialized && !allowsNoProject && !allowsUninitialized;
 
   function handleGlobalAction(action: "new-project" | "analyze") {
     if (action === "new-project") {
@@ -232,7 +234,7 @@ export function App() {
                         onTasksChanged={refresh}
                       />
                     )}
-                    {activeView === "workflows" && state && (
+                    {activeView === "workflows" && (
                       <WorkflowsView />
                     )}
                     {activeView === "architecture" && state && (

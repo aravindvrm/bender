@@ -110,7 +110,17 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       .then((r) => r.json())
       .then((data) => {
         const all = (data.agents ?? []) as AgentOption[];
-        setAgents(all.filter((agent) => agent.baseRole === "implementer"));
+        setAgents(
+          [...all].sort((a, b) => {
+            if (a.isBuiltin !== b.isBuiltin) return a.isBuiltin ? -1 : 1;
+            if (a.baseRole !== b.baseRole) return a.baseRole.localeCompare(b.baseRole);
+            if (a.modelTier !== b.modelTier) {
+              const tierOrder = { fast: 0, default: 1, strong: 2 } as const;
+              return tierOrder[a.modelTier] - tierOrder[b.modelTier];
+            }
+            return a.name.localeCompare(b.name);
+          }),
+        );
       })
       .catch(() => {});
   }, []);
@@ -676,10 +686,10 @@ function TaskRow({
                     disabled={assigning}
                     className="select-flat pl-2 pr-7 py-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <option value="">Default Implementer</option>
+                    <option value="">No specific agent</option>
                     {agents.map((agent) => (
                       <option key={agent.id} value={agent.id}>
-                        {agent.name} ({agent.modelTier})
+                        {agent.name} ({agent.baseRole}{agent.modelTier !== "default" ? ` · ${agent.modelTier}` : ""})
                       </option>
                     ))}
                   </select>

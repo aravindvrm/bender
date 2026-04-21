@@ -19,10 +19,11 @@ interface AgentOption {
 function formatAgentOptionLabel(agent: AgentOption, roleOption: BaseRole): string {
   const builtinSuffix = agent.isBuiltin ? " [builtin]" : "";
   const isRoleDefaultBuiltin = agent.id === `default-${roleOption}`;
+  const roleSuffix = ` · ${agent.baseRole}`;
   if (isRoleDefaultBuiltin || agent.modelTier === "default") {
-    return `${agent.name}${builtinSuffix}`;
+    return `${agent.name}${roleSuffix}${builtinSuffix}`;
   }
-  return `${agent.name} (${agent.modelTier})${builtinSuffix}`;
+  return `${agent.name} (${agent.modelTier})${roleSuffix}${builtinSuffix}`;
 }
 
 interface PlanTaskModalProps {
@@ -46,10 +47,12 @@ export function PlanTaskModal({ initialDescription, onSubmit, onCancel }: PlanTa
       .catch(() => setAgents([]));
   }, []);
 
-  const implementerAgents = agents
-    .filter((agent) => agent.baseRole === "implementer")
+  const selectableAgents = [...agents]
     .sort((a, b) => {
       if (a.isBuiltin !== b.isBuiltin) return a.isBuiltin ? -1 : 1;
+      if (a.baseRole !== b.baseRole) {
+        return a.baseRole.localeCompare(b.baseRole);
+      }
       if (a.modelTier !== b.modelTier) {
         const tierOrder = { fast: 0, default: 1, strong: 2 } as const;
         return tierOrder[a.modelTier] - tierOrder[b.modelTier];
@@ -114,17 +117,17 @@ export function PlanTaskModal({ initialDescription, onSubmit, onCancel }: PlanTa
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs text-zinc-500 uppercase tracking-wide">Implementer Agent (optional)</label>
+            <label className="text-xs text-zinc-500 uppercase tracking-wide">Agent Preference (optional)</label>
             <div className="relative">
               <select
                 value={agentId}
                 onChange={(e) => setAgentId(e.target.value)}
                 className="select-flat w-full pl-3 pr-8 py-2 text-sm"
               >
-                <option value="">Use project default implementer</option>
-                {implementerAgents.map((agent) => (
+                <option value="">No specific agent</option>
+                {selectableAgents.map((agent) => (
                   <option key={agent.id} value={agent.id}>
-                    {formatAgentOptionLabel(agent, "implementer")}
+                    {formatAgentOptionLabel(agent, agent.baseRole)}
                   </option>
                 ))}
               </select>

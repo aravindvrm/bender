@@ -95,9 +95,6 @@ export async function setTaskAgent(
     if (!selected) {
       throw new TasksServiceError(400, `Unknown agent: ${normalizedAgentId}`);
     }
-    if (selected.baseRole !== "implementer") {
-      throw new TasksServiceError(400, `Agent ${normalizedAgentId} is not an implementer agent`);
-    }
   }
 
   const state = new StateManager(projectRoot);
