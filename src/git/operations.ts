@@ -96,6 +96,10 @@ export class GitOperations {
     return this.git.show([ref, "--format=", "--patch"]);
   }
 
+  async getCommitNumstat(ref: string): Promise<string> {
+    return this.git.show([ref, "--format=", "--numstat"]);
+  }
+
   async getDiffStat(): Promise<string> {
     return this.git.diff(["--stat"]);
   }

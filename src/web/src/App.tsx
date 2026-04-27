@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useProjectState } from "./hooks/useApi";
 import { useOperation } from "./hooks/useOperation";
@@ -7,12 +7,16 @@ import { OperationDrawer, type InitModalSubmission, type TaskCreateSubmission } 
 import { LoadingDots } from "./components/LoadingDots";
 import { GitDiffSidebar } from "./components/GitDiffSidebar";
 
+interface GitDiffSummaryResponse {
+  additions?: number;
+  deletions?: number;
+}
+
 // Lazy-load all page views so their heavy vendor deps (mermaid, katex, cytoscape)
 // are only fetched when the user first navigates to that view.
 const PlanView = lazy(() => import("./pages/PlanView").then((m) => ({ default: m.PlanView })));
 const ArchitectureView = lazy(() => import("./pages/ArchitectureView").then((m) => ({ default: m.ArchitectureView })));
 const BriefView = lazy(() => import("./pages/BriefView").then((m) => ({ default: m.BriefView })));
-const GitView = lazy(() => import("./pages/ChangesView").then((m) => ({ default: m.GitView })));
 const SettingsView = lazy(() => import("./pages/SettingsView").then((m) => ({ default: m.SettingsView })));
 const AgentsView = lazy(() => import("./pages/AgentsView").then((m) => ({ default: m.AgentsView })));
 const EvalsView = lazy(() => import("./pages/EvalsView").then((m) => ({ default: m.EvalsView })));
@@ -30,18 +34,50 @@ const VIEW_LABELS: Record<View, string> = {
   architecture: "Architecture",
   brief: "Overview",
   evals: "Evals",
-  git: "Git",
   agents: "Agents",
   settings: "Settings",
 };
 
 export function App() {
   const [activeView, setActiveView] = useState<View>("brief");
-  const [diffSidebarOpen, setDiffSidebarOpen] = useState(false);
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("bender.ui.leftSidebarCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [diffSummary, setDiffSummary] = useState<{ additions: number; deletions: number } | null>(null);
   const { state, loading, error, refresh } = useProjectState();
   const op = useOperation(refresh);
   const operationLabel = op.lines.find((line) => line.kind === "header")?.text ?? null;
   const projectTitle = state?.projectRoot?.split(/[\\/]/).filter(Boolean).pop() ?? "No Project";
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("bender.ui.leftSidebarCollapsed", leftSidebarCollapsed ? "1" : "0");
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [leftSidebarCollapsed]);
+
+  // Fetch git diff summary (additions/deletions for the last commit) to show in top bar
+  useEffect(() => {
+    if (!state?.projectRoot) { setDiffSummary(null); return; }
+    let cancelled = false;
+    fetch("/api/git/diff-summary?commits=1")
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({})) as GitDiffSummaryResponse;
+        if (!res.ok || cancelled) return;
+        setDiffSummary({
+          additions: Number.isFinite(data.additions) ? Number(data.additions) : 0,
+          deletions: Number.isFinite(data.deletions) ? Number(data.deletions) : 0,
+        });
+      })
+      .catch(() => { if (!cancelled) setDiffSummary(null); });
+    return () => { cancelled = true; };
+  }, [state?.projectRoot, op.status]);
 
   if (loading && !state) {
     return (
@@ -74,7 +110,6 @@ export function App() {
   const allowsUninitialized = activeView === "workflows";
   const needsProject = !hasProject && !allowsNoProject;
   const needsInit = hasProject && !isInitialized && !allowsNoProject && !allowsUninitialized;
-
   function handleGlobalAction(action: "new-project" | "analyze") {
     if (action === "new-project") {
       op.setModal({ kind: "init" });
@@ -85,7 +120,7 @@ export function App() {
   }
 
   function handleSubmitInit(submission: InitModalSubmission) {
-    op.startOperation("/api/run/init", submission);
+    op.startOperation("/api/run/init", submission as unknown as Record<string, unknown>);
   }
 
   async function handleCreateTask(submission: TaskCreateSubmission) {
@@ -113,6 +148,8 @@ export function App() {
         state={state}
         onProjectChange={refresh}
         onGlobalAction={handleGlobalAction}
+        collapsed={leftSidebarCollapsed}
+        onToggleCollapsed={() => setLeftSidebarCollapsed((v) => !v)}
         operationStatus={op.status}
         operationLabel={operationLabel}
       />
@@ -129,7 +166,6 @@ export function App() {
             {state?.git?.recentCommits[0] && (() => {
               const commit = state.git.recentCommits[0];
               const shortHash = commit.hash.slice(0, 7);
-              // Trim message to 52 chars so it doesn't clip mid-word awkwardly
               const msg = commit.message.length > 52
                 ? commit.message.slice(0, 49).replace(/\s+\S*$/, "") + "…"
                 : commit.message;
@@ -146,16 +182,23 @@ export function App() {
             })()}
             {hasProject && (
               <button
-                onClick={() => setDiffSidebarOpen((v) => !v)}
-                title={diffSidebarOpen ? "Close diff panel" : "Open diff panel"}
+                onClick={() => setReviewOpen((v) => !v)}
+                title={reviewOpen ? "Close review panel" : "Open review panel"}
                 className={`flex items-center gap-1.5 text-[11px] px-2 py-1 rounded transition-colors ${
-                  diffSidebarOpen
+                  reviewOpen
                     ? "text-zinc-300 bg-zinc-800"
-                    : "text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800/50"
+                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
                 }`}
               >
-                {diffSidebarOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
-                <span className="hidden xl:inline">Diff</span>
+                {reviewOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
+                {diffSummary ? (
+                  <span className="font-mono flex items-center gap-1">
+                    <span className="text-emerald-400">+{diffSummary.additions.toLocaleString()}</span>
+                    <span className="text-red-400">-{diffSummary.deletions.toLocaleString()}</span>
+                  </span>
+                ) : (
+                  <span className="hidden xl:inline">Review</span>
+                )}
               </button>
             )}
           </div>
@@ -168,7 +211,6 @@ export function App() {
               {needsProject ? (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-center max-w-xs space-y-3">
-                    {/* Subtle grid pattern */}
                     <div className="mx-auto w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-4">
                       <svg className="w-5 h-5 text-zinc-600" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v8.25A2.25 2.25 0 0 0 4.5 16.5h10.5a2.25 2.25 0 0 0 2.25-2.25v-5.25" />
@@ -243,7 +285,6 @@ export function App() {
                         runOperation={(url, body, options) => op.startOperation(url, body, options)}
                       />
                     )}
-                    {activeView === "git" && state && <GitView state={state} onStateChange={refresh} />}
                     {activeView === "agents" && <AgentsView />}
                     {activeView === "settings" && <SettingsView />}
                   </div>
@@ -268,14 +309,18 @@ export function App() {
               onAbort={op.abort}
               onSubmitInit={handleSubmitInit}
               onCreateTask={handleCreateTask}
+              onRunOperation={(url, body) => op.startOperation(url, body ?? {})}
             />
           </section>
 
-          <GitDiffSidebar
-            open={diffSidebarOpen}
-            projectPath={state?.projectRoot ?? null}
-            operationStatus={op.status}
-          />
+          {hasProject && (
+            <GitDiffSidebar
+              open={reviewOpen}
+              projectPath={state?.projectRoot ?? null}
+              operationStatus={op.status}
+              onClose={() => setReviewOpen(false)}
+            />
+          )}
         </div>
       </main>
     </div>

@@ -726,7 +726,7 @@ function TaskRow({
                         setSavingGitHubLink(false);
                       }
                     }}
-                    className="px-2 py-1 text-xs border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                    className="px-2 py-1 text-xs border border-zinc-700 rounded-md text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
                   >
                     {savingGitHubLink ? "Saving..." : "Save Link"}
                   </button>
@@ -742,7 +742,7 @@ function TaskRow({
                         setCreatingIssue(false);
                       }
                     }}
-                    className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                    className="px-2 py-1 border border-zinc-700 rounded-md text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
                   >
                     {creatingIssue ? "Creating issue..." : "Create Linked Issue"}
                   </button>
@@ -756,7 +756,7 @@ function TaskRow({
                         setCreatingBranch(false);
                       }
                     }}
-                    className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                    className="px-2 py-1 border border-zinc-700 rounded-md text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
                   >
                     {creatingBranch ? "Switching..." : "Create/Switch Branch"}
                   </button>
@@ -770,7 +770,7 @@ function TaskRow({
                         setCreatingPR(false);
                       }
                     }}
-                    className="px-2 py-1 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                    className="px-2 py-1 border border-zinc-700 rounded-md text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
                   >
                     {creatingPR ? "Opening PR..." : "Open PR"}
                   </button>
@@ -802,14 +802,14 @@ function TaskRow({
                   <>
                     <button
                       onClick={() => setEditing(true)}
-                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 rounded-md text-zinc-300 hover:bg-zinc-800"
                     >
                       <Pencil className="h-3 w-3" />
                       Edit
                     </button>
                     <button
                       onClick={onDelete}
-                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-red-900/60 text-red-300 hover:bg-red-950/30"
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-red-900/60 rounded-md text-red-300 hover:bg-red-950/30"
                     >
                       <Trash2 className="h-3 w-3" />
                       Delete
@@ -834,7 +834,7 @@ function TaskRow({
                           setSaving(false);
                         }
                       }}
-                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 rounded-md text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
                     >
                       <Save className="h-3 w-3" />
                       Save
@@ -848,7 +848,7 @@ function TaskRow({
                         setDraftCriteria(stringifyCriteria(task.acceptanceCriteria));
                         setDraftStatus(task.status);
                       }}
-                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-zinc-700 rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
                     >
                       <X className="h-3 w-3" />
                       Cancel
@@ -888,14 +888,14 @@ function DeleteTaskDialog({
           <button
             onClick={onCancel}
             disabled={deleting}
-            className="px-3 py-1.5 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+            className="px-3 py-1.5 text-xs border border-zinc-700 rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
             disabled={deleting}
-            className="px-3 py-1.5 text-xs border border-red-900/60 text-red-200 hover:bg-red-950/30 disabled:opacity-50"
+            className="px-3 py-1.5 text-xs border border-red-900/60 rounded-md text-red-200 hover:bg-red-950/30 disabled:opacity-50"
           >
             {deleting ? "Deleting..." : "Delete"}
           </button>

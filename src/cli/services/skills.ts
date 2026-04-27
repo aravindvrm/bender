@@ -138,7 +138,15 @@ export async function getSkillsCatalog(projectRoot: string | null): Promise<{
 
 export async function createSkillPackage(
   projectRoot: string | null,
-  body: { scope?: "user" | "project"; name?: string; description?: string },
+  body: {
+    scope?: "user" | "project";
+    name?: string;
+    description?: string;
+    tags?: string[];
+    triggerPhrases?: string[];
+    antiTriggerPhrases?: string[];
+    body?: string;
+  },
 ): Promise<{ ok: true; scope: "user" | "project"; name: string; path: string }> {
   const scope = body.scope === "project" ? "project" : "user";
   const rawName = (body.name ?? "").trim();
@@ -159,16 +167,11 @@ export async function createSkillPackage(
 
   await mkdir(targetDir, { recursive: true });
   const description = (body.description ?? "").trim() || "Describe when this skill should be used.";
-  const starter = [
-    "---",
-    `description: ${JSON.stringify(description)}`,
-    "tags: []",
-    "domains: []",
-    "trigger_phrases: []",
-    "anti_trigger_phrases: []",
-    "examples: []",
-    "---",
-    "",
+  const tags = Array.isArray(body.tags) ? body.tags.filter(Boolean) : [];
+  const triggerPhrases = Array.isArray(body.triggerPhrases) ? body.triggerPhrases.filter(Boolean) : [];
+  const antiTriggerPhrases = Array.isArray(body.antiTriggerPhrases) ? body.antiTriggerPhrases.filter(Boolean) : [];
+  const customBody = (body.body ?? "").trim();
+  const defaultBody = [
     `# ${name}`,
     "",
     "Purpose:",
@@ -180,6 +183,18 @@ export async function createSkillPackage(
     "How to execute:",
     "1. Step 1",
     "2. Step 2",
+  ].join("\n");
+  const starter = [
+    "---",
+    `description: ${JSON.stringify(description)}`,
+    `tags: ${JSON.stringify(tags)}`,
+    "domains: []",
+    `trigger_phrases: ${JSON.stringify(triggerPhrases)}`,
+    `anti_trigger_phrases: ${JSON.stringify(antiTriggerPhrases)}`,
+    "examples: []",
+    "---",
+    "",
+    customBody || defaultBody,
   ].join("\n");
   await writeFile(skillPath, starter, "utf-8");
 

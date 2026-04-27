@@ -142,7 +142,7 @@ export function PlanTaskModal({ initialDescription, onSubmit, onCancel }: PlanTa
           <button
             onClick={onCancel}
             disabled={submitting}
-            className="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-50"
+            className="px-3 py-1.5 text-xs rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors disabled:opacity-50"
           >
             Cancel
           </button>

@@ -233,7 +233,7 @@ export function GitHubIssueImportDialog({ onClose, onImported }: GitHubIssueImpo
           </div>
           <button
             onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="rounded-md p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors"
             aria-label="Close import dialog"
           >
             <X className="h-4 w-4" />
