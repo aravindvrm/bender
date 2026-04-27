@@ -136,10 +136,30 @@ function isMcpConnectorError(error: unknown): boolean {
   );
 }
 
+function isHostUnreachableError(error: unknown): boolean {
+  const text = stringifyError(error).toLowerCase();
+  return (
+    text.includes("ehostdown")
+    || text.includes("ehostunreach")
+    || text.includes("enetunreach")
+    || text.includes("enetdown")
+    || text.includes("enotfound")
+    || text.includes("host is down")
+    || text.includes("no route to host")
+    || text.includes("network is unreachable")
+  );
+}
+
 function formatRoleFailure(roleName: string, error: unknown): string {
   const message = stringifyError(error).trim();
   if (isTokenBudgetError(error)) {
     return `Role '${roleName}' exceeded provider token budget after automatic compaction. ${message}`;
+  }
+  if (isHostUnreachableError(error)) {
+    // Extract the host:port from the error for a more useful message
+    const hostMatch = message.match(/connect \w+\s+([\d.[\]:a-fA-F:]+:\d+)/);
+    const hostInfo = hostMatch ? ` at ${hostMatch[1]}` : "";
+    return `Cannot reach local model server${hostInfo}. Make sure your local model server (LM Studio, Ollama, etc.) is running and the baseUrl in your config is correct.\n\nOriginal error: ${message}`;
   }
   return message || `Role '${roleName}' failed`;
 }

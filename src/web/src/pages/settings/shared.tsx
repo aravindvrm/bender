@@ -175,16 +175,16 @@ export function getModelOptions(
 ): string[] {
   const live = liveModelOptions[provider];
   if (Array.isArray(live) && live.length > 0) {
-    if (provider === "openai-compatible") {
+    if (provider === "local") {
       const filtered = live.filter((model) => !looksLikeHostedOpenAiModel(model));
       if (filtered.length > 0) return filtered;
     } else {
       return live;
     }
   }
-  if (provider === "openai-compatible") {
-    const persisted = Object.keys(config.providers["openai-compatible"]?.modelCapabilities ?? {});
-    const configuredDefault = (config.providers["openai-compatible"]?.model ?? "").trim();
+  if (provider === "local") {
+    const persisted = Object.keys(config.providers["local"]?.modelCapabilities ?? {});
+    const configuredDefault = (config.providers["local"]?.model ?? "").trim();
     const merged = [...new Set([...(configuredDefault ? [configuredDefault] : []), ...persisted])]
       .filter((model) => !looksLikeHostedOpenAiModel(model));
     if (merged.length > 0) return merged;

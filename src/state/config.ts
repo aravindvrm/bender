@@ -273,9 +273,47 @@ async function writeConfigAtPath(configPath: string, config: BenderConfig): Prom
   await writeFile(configPath, stringifyYaml(config), "utf-8");
 }
 
+/**
+ * Normalize legacy provider identifiers in a raw partial config so that old
+ * config files (which may still use "openai-compatible") continue to work
+ * after the provider was renamed to "local".
+ */
+function normalizeProviderIdentifiers(raw: Partial<BenderConfig>): Partial<BenderConfig> {
+  const normalize = (value: string): string =>
+    value === "openai-compatible" ? "local" : value;
+
+  const normalizeTier = (tier: string | ModelConfig): string | ModelConfig => {
+    if (typeof tier === "string") return tier;
+    return { ...tier, provider: normalize(tier.provider) };
+  };
+
+  const llm = raw.llm
+    ? {
+        ...raw.llm,
+        provider: typeof raw.llm.provider === "string" ? normalize(raw.llm.provider) : raw.llm.provider,
+        models: raw.llm.models
+          ? {
+              fast: normalizeTier(raw.llm.models.fast),
+              default: normalizeTier(raw.llm.models.default),
+              strong: normalizeTier(raw.llm.models.strong),
+            }
+          : raw.llm.models,
+      }
+    : raw.llm;
+
+  let providers = raw.providers;
+  if (providers && "openai-compatible" in providers) {
+    const { "openai-compatible": compat, ...rest } = providers;
+    providers = { ...rest, local: { ...(rest.local ?? {}), ...compat } };
+  }
+
+  return { ...raw, ...(llm ? { llm } : {}), ...(providers ? { providers } : {}) };
+}
+
 function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): BenderConfig {
+  const normalizedOverrides = normalizeProviderIdentifiers(overrides);
   const defaultProviders = defaults.providers ?? {};
-  const overrideProviders = overrides.providers ?? {};
+  const overrideProviders = normalizedOverrides.providers ?? {};
   const providerNames = new Set([
     ...Object.keys(defaultProviders),
     ...Object.keys(overrideProviders),
@@ -311,36 +349,36 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
   return {
     llm: {
       ...defaults.llm,
-      ...overrides.llm,
+      ...normalizedOverrides.llm,
       models: {
         ...defaults.llm.models,
-        ...overrides.llm?.models,
+        ...normalizedOverrides.llm?.models,
       },
     },
     ...(providers ? { providers } : {}),
     mcp: {
       ...defaults.mcp,
-      ...overrides.mcp,
-      servers: overrides.mcp?.servers ?? defaults.mcp?.servers ?? [],
+      ...normalizedOverrides.mcp,
+      servers: normalizedOverrides.mcp?.servers ?? defaults.mcp?.servers ?? [],
     },
     skills: {
       ...defaults.skills,
-      ...overrides.skills,
-      enabledSkills: overrides.skills?.enabledSkills ?? defaults.skills?.enabledSkills ?? [],
-      paths: overrides.skills?.paths ?? defaults.skills?.paths ?? [],
-      maxChars: overrides.skills?.maxChars ?? defaults.skills?.maxChars ?? 12000,
+      ...normalizedOverrides.skills,
+      enabledSkills: normalizedOverrides.skills?.enabledSkills ?? defaults.skills?.enabledSkills ?? [],
+      paths: normalizedOverrides.skills?.paths ?? defaults.skills?.paths ?? [],
+      maxChars: normalizedOverrides.skills?.maxChars ?? defaults.skills?.maxChars ?? 12000,
     },
-    stack: { ...defaults.stack, ...overrides.stack },
-    deploy: { ...defaults.deploy, ...overrides.deploy },
-    test: { ...defaults.test, ...overrides.test },
-    reanalyze: { ...defaults.reanalyze, ...overrides.reanalyze },
-    logging: { ...defaults.logging, ...overrides.logging },
+    stack: { ...defaults.stack, ...normalizedOverrides.stack },
+    deploy: { ...defaults.deploy, ...normalizedOverrides.deploy },
+    test: { ...defaults.test, ...normalizedOverrides.test },
+    reanalyze: { ...defaults.reanalyze, ...normalizedOverrides.reanalyze },
+    logging: { ...defaults.logging, ...normalizedOverrides.logging },
     security: {
       ...defaults.security,
-      ...overrides.security,
+      ...normalizedOverrides.security,
       terminalExec: {
         ...defaults.security?.terminalExec,
-        ...overrides.security?.terminalExec,
+        ...normalizedOverrides.security?.terminalExec,
       },
     },
   };

@@ -14,7 +14,7 @@ const PROVIDER_DEFAULT_CAPABILITIES: Record<string, { supportsTools: boolean; su
   ollama: { supportsTools: false, supportsJson: false, supportsStreaming: true },
   // Many OpenAI-compatible local servers do not implement stable SSE semantics.
   // Prefer non-streaming by default for reliability.
-  "openai-compatible": { supportsTools: false, supportsJson: false, supportsStreaming: false },
+  "local": { supportsTools: false, supportsJson: false, supportsStreaming: false },
 };
 
 function normalizeOpenAiCompatibleBaseUrl(value?: string): string {
@@ -68,8 +68,13 @@ function resolveOpenAiCompatibleBaseUrlForModel(cfg: ProviderConfig, modelId: st
 
 function resolveOpenAiCompatibleBaseUrlCandidatesForModel(cfg: ProviderConfig, modelId: string): string[] {
   const hinted = deriveBaseUrlFromEndpoint(cfg.modelCapabilities?.[modelId]?.endpoint);
-  if (hinted) return [normalizeOpenAiCompatibleBaseUrl(hinted)];
-  return openAiCompatibleBaseCandidates(cfg.baseUrl);
+  // Even when the user has pinned a specific endpoint via modelCapabilities,
+  // still generate /v1 and non-/v1 sibling candidates. Users commonly configure
+  // `http://host:port/chat/completions` when the server actually serves at
+  // `http://host:port/v1/chat/completions` (or vice-versa). Trying both is
+  // cheap and avoids forcing users to guess the correct path.
+  const source = hinted ?? cfg.baseUrl;
+  return openAiCompatibleBaseCandidates(source);
 }
 
 function stringifyProviderError(error: unknown): string {
@@ -104,7 +109,25 @@ function isEndpointMismatchError(error: unknown): boolean {
   );
 }
 
+function isHostUnreachableError(error: unknown): boolean {
+  const text = stringifyProviderError(error).toLowerCase();
+  // Permanent network errors — the host is down/unreachable/unknown. Retrying
+  // a different URL candidate won't help, and the ai SDK will still do its own
+  // internal retry (maxRetries) so we don't need to add more on top.
+  return (
+    text.includes("ehostdown")
+    || text.includes("ehostunreach")
+    || text.includes("enetunreach")
+    || text.includes("enetdown")
+    || text.includes("enotfound")
+    || text.includes("host is down")
+    || text.includes("no route to host")
+    || text.includes("network is unreachable")
+  );
+}
+
 function isTerminalOpenAiCompatibleError(error: unknown): boolean {
+  if (isHostUnreachableError(error)) return true;
   const text = stringifyProviderError(error).toLowerCase();
   return (
     text.includes("unauthorized")
@@ -147,6 +170,7 @@ type FallbackCapableModel = LanguageModel & {
 function withEndpointFallback(
   primaryFactory: () => LanguageModel,
   fallbackFactories: Array<() => LanguageModel>,
+  candidateLabels?: string[],
 ): LanguageModel {
   const modelCache = new Map<number, FallbackCapableModel>();
   const factories = [primaryFactory, ...fallbackFactories];
@@ -161,27 +185,68 @@ function withEndpointFallback(
   const primaryModel = ensureModel(0);
   const wrapped = Object.create(primaryModel) as FallbackCapableModel;
 
+  const labelFor = (i: number) => candidateLabels?.[i] ?? `candidate ${i + 1}`;
+
+  const logFallback = (i: number, error: unknown) => {
+    const reason = stringifyProviderError(error).split("\n")[0]?.slice(0, 160) ?? "unknown error";
+    process.stderr.write(`[local] ${labelFor(i)} failed (${reason}), trying ${labelFor(i + 1)}\n`);
+  };
+
+  // Build a rich final error showing *every* candidate's failure, so the user
+  // can see exactly what each endpoint variant returned instead of just the
+  // last one in the chain.
+  const buildAggregateError = (errors: Array<{ label: string; error: unknown }>): Error => {
+    const header = `All ${errors.length} local-endpoint candidate(s) failed:`;
+    const body = errors
+      .map((e, idx) => {
+        const reason = stringifyProviderError(e.error).split("\n")[0]?.slice(0, 300) ?? "unknown";
+        return `  ${idx + 1}. ${e.label} → ${reason}`;
+      })
+      .join("\n");
+    const hint = "\nHint: check that your server's baseUrl is correct, the model ID matches a loaded model, and that the server speaks the OpenAI chat-completions or responses API.";
+    return new Error(`${header}\n${body}${hint}`);
+  };
+
   const withGenerateFallback = async (options: unknown, startIndex: number): Promise<unknown> => {
+    const errors: Array<{ label: string; error: unknown }> = [];
     for (let i = startIndex; i < factories.length; i += 1) {
       const candidate = ensureModel(i);
       if (typeof candidate.doGenerate !== "function") continue;
       try {
         return await candidate.doGenerate(options);
       } catch (error) {
-        if (!shouldRetryOpenAiCompatibleFallback(error) || i === factories.length - 1) throw error;
+        errors.push({ label: labelFor(i), error });
+        if (!shouldRetryOpenAiCompatibleFallback(error)) {
+          // Terminal error (auth, rate limit, host down) — no point trying more candidates.
+          if (errors.length > 1) throw buildAggregateError(errors);
+          throw error;
+        }
+        if (i === factories.length - 1) {
+          throw buildAggregateError(errors);
+        }
+        logFallback(i, error);
       }
     }
     throw new Error("No OpenAI-compatible generate model available.");
   };
 
   const withStreamFallback = async (options: unknown, startIndex: number): Promise<unknown> => {
+    const errors: Array<{ label: string; error: unknown }> = [];
     for (let i = startIndex; i < factories.length; i += 1) {
       const candidate = ensureModel(i);
       if (typeof candidate.doStream !== "function") continue;
       try {
         return await candidate.doStream(options);
       } catch (error) {
-        if (!shouldRetryOpenAiCompatibleFallback(error) || i === factories.length - 1) throw error;
+        errors.push({ label: labelFor(i), error });
+        if (!shouldRetryOpenAiCompatibleFallback(error)) {
+          if (errors.length > 1) throw buildAggregateError(errors);
+          throw error;
+        }
+        if (i === factories.length - 1) {
+          throw buildAggregateError(errors);
+        }
+        logFallback(i, error);
       }
     }
     throw new Error("No OpenAI-compatible stream model available.");
@@ -216,22 +281,29 @@ function resolveOpenAiCompatibleModel(
   const baseCandidates = resolveOpenAiCompatibleBaseUrlCandidatesForModel(cfg, modelId);
   const fallbackAttempts: Array<{ style: "chat" | "responses"; baseURL: string }> = [];
   for (const baseURL of baseCandidates) {
-    // For non-OpenAI hosts (LM Studio, llama.cpp, vLLM, text-generation-webui,
-    // etc.) the `/responses` endpoint is OpenAI-specific and rarely
-    // implemented. Probing it surfaces misleading errors and can mask the real
-    // chat-completions failure. So:
-    //   - If the user's *explicit* primary style is "responses", honor it
-    //     (we assume they configured it on purpose, e.g. a self-hosted server
-    //     that does implement the Responses API).
-    //   - Otherwise we never auto-fall-back from chat → responses on
-    //     non-OpenAI hosts.
     const isOpenAiHost = isOfficialOpenAiHost(baseURL);
     if (style === "chat") {
       fallbackAttempts.push({ style: "chat", baseURL });
+      // For the official OpenAI API, interleave responses alongside each base URL.
+      // For local/compatible servers: chat-completions is the norm, so exhaust
+      // all base-URL variants first, then try responses as a last resort.
       if (isOpenAiHost) fallbackAttempts.push({ style: "responses", baseURL });
     } else {
       fallbackAttempts.push({ style: "responses", baseURL });
       fallbackAttempts.push({ style: "chat", baseURL });
+    }
+  }
+
+  // For non-OpenAI chat-style: append responses across all base URLs as a
+  // last-resort fallback. Some servers (e.g., newer OpenAI-compatible
+  // deployments) implement only the /responses endpoint. We try chat
+  // exhaustively first to avoid confusing errors on servers that don't support
+  // responses, but fall back here rather than giving up entirely.
+  if (style === "chat") {
+    for (const baseURL of baseCandidates) {
+      if (!isOfficialOpenAiHost(baseURL)) {
+        fallbackAttempts.push({ style: "responses", baseURL });
+      }
     }
   }
 
@@ -260,9 +332,15 @@ function resolveOpenAiCompatibleModel(
       : provider.responses(modelId) as LanguageModel;
   };
 
+  const labels = uniqueAttempts.map((a) => {
+    const path = a.style === "chat" ? "/chat/completions" : "/responses";
+    return `${a.baseURL}${path}`;
+  });
+
   return withEndpointFallback(
     toFactory(uniqueAttempts[0]!),
     uniqueAttempts.slice(1).map((attempt) => toFactory(attempt)),
+    labels,
   );
 }
 
@@ -275,25 +353,51 @@ function resolveOpenAiCompatibleModel(
  * surfacing a cryptic "data shape mismatch" / Zod validation trace.
  */
 function withDiagnosticFetch(inner: typeof fetch, baseURL: string): typeof fetch {
+  const debug = process.env.BENDER_LOCAL_DEBUG === "1";
   return async (input, init) => {
-    const response = await inner(input, init);
-    // Only inspect chat-completions/responses endpoints, only for successful
-    // JSON responses, and never for streams (they're consumed elsewhere).
     const url = typeof input === "string"
       ? input
       : input instanceof URL
         ? input.toString()
         : (input as Request).url;
+
+    if (debug) {
+      const bodyPreview = typeof init?.body === "string"
+        ? init.body.slice(0, 400)
+        : "<non-string body>";
+      process.stderr.write(`[local:debug] → POST ${url}\n[local:debug]   body: ${bodyPreview}\n`);
+    }
+
+    const response = await inner(input, init);
+
+    if (debug) {
+      process.stderr.write(`[local:debug] ← ${response.status} ${response.statusText} from ${url}\n`);
+    }
+
+    // Only inspect chat-completions/responses endpoints, only for successful
+    // JSON responses, and never for streams (they're consumed elsewhere).
     const shouldInspect = response.ok
       && !response.headers.get("content-type")?.includes("event-stream")
       && (url.includes("/chat/completions") || url.endsWith("/responses"));
-    if (!shouldInspect) return response;
+    if (!shouldInspect) {
+      if (debug && !response.ok) {
+        try {
+          const body = await response.clone().text();
+          process.stderr.write(`[local:debug]   body preview: ${body.slice(0, 400)}\n`);
+        } catch { /* ignore */ }
+      }
+      return response;
+    }
 
     let raw: string;
     try {
       raw = await response.clone().text();
     } catch {
       return response;
+    }
+
+    if (debug) {
+      process.stderr.write(`[local:debug]   body preview: ${raw.slice(0, 600)}\n`);
     }
 
     let parsed: unknown;
@@ -305,6 +409,19 @@ function withDiagnosticFetch(inner: typeof fetch, baseURL: string): typeof fetch
         `OpenAI-compatible endpoint at ${baseURL} returned non-JSON body. `
         + `Raw body (truncated): ${snippet}`,
       );
+    }
+
+    // When the server sends an error object with HTTP 200 (unusual but happens
+    // with some local servers), surface it as a real error so the fallback
+    // logic sees the actual message rather than a cryptic "choices undefined".
+    if (parsed && typeof parsed === "object" && "error" in (parsed as Record<string, unknown>)) {
+      const errVal = (parsed as Record<string, unknown>).error;
+      const errMsg = typeof errVal === "string"
+        ? errVal
+        : typeof errVal === "object" && errVal && "message" in (errVal as Record<string, unknown>)
+          ? String((errVal as Record<string, unknown>).message)
+          : JSON.stringify(errVal);
+      throw new Error(`OpenAI-compatible server error: ${errMsg}`);
     }
 
     const diagnostic = diagnoseOpenAiCompatiblePayload(parsed, url);
@@ -325,9 +442,9 @@ function diagnoseOpenAiCompatiblePayload(payload: unknown, url: string): string 
     return "payload is not a JSON object";
   }
   const body = payload as Record<string, unknown>;
-  if ("error" in body && body.error) {
-    return null; // let the AI SDK surface the provider error verbatim
-  }
+  // Note: error-shaped responses ({"error":"..."}) are caught before this
+  // function is called (in withDiagnosticFetch) and thrown directly, so we
+  // don't need to handle them here.
   if (url.endsWith("/responses")) {
     if (!("output" in body) && !("output_text" in body) && !("id" in body)) {
       return "responses payload missing `output`/`output_text`/`id`";
@@ -397,7 +514,7 @@ const providerFactories: Record<string, (apiKey?: string) => (modelId: string) =
     const provider = createOpenAI({ baseURL: "https://api.groq.com/openai/v1", apiKey });
     return (modelId) => provider.chat(modelId) as LanguageModel;
   },
-  "openai-compatible": (apiKey) => {
+  "local": (apiKey) => {
     const provider = createOpenAI({ apiKey });
     return (modelId) => provider(modelId) as LanguageModel;
   },
@@ -411,7 +528,7 @@ const PROVIDER_ENV_KEYS: Record<string, string[]> = {
 };
 
 function providerNeedsApiKey(provider: string): boolean {
-  return provider !== "ollama" && provider !== "openai-compatible";
+  return provider !== "ollama" && provider !== "local";
 }
 
 function hasProviderEnvKey(provider: string): boolean {
@@ -441,7 +558,7 @@ function resolveModelConfig(
   rootConfig?: BenderConfig,
 ): LanguageModel {
   if (typeof tierConfig === "string") {
-    if (defaultProvider === "openai-compatible") {
+    if (defaultProvider === "local") {
       const cfg = rootConfig ? getProviderConfig(rootConfig, defaultProvider) : {};
       const resolvedModel = tierConfig.trim() || cfg.model?.trim() || "local-model";
       return resolveOpenAiCompatibleModel(
@@ -462,7 +579,7 @@ function resolveModelConfig(
   if (!factory) {
     throw new Error(`Unknown LLM provider: ${tierConfig.provider}. Supported: ${Object.keys(providerFactories).join(", ")}`);
   }
-  if (tierConfig.provider === "openai-compatible") {
+  if (tierConfig.provider === "local") {
     const cfg = rootConfig ? getProviderConfig(rootConfig, tierConfig.provider) : {};
     const resolvedModel = tierConfig.model.trim() || cfg.model?.trim() || "local-model";
     return resolveOpenAiCompatibleModel(
@@ -501,7 +618,7 @@ export function resolveProviderModelForTier(
     const configuredDefault = config.providers?.[provider]?.model?.trim() ?? "";
     const model = tierConfig.trim()
       || configuredDefault
-      || (provider === "openai-compatible" ? "local-model" : "");
+      || (provider === "local" ? "local-model" : "");
     return { provider, model };
   }
 
@@ -509,7 +626,7 @@ export function resolveProviderModelForTier(
   const configuredDefault = config.providers?.[provider]?.model?.trim() ?? "";
   const model = tierConfig.model?.trim()
     || configuredDefault
-    || (provider === "openai-compatible" ? "local-model" : "");
+    || (provider === "local" ? "local-model" : "");
   return { provider, model };
 }
 
@@ -573,7 +690,7 @@ export function getProviderCapabilities(
   };
   const providerConfig = getProviderConfig(config, provider);
   const modelCaps = model ? providerConfig.modelCapabilities?.[model] : undefined;
-  if (provider === "openai-compatible") {
+  if (provider === "local") {
     return {
       supportsTools: modelCaps?.supportsTools ?? providerConfig.supportsTools ?? defaults.supportsTools,
       supportsJson: modelCaps?.supportsJson ?? providerConfig.supportsJson ?? defaults.supportsJson,

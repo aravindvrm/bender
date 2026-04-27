@@ -31,7 +31,7 @@ export function LLMSection({
 }: LLMSectionProps) {
   function providerHasConfiguredKey(provider: string): boolean {
     if (provider === "ollama") return true;
-    if (provider === "openai-compatible") {
+    if (provider === "local") {
       const baseUrl = (config.providers?.[provider]?.baseUrl ?? "").trim();
       return baseUrl.length > 0;
     }
@@ -59,7 +59,7 @@ export function LLMSection({
           description="Configure provider credentials/endpoints first. Provider dropdowns only list configured providers."
         />
         <div className="space-y-3">
-          {PROVIDERS.filter((p) => p !== "ollama" && p !== "openai-compatible").map((p) => (
+          {PROVIDERS.filter((p) => p !== "ollama" && p !== "local").map((p) => (
             <Field key={p} label={p}>
               <TextInput
                 value={config.providers[p]?.apiKey ?? ""}
@@ -70,18 +70,18 @@ export function LLMSection({
               />
             </Field>
           ))}
-          <Field label="openai-compatible">
+          <Field label="local">
             <div className="space-y-2">
               <TextInput
-                value={config.providers["openai-compatible"]?.apiKey ?? ""}
-                onChange={(v) => onSetProviderKey("openai-compatible", v)}
+                value={config.providers["local"]?.apiKey ?? ""}
+                onChange={(v) => onSetProviderKey("local", v)}
                 placeholder="Optional bearer token"
                 password
                 mono
               />
               <TextInput
-                value={config.providers["openai-compatible"]?.baseUrl ?? ""}
-                onChange={(v) => onSetProviderConfigValue("openai-compatible", "baseUrl", v)}
+                value={config.providers["local"]?.baseUrl ?? ""}
+                onChange={(v) => onSetProviderConfigValue("local", "baseUrl", v)}
                 placeholder="http://localhost:1234/v1"
                 mono
               />
@@ -128,7 +128,7 @@ export function LLMSection({
                             {providerOptions.map((provider) => (
                               <option key={provider} value={provider} className="bg-zinc-900 text-zinc-200">
                                 {provider}
-                                {provider === "openai-compatible" ? " (experimental)" : ""}
+                                {provider === "local" ? " (experimental)" : ""}
                               </option>
                             ))}
                           </select>
@@ -167,8 +167,8 @@ export function LLMSection({
                   if (!tierConfig.provider || providerHasConfiguredKey(tierConfig.provider)) return null;
                   return (
                     <p className="text-[11px] text-amber-400">
-                      {tierConfig.provider === "openai-compatible"
-                        ? "Set an openai-compatible base URL to enable this tier."
+                      {tierConfig.provider === "local"
+                        ? "Set a local base URL to enable this tier."
                         : `Add a valid ${tierConfig.provider} API key (or env var) to enable this tier.`}
                     </p>
                   );

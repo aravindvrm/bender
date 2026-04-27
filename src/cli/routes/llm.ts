@@ -1,8 +1,8 @@
 import type { Express } from "express";
 import { readEffectiveConfig, type BenderConfig } from "../../state/config.js";
 
-type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "openai-compatible";
-const LLM_PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "ollama", "openai-compatible"];
+type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "local";
+const LLM_PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "ollama", "local"];
 
 interface LlmRouteDeps {
   getCurrentProject: () => string | null;
@@ -38,7 +38,7 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         google: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY || !!process.env.GOOGLE_API_KEY,
         groq: !!process.env.GROQ_API_KEY,
         ollama: false,
-        "openai-compatible": false,
+        "local": false,
       };
 
       const configFlags = {
@@ -47,7 +47,7 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         google: !!config?.providers?.google?.apiKey || (config?.llm.provider === "google" && !!config?.llm.apiKey),
         groq: !!config?.providers?.groq?.apiKey || (config?.llm.provider === "groq" && !!config?.llm.apiKey),
         ollama: config?.llm.provider === "ollama",
-        "openai-compatible": !!config?.providers?.["openai-compatible"]?.baseUrl,
+        "local": !!config?.providers?.["local"]?.baseUrl,
       };
 
       const providers = {
@@ -56,7 +56,7 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         google: { configured: envFlags.google || configFlags.google },
         groq: { configured: envFlags.groq || configFlags.groq },
         ollama: { configured: envFlags.ollama || configFlags.ollama },
-        "openai-compatible": { configured: envFlags["openai-compatible"] || configFlags["openai-compatible"] },
+        "local": { configured: envFlags["local"] || configFlags["local"] },
       };
 
       const hasAnyKey =
@@ -65,7 +65,7 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         || providers.google.configured
         || providers.groq.configured
         || providers.ollama.configured
-        || providers["openai-compatible"].configured;
+        || providers["local"].configured;
 
       const provider = (config?.llm.provider ?? "anthropic") as LlmProvider;
       const activeProviderConfigured = providers[provider]?.configured ?? false;
@@ -115,8 +115,8 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         models?: string[];
       };
       const provider = body.provider;
-      if (provider !== "openai-compatible") {
-        res.status(400).json({ error: "capability detection currently supports provider=openai-compatible only" });
+      if (provider !== "local") {
+        res.status(400).json({ error: "capability detection currently supports provider=local only" });
         return;
       }
       const baseUrl = String(body.baseUrl ?? "").trim();

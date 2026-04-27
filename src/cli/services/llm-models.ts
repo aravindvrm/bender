@@ -1,6 +1,6 @@
 import type { BenderConfig } from "../../state/config.js";
 
-export type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "openai-compatible";
+export type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "local";
 
 const MODEL_LIST_TIMEOUT_MS = 15_000;
 const CAPABILITY_PROBE_TIMEOUT_MS = 20_000;
@@ -357,16 +357,16 @@ export function resolveProviderApiKey(
       ?? (config?.llm.provider === "groq" ? config.llm.apiKey : undefined)
       ?? process.env.GROQ_API_KEY;
   }
-  if (provider === "openai-compatible") {
-    return config?.providers?.["openai-compatible"]?.apiKey
-      ?? (config?.llm.provider === "openai-compatible" ? config.llm.apiKey : undefined);
+  if (provider === "local") {
+    return config?.providers?.["local"]?.apiKey
+      ?? (config?.llm.provider === "local" ? config.llm.apiKey : undefined);
   }
   return "ollama";
 }
 
 export function resolveProviderBaseUrl(provider: LlmProvider, config: BenderConfig | null): string | undefined {
-  if (provider !== "openai-compatible") return undefined;
-  const explicit = config?.providers?.["openai-compatible"]?.baseUrl?.trim();
+  if (provider !== "local") return undefined;
+  const explicit = config?.providers?.["local"]?.baseUrl?.trim();
   if (explicit) return normalizeOpenAiCompatibleBaseUrl(explicit);
   return undefined;
 }
@@ -423,8 +423,8 @@ export async function fetchLiveModels(provider: LlmProvider, apiKey?: string, ba
     return uniqueSorted((body.data ?? []).map((m) => m.id ?? "")).reverse();
   }
 
-  if (provider === "openai-compatible") {
-    if (!baseUrl) throw new Error("Missing baseUrl for openai-compatible provider");
+  if (provider === "local") {
+    if (!baseUrl) throw new Error("Missing baseUrl for local provider");
     const candidates = openAiCompatibleBaseCandidates(baseUrl);
     const headers: Record<string, string> = {};
     if (apiKey?.trim()) {

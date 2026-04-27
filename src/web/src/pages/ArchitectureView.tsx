@@ -715,7 +715,12 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
   const erDiagram = (() => {
     const mermaidFromState = extractMermaidErDiagram(schemaSourceFromState);
     if (mermaidFromState) return mermaidFromState;
-    const sqlFromState = extractSqlFence(schemaSourceFromState) || (schemaSourceFromState ? stripCodeFence(schemaSourceFromState) : "");
+
+    // Detect unfenced erDiagram content (e.g. state.schema = "erDiagram\n  User { ... }")
+    const rawFromState = schemaSourceFromState ? stripCodeFence(schemaSourceFromState) : "";
+    if (/^\s*erDiagram\b/i.test(rawFromState)) return rawFromState.trim();
+
+    const sqlFromState = extractSqlFence(schemaSourceFromState) || rawFromState;
     if (sqlFromState) {
       const chart = sqlToErDiagram(sqlFromState);
       if (chart) return chart;
@@ -854,7 +859,7 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
   return (
     <div className="max-w-4xl mx-auto">
       {/* Tabs */}
-      <div className="inline-flex border border-zinc-800 overflow-hidden mb-6">
+      <div className="inline-flex border border-zinc-800 rounded-lg overflow-hidden mb-6">
         {availableTabs.map((tab, idx) => (
           <button
             key={tab.id}
@@ -895,16 +900,23 @@ export function ArchitectureView({ state, runOperation }: ArchitectureViewProps)
                 <MermaidView chart={erDiagram} />
               </div>
             ) : null}
-            {schemaSource && (
-              <div>
-                <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-3">
-                  {extractMermaidErDiagram(schemaSource) ? "Schema Source (Mermaid ER)" : "Schema Source"}
-                </h2>
-                <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 overflow-x-auto text-sm leading-relaxed">
-                  <code className="text-zinc-300">{stripCodeFence(schemaSource)}</code>
-                </pre>
-              </div>
-            )}
+            {schemaSource && (() => {
+              const stripped = stripCodeFence(schemaSource);
+              // Suppress raw source block when the erDiagram was rendered from the same content
+              // (i.e. the schema source IS an erDiagram — showing raw mermaid below the render is redundant)
+              const isErDiagramSource = /^\s*erDiagram\b/i.test(stripped)
+                || Boolean(extractMermaidErDiagram(schemaSource));
+              if (erDiagram && isErDiagramSource) return null;
+              const label = isErDiagramSource ? "Schema Source (Mermaid ER)" : "Schema Source";
+              return (
+                <div>
+                  <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-3">{label}</h2>
+                  <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 overflow-x-auto text-sm leading-relaxed">
+                    <code className="text-zinc-300">{stripped}</code>
+                  </pre>
+                </div>
+              );
+            })()}
           </div>
         )}
 
