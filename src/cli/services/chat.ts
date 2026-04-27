@@ -22,6 +22,7 @@ import { appendTask, deleteTask, patchTask } from "./tasks.js";
 import { getAllAgents } from "../../state/agents.js";
 import type { SpinnerAdapter, UIAdapter } from "../adapter.js";
 import { runAnalyzeOperation, runAuditOperation, runImplementOperation } from "./run-operations.js";
+import { RunHistoryStore, wrapAdapterWithHistory } from "./run-history.js";
 
 const MAX_THREAD_TITLE_CHARS = 120;
 const MAX_MESSAGE_TEXT_CHARS = 40_000;
@@ -219,6 +220,35 @@ function createCapturingAdapter(signal?: AbortSignal): UIAdapter {
     },
     cleanup: () => { /* no-op */ },
   };
+}
+
+/**
+ * Creates a capturing adapter that also records events to .bender/runs/ history.
+ * Returns both the adapter and a finish callback so the caller can mark the run done/error.
+ */
+async function createHistoryCapturingAdapter(
+  projectRoot: string,
+  operationType: string,
+  label: string,
+  signal?: AbortSignal,
+): Promise<{ adapter: UIAdapter; finishRun: (status: "done" | "error") => Promise<void> }> {
+  const base = createCapturingAdapter(signal);
+  try {
+    const store = new RunHistoryStore(projectRoot);
+    await store.init();
+    const handle = await store.startRun(operationType, label);
+    const wrapped = wrapAdapterWithHistory(base, handle);
+    return {
+      adapter: wrapped,
+      finishRun: (status) => handle.finish(status),
+    };
+  } catch {
+    // History unavailable — fall back to plain capturing adapter silently.
+    return {
+      adapter: base,
+      finishRun: async () => {/* no-op */},
+    };
+  }
 }
 
 async function readCurrentTasksSummary(projectRoot: string): Promise<Array<{
@@ -427,8 +457,16 @@ async function runAnalyzeForChat(projectRoot: string, signal?: AbortSignal): Pro
   hasArchitecture: boolean;
 }> {
   throwIfAborted(signal);
-  const captured = createCapturingAdapter(signal);
-  await runAnalyzeOperation(projectRoot, captured);
+  const { adapter: captured, finishRun } = await createHistoryCapturingAdapter(
+    projectRoot, "analyze", "Analyze project", signal,
+  );
+  let succeeded = false;
+  try {
+    await runAnalyzeOperation(projectRoot, captured);
+    succeeded = true;
+  } finally {
+    await finishRun(succeeded ? "done" : "error");
+  }
   throwIfAborted(signal);
   const state = new StateManager(projectRoot);
   const context = await state.gatherContext();
@@ -453,8 +491,16 @@ async function runTaskForChat(projectRoot: string, taskId: string, signal?: Abor
   const beforeCompleted = await state.readCompletedTasks();
   const beforeSet = new Set(beforeCompleted.map((task) => task.name));
   throwIfAborted(signal);
-  const captured = createCapturingAdapter(signal);
-  await runImplementOperation(projectRoot, { taskId }, captured);
+  const { adapter: captured, finishRun } = await createHistoryCapturingAdapter(
+    projectRoot, "implement", `Implement ${taskId}`, signal,
+  );
+  let succeeded = false;
+  try {
+    await runImplementOperation(projectRoot, { taskId }, captured);
+    succeeded = true;
+  } finally {
+    await finishRun(succeeded ? "done" : "error");
+  }
   throwIfAborted(signal);
   const afterCompleted = await state.readCompletedTasks();
   const newlyCompleted = afterCompleted
@@ -481,8 +527,17 @@ async function runAuditForChat(
 }> {
   throwIfAborted(signal);
   const auditType = kind === "ci" ? "tests" : kind;
-  const captured = createCapturingAdapter(signal);
-  await runAuditOperation(projectRoot, auditType, captured);
+  const auditLabels = { security: "Security audit", tests: "Tests audit", ci: "CI audit" } as const;
+  const { adapter: captured, finishRun } = await createHistoryCapturingAdapter(
+    projectRoot, `audit-${auditType}`, auditLabels[kind], signal,
+  );
+  let succeeded = false;
+  try {
+    await runAuditOperation(projectRoot, auditType, captured);
+    succeeded = true;
+  } finally {
+    await finishRun(succeeded ? "done" : "error");
+  }
   throwIfAborted(signal);
   const state = new StateManager(projectRoot);
   const result = await state.readAudit(auditType);

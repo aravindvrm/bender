@@ -19,6 +19,7 @@ import { registerLlmRoutes } from "./routes/llm.js";
 import { registerLogRoutes } from "./routes/logs.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerRunRoutes } from "./routes/run.js";
+import { registerRunsRoutes } from "./routes/runs.js";
 import { registerSkillRoutes } from "./routes/skills.js";
 import { registerStateRoutes } from "./routes/state.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
@@ -133,6 +134,7 @@ export async function startServer(initialProject?: string, port?: number): Promi
 
   const sse = createSseOperationRunner({
     getCurrentProject: () => resolveExistingProjectLogRoot(currentProject),
+    getProjectRoot: () => currentProject,
   });
   const connectorHealth = createConnectorHealthManager();
 
@@ -244,6 +246,8 @@ export async function startServer(initialProject?: string, port?: number): Promi
   });
 
   registerAgentRoutes(app);
+
+  registerRunsRoutes(app, { getCurrentProject: () => currentProject });
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
