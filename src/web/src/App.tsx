@@ -7,10 +7,17 @@ import { OperationDrawer, type InitModalSubmission } from "./components/Operatio
 import { LoadingDots } from "./components/LoadingDots";
 import { GitDiffSidebar } from "./components/GitDiffSidebar";
 import type { ChatTrigger } from "./components/ChatPanel";
+import { applyBenderTheme, type BenderThemePayload } from "./theme";
 
 interface GitDiffSummaryResponse {
   additions?: number;
   deletions?: number;
+}
+
+interface ActiveThemeResponse {
+  themeId?: string;
+  source?: string;
+  theme?: BenderThemePayload;
 }
 
 // Lazy-load all page views so their heavy vendor deps (mermaid, katex, cytoscape)
@@ -49,6 +56,33 @@ export function App() {
   const op = useOperation(refresh);
   const operationLabel = op.lines.find((line) => line.kind === "header")?.text ?? null;
   const projectTitle = state?.projectRoot?.split(/[\\/]/).filter(Boolean).pop() ?? "No Project";
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTheme(): Promise<void> {
+      try {
+        const res = await fetch("/api/themes/active");
+        const body = await res.json();
+        if (!res.ok || cancelled) return;
+        const payload = body as ActiveThemeResponse;
+        if (payload.theme) {
+          applyBenderTheme(payload.theme);
+        }
+      } catch {
+        // Keep existing CSS defaults on failure.
+      }
+    }
+
+    void loadTheme();
+    const handleRefresh = () => {
+      void loadTheme();
+    };
+    window.addEventListener("bender:theme-refresh", handleRefresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("bender:theme-refresh", handleRefresh);
+    };
+  }, []);
 
   useEffect(() => {
     try {

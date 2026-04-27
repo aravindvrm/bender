@@ -51,6 +51,9 @@ export interface FullConfig {
     paths?: string[];
     maxChars?: number;
   };
+  ui?: {
+    themeId?: string;
+  };
   stack: { template: string; framework: string; database: string; orm: string; auth: string; styling: string; language: string };
   deploy: { target?: string };
   test: { command?: string };
@@ -65,6 +68,24 @@ export interface FullConfig {
 export interface ConfigResponse extends FullConfig {
   scope?: ConfigScope;
   projectRoot?: string | null;
+}
+
+export type ThemeAppearance = "dark" | "light";
+export type ThemeSource = "builtin" | "global" | "project";
+
+export interface ThemeSummary {
+  id: string;
+  name: string;
+  appearance: ThemeAppearance;
+  description?: string;
+  author?: string;
+  source: ThemeSource;
+  isActive?: boolean;
+}
+
+export interface ThemeListResponse {
+  themes: ThemeSummary[];
+  activeThemeId: string;
 }
 
 export interface LlmStatus {

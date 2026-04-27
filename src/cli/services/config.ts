@@ -221,6 +221,10 @@ function mergeConfigUpdates(
       paths: typedUpdates.skills?.paths ?? current.skills?.paths,
       maxChars: typedUpdates.skills?.maxChars ?? current.skills?.maxChars,
     },
+    ui: {
+      ...current.ui,
+      ...typedUpdates.ui,
+    },
     stack: { ...current.stack, ...typedUpdates.stack },
     deploy: { ...current.deploy, ...typedUpdates.deploy },
     test: { ...current.test, ...typedUpdates.test },

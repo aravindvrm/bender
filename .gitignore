@@ -9,4 +9,6 @@ dist/
 test-results/
 playwright-report/
 .cache/
+# Runtime project state (per-project bender state dir)
+.bender/
 

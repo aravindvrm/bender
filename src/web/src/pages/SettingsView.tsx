@@ -7,28 +7,60 @@ import {
   looksLikeHostedOpenAiModel,
   getModelOptions,
 } from "./settings/shared";
-import type { FullConfig, ConfigResponse, LlmStatus, ModelTier } from "./settings/types";
+import type {
+  FullConfig,
+  ConfigResponse,
+  LlmStatus,
+  ModelTier,
+  ThemeSummary,
+  ThemeListResponse,
+} from "./settings/types";
 import { MODEL_TIERS, PROVIDERS } from "./settings/types";
 import { GitHubSection } from "./settings/GitHubSection";
 import { MCPSection } from "./settings/MCPSection";
 import { LLMSection } from "./settings/LLMSection";
 import { PreferencesSection } from "./settings/PreferencesSection";
+import { ThemeSection } from "./settings/ThemeSection";
 
 type ConfigScope = "global" | "project";
 
 export function SettingsView() {
+  const DEFAULT_THEME_ID = "bender-default-dark";
   const [config, setConfig] = useState<FullConfig | null>(null);
   const [configScope, setConfigScope] = useState<ConfigScope>("global");
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [liveModelOptions, setLiveModelOptions] = useState<Record<string, string[]>>({});
   const [refreshingProvider, setRefreshingProvider] = useState<string | null>(null);
   const [modelRefreshError, setModelRefreshError] = useState<string | null>(null);
+  const [themes, setThemes] = useState<ThemeSummary[]>([]);
+  const [activeThemeId, setActiveThemeId] = useState<string>(DEFAULT_THEME_ID);
+  const [themeLoading, setThemeLoading] = useState(false);
+  const [themeImporting, setThemeImporting] = useState(false);
+  const [themeNotice, setThemeNotice] = useState<string | null>(null);
+  const [themeError, setThemeError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [projectRoot, setProjectRoot] = useState<string>("");
   const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  async function refreshThemes(): Promise<void> {
+    setThemeLoading(true);
+    try {
+      const res = await fetch("/api/themes");
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Failed to load themes");
+      const result = body as ThemeListResponse;
+      setThemes(Array.isArray(result.themes) ? result.themes : []);
+      setActiveThemeId(result.activeThemeId || DEFAULT_THEME_ID);
+      setThemeError(null);
+    } catch (err) {
+      setThemeError((err as Error).message);
+    } finally {
+      setThemeLoading(false);
+    }
+  }
 
   useEffect(() => {
     fetch("/api/config")
@@ -80,6 +112,9 @@ export function SettingsView() {
             paths: data.skills?.paths ?? [],
             maxChars: data.skills?.maxChars ?? 12000,
           },
+          ui: {
+            themeId: data.ui?.themeId ?? DEFAULT_THEME_ID,
+          },
           stack: data.stack,
           deploy: data.deploy,
           test: data.test,
@@ -96,6 +131,8 @@ export function SettingsView() {
         setLoading(false);
       })
       .catch((err) => { setError((err as Error).message); setLoading(false); });
+
+    void refreshThemes();
 
     fetch("/api/state")
       .then((r) => r.json())
@@ -151,6 +188,57 @@ export function SettingsView() {
       setError((err as Error).message);
     } finally {
       setSaving(false);
+      window.dispatchEvent(new Event("bender:theme-refresh"));
+    }
+  }
+
+  function handleSetTheme(themeId: string): void {
+    if (!themeId.trim()) return;
+    setThemeError(null);
+    setThemeNotice(null);
+    setConfig((c) => {
+      if (!c) return c;
+      const nextConfig: FullConfig = {
+        ...c,
+        ui: { ...c.ui, themeId },
+      };
+      void enqueuePersistConfig(nextConfig, true).then((ok) => {
+        if (!ok) return;
+        setActiveThemeId(themeId);
+        setThemeNotice("Theme updated.");
+        window.dispatchEvent(new Event("bender:theme-refresh"));
+      });
+      return nextConfig;
+    });
+  }
+
+  async function handleImportVsCodeTheme(jsonText: string): Promise<void> {
+    const scope = configScope === "project" ? "project" : "global";
+    setThemeImporting(true);
+    setThemeError(null);
+    setThemeNotice(null);
+    try {
+      const res = await fetch("/api/themes/import/vscode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope,
+          json: jsonText,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Theme import failed");
+      const importedThemeId = typeof body.importedThemeId === "string" ? body.importedThemeId : DEFAULT_THEME_ID;
+      setConfig((c) => c ? { ...c, ui: { ...c.ui, themeId: importedThemeId } } : c);
+      setActiveThemeId(importedThemeId);
+      await refreshThemes();
+      window.dispatchEvent(new Event("bender:theme-refresh"));
+      const warningCount = Array.isArray(body.warnings) ? body.warnings.length : 0;
+      setThemeNotice(warningCount > 0 ? `Imported with ${warningCount} warning(s).` : "Theme imported.");
+    } catch (err) {
+      setThemeError((err as Error).message);
+    } finally {
+      setThemeImporting(false);
     }
   }
 
@@ -314,6 +402,20 @@ export function SettingsView() {
       />
 
       <div className="h-px bg-zinc-800" />
+
+      <ThemeSection
+        themes={themes}
+        selectedThemeId={config.ui?.themeId ?? activeThemeId}
+        activeThemeId={activeThemeId}
+        loading={themeLoading}
+        importing={themeImporting}
+        scope={configScope}
+        error={themeError}
+        notice={themeNotice}
+        onSelectTheme={handleSetTheme}
+        onRefresh={refreshThemes}
+        onImportVsCode={handleImportVsCodeTheme}
+      />
 
       <PreferencesSection config={config} setConfig={setConfig} />
 

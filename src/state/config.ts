@@ -6,6 +6,7 @@ import type { LogLevel, SinkLevel } from "../logger.js";
 import { getBenderHomePath } from "./paths.js";
 import { LocalProjectDb } from "./local-db.js";
 import { HomeDb } from "./home-db.js";
+import { DEFAULT_THEME_ID } from "../themes/defaults.js";
 
 export type ModelTier = "fast" | "default" | "strong";
 
@@ -74,6 +75,9 @@ export interface BenderConfig {
     paths?: string[];
     maxChars?: number;
   };
+  ui?: {
+    themeId?: string;
+  };
   stack: {
     template: string;
     framework: string;
@@ -131,6 +135,9 @@ export const DEFAULT_CONFIG: BenderConfig = {
     enabledSkills: [],
     paths: [],
     maxChars: 12000,
+  },
+  ui: {
+    themeId: DEFAULT_THEME_ID,
   },
   stack: {
     template: "nextjs-saas",
@@ -329,6 +336,10 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
       enabledSkills: overrides.skills?.enabledSkills ?? defaults.skills?.enabledSkills ?? [],
       paths: overrides.skills?.paths ?? defaults.skills?.paths ?? [],
       maxChars: overrides.skills?.maxChars ?? defaults.skills?.maxChars ?? 12000,
+    },
+    ui: {
+      ...defaults.ui,
+      ...overrides.ui,
     },
     stack: { ...defaults.stack, ...overrides.stack },
     deploy: { ...defaults.deploy, ...overrides.deploy },
