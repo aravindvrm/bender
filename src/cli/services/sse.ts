@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Response } from "express";
 import type { SpinnerAdapter, UIAdapter } from "../adapter.js";
 import { createLogger, logError } from "../../logger.js";
+import { RunHistoryStore, wrapAdapterWithHistory, labelFromRoutePath } from "./run-history.js";
 
 export type SSEEvent =
   | { type: "header"; text: string }
@@ -19,7 +20,11 @@ function sendSSE(res: Response, event: SSEEvent): void {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
-export function createSseOperationRunner(deps?: { getCurrentProject?: () => string | null }) {
+export function createSseOperationRunner(deps?: {
+  getCurrentProject?: () => string | null;
+  /** Raw project root (not wrapped with resolveExistingProjectLogRoot) — used for run-history writes. */
+  getProjectRoot?: () => string | null;
+}) {
   const pendingAnswers = new Map<string, (answer: string) => void>();
 
   function resolvePendingAnswer(id: string, answer: string): boolean {
@@ -103,9 +108,29 @@ export function createSseOperationRunner(deps?: { getCurrentProject?: () => stri
       "Access-Control-Allow-Origin": "*",
     });
 
-    const adapter = createWebAdapter(res);
+    // ------------------------------------------------------------------
+    // Set up run-history recording (best-effort — never blocks operation)
+    // ------------------------------------------------------------------
+    const projectRoot = deps?.getProjectRoot?.() ?? null;
+    let runHandle = null as Awaited<ReturnType<RunHistoryStore["startRun"]>> | null;
+    if (projectRoot) {
+      try {
+        const { operationType, label } = labelFromRoutePath(requestPath);
+        const store = new RunHistoryStore(projectRoot);
+        await store.init();
+        runHandle = await store.startRun(operationType, label);
+      } catch {
+        // History init failure must never abort an operation.
+      }
+    }
+
+    const baseAdapter = createWebAdapter(res);
+    const adapter = runHandle ? wrapAdapterWithHistory(baseAdapter, runHandle) : baseAdapter;
+
+    let succeeded = false;
     try {
       await operation(adapter);
+      succeeded = true;
       logger.info("SSE operation completed", {
         method: res.req?.method ?? "POST",
         path: requestPath,
@@ -123,6 +148,9 @@ export function createSseOperationRunner(deps?: { getCurrentProject?: () => stri
     } finally {
       res.end();
       for (const [id] of pendingAnswers) pendingAnswers.delete(id);
+      if (runHandle) {
+        runHandle.finish(succeeded ? "done" : "error").catch(() => {/* best effort */});
+      }
     }
   }
 
