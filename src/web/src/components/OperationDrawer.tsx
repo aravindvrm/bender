@@ -5,11 +5,11 @@ import {
   MessageSquare,
   Terminal as TerminalIcon,
 } from "lucide-react";
-import type { OutputLine, OperationStatus, OperationModal } from "../hooks/useOperation";
+import type { OperationStatus, OperationModal } from "../hooks/useOperation";
 import { LoadingDots } from "./LoadingDots";
 import { ChatPanel } from "./ChatPanel";
 import { TerminalPanel } from "./drawer/TerminalPanel";
-import { OutputLineView } from "./drawer/OutputLineView";
+import { RunHistoryPanel } from "./RunHistoryPanel";
 import { NewProjectModal } from "./drawer/NewProjectModal";
 import { PlanTaskModal } from "./drawer/PlanTaskModal";
 
@@ -17,7 +17,6 @@ export type { InitModalSubmission } from "./drawer/NewProjectModal";
 export type { TaskCreateSubmission } from "./drawer/PlanTaskModal";
 
 interface OperationDrawerProps {
-  lines: OutputLine[];
   status: OperationStatus;
   drawerOpen: boolean;
   modal: OperationModal;
@@ -26,8 +25,6 @@ interface OperationDrawerProps {
   onSetDrawerOpen: (open: boolean) => void;
   onSetModal: (modal: OperationModal) => void;
   onSetInputText: (text: string) => void;
-  onConfirm: (id: string, lineIdx: number, answer: boolean) => void;
-  onPromptSubmit: (id: string, lineIdx: number, text: string) => void;
   onClear: () => void;
   onAbort: () => void;
   onSubmitInit: (submission: import("./drawer/NewProjectModal").InitModalSubmission) => void;
@@ -36,7 +33,6 @@ interface OperationDrawerProps {
 }
 
 export function OperationDrawer({
-  lines,
   status,
   drawerOpen,
   modal,
@@ -45,8 +41,6 @@ export function OperationDrawer({
   onSetDrawerOpen: _onSetDrawerOpen,
   onSetModal,
   onSetInputText,
-  onConfirm,
-  onPromptSubmit,
   onClear,
   onAbort,
   onSubmitInit,
@@ -62,7 +56,6 @@ export function OperationDrawer({
   const [collapsed, setCollapsed] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(initialDrawerHeight);
   const [isResizing, setIsResizing] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const resizeStartYRef = useRef(0);
   const resizeStartHeightRef = useRef(220);
   const isRunning = status === "running";
@@ -84,15 +77,8 @@ export function OperationDrawer({
   }
 
   useEffect(() => {
-    if (!collapsed && activeTab === "console") {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [lines, collapsed, activeTab]);
-
-  useEffect(() => {
     if (status === "running") {
       setCollapsed(false);
-      setActiveTab("console");
     }
   }, [status]);
 
@@ -258,23 +244,11 @@ export function OperationDrawer({
         )}
 
         {!collapsed && activeTab === "console" && (
-          <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-0.5">
-            {lines.length === 0 && (
-              <p className="text-zinc-700 italic select-none">
-                {status === "idle" ? "Ready." : "Starting…"}
-              </p>
-            )}
-            {lines.map((line, i) => (
-              <OutputLineView
-                key={i}
-                line={line}
-                lineIdx={i}
-                onConfirm={onConfirm}
-                onPromptSubmit={onPromptSubmit}
-                interactivePrompts={modal?.kind !== "plan"}
-              />
-            ))}
-            <div ref={bottomRef} />
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <RunHistoryPanel
+              projectPath={currentProjectPath}
+              operationStatus={status}
+            />
           </div>
         )}
       </div>
