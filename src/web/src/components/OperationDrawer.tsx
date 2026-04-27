@@ -32,6 +32,7 @@ interface OperationDrawerProps {
   onAbort: () => void;
   onSubmitInit: (submission: import("./drawer/NewProjectModal").InitModalSubmission) => void;
   onCreateTask: (submission: import("./drawer/PlanTaskModal").TaskCreateSubmission) => Promise<void>;
+  onRunOperation?: (url: string, body?: Record<string, unknown>) => void;
 }
 
 export function OperationDrawer({
@@ -50,11 +51,16 @@ export function OperationDrawer({
   onAbort,
   onSubmitInit,
   onCreateTask,
+  onRunOperation,
 }: OperationDrawerProps) {
-  const [activeTab, setActiveTab] = useState<"console" | "terminal" | "chat">("console");
+  const initialDrawerHeight = (() => {
+    if (typeof window === "undefined") return 320;
+    return Math.floor(window.innerHeight / 3);
+  })();
+  const [activeTab, setActiveTab] = useState<"console" | "terminal" | "chat">("chat");
   const [chatClearToken, setChatClearToken] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
-  const [drawerHeight, setDrawerHeight] = useState(220);
+  const [drawerHeight, setDrawerHeight] = useState(initialDrawerHeight);
   const [isResizing, setIsResizing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const resizeStartYRef = useRef(0);
@@ -165,10 +171,21 @@ export function OperationDrawer({
             <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
           )}
 
-          <div className="ml-2 self-stretch flex items-stretch border-l border-r border-zinc-800/60">
+          <div className="ml-2 self-stretch flex items-stretch border border-zinc-800/60 rounded-md overflow-hidden">
+            <button
+              onClick={() => setActiveTab("chat")}
+              className={`px-3 h-full text-[11px] transition-colors flex items-center gap-1 ${
+                activeTab === "chat"
+                  ? "text-zinc-100 bg-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
+              }`}
+            >
+              <MessageSquare className="h-3 w-3" />
+              Chat
+            </button>
             <button
               onClick={() => setActiveTab("console")}
-              className={`px-3 h-full rounded-none text-[11px] transition-colors ${
+              className={`px-3 h-full text-[11px] transition-colors border-l border-zinc-800/60 ${
                 activeTab === "console"
                   ? "text-zinc-100 bg-zinc-900"
                   : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
@@ -178,7 +195,7 @@ export function OperationDrawer({
             </button>
             <button
               onClick={() => setActiveTab("terminal")}
-              className={`px-3 h-full rounded-none text-[11px] transition-colors flex items-center gap-1 ${
+              className={`px-3 h-full text-[11px] transition-colors flex items-center gap-1 border-l border-zinc-800/60 ${
                 activeTab === "terminal"
                   ? "text-zinc-100 bg-zinc-900"
                   : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
@@ -186,17 +203,6 @@ export function OperationDrawer({
             >
               <TerminalIcon className="h-3 w-3" />
               Terminal
-            </button>
-            <button
-              onClick={() => setActiveTab("chat")}
-              className={`px-3 h-full rounded-none text-[11px] transition-colors flex items-center gap-1 ${
-                activeTab === "chat"
-                  ? "text-zinc-100 bg-zinc-900"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
-              }`}
-            >
-              <MessageSquare className="h-3 w-3" />
-              Chat
             </button>
           </div>
 
@@ -243,7 +249,11 @@ export function OperationDrawer({
 
         {!collapsed && activeTab === "chat" && (
           <div className="flex-1 min-h-0">
-            <ChatPanel projectPath={currentProjectPath} clearToken={chatClearToken} />
+            <ChatPanel
+              projectPath={currentProjectPath}
+              clearToken={chatClearToken}
+              onRunOperation={onRunOperation}
+            />
           </div>
         )}
 

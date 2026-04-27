@@ -535,15 +535,15 @@ export async function createRoleRuntime(
     return runtime;
   }
 
-  if (provider === "openai" || provider === "openai-compatible") {
+  if (provider === "openai" || provider === "local") {
     const apiKey = getProviderApiKey(config, provider);
     if (provider === "openai" && !apiKey && !hasEnvApiKey("openai")) {
       logger?.warn?.("MCP is enabled for OpenAI, but no OPENAI_API_KEY is configured. Skipping MCP tools.");
       return runtime;
     }
-    const providerBaseUrl = provider === "openai-compatible" ? getProviderBaseUrl(config, provider) : undefined;
-    if (provider === "openai-compatible" && !providerBaseUrl) {
-      logger?.warn?.("MCP is enabled for openai-compatible, but no providers.openai-compatible.baseUrl is configured. Skipping MCP tools.");
+    const providerBaseUrl = provider === "local" ? getProviderBaseUrl(config, provider) : undefined;
+    if (provider === "local" && !providerBaseUrl) {
+      logger?.warn?.("MCP is enabled for local, but no providers.local.baseUrl is configured. Skipping MCP tools.");
       return runtime;
     }
     const tools: ToolSet = {};

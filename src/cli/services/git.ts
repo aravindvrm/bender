@@ -34,6 +34,49 @@ export class GitServiceError extends Error {
   }
 }
 
+interface DiffWindow {
+  mode: "working" | "head" | "range";
+  range?: string;
+}
+
+function parseNumstat(raw: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [addRaw, delRaw] = trimmed.split("\t");
+    const add = Number.parseInt(addRaw ?? "", 10);
+    const del = Number.parseInt(delRaw ?? "", 10);
+    if (Number.isFinite(add)) additions += add;
+    if (Number.isFinite(del)) deletions += del;
+  }
+  return { additions, deletions };
+}
+
+async function resolveDiffWindow(gitOps: GitOperations, commitsQuery: unknown): Promise<DiffWindow> {
+  const parsed = Number.parseInt(String(commitsQuery ?? "1"), 10);
+  const requestedCommits = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+
+  let commitCount = 0;
+  try {
+    const logWindow = await gitOps.log(Math.max(1, requestedCommits + 1));
+    commitCount = logWindow.length;
+  } catch {
+    commitCount = 0;
+  }
+
+  if (commitCount === 0) {
+    return { mode: "working" };
+  }
+  if (commitCount === 1) {
+    return { mode: "head" };
+  }
+  const maxReachableCommits = commitCount - 1;
+  const effectiveCommits = Math.min(requestedCommits, maxReachableCommits);
+  return { mode: "range", range: `HEAD~${effectiveCommits}..HEAD` };
+}
+
 function emptyRepoState(overrides: Partial<RepoStateSnapshot> = {}): RepoStateSnapshot {
   return {
     branch: null,
@@ -319,29 +362,38 @@ export async function getGitDiff(
   if (!(await gitOps.isRepo())) {
     return { diff: null };
   }
-  const parsed = Number.parseInt(String(commitsQuery ?? "1"), 10);
-  const requestedCommits = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 
-  let commitCount = 0;
-  try {
-    const logWindow = await gitOps.log(Math.max(1, requestedCommits + 1));
-    commitCount = logWindow.length;
-  } catch {
-    commitCount = 0;
-  }
-
-  if (commitCount === 0) {
+  const window = await resolveDiffWindow(gitOps, commitsQuery);
+  if (window.mode === "working") {
     const diff = await gitOps.getDiff();
     return { diff };
   }
-
-  if (commitCount === 1) {
+  if (window.mode === "head") {
     const diff = await gitOps.getCommitPatch("HEAD");
     return { diff };
   }
-
-  const maxReachableCommits = commitCount - 1;
-  const effectiveCommits = Math.min(requestedCommits, maxReachableCommits);
-  const diff = await gitOps.getDiffRange(`HEAD~${effectiveCommits}..HEAD`);
+  const diff = await gitOps.getDiffRange(window.range ?? "HEAD~1..HEAD");
   return { diff };
+}
+
+export async function getGitDiffSummary(
+  projectRoot: string,
+  commitsQuery: unknown,
+): Promise<{ additions: number; deletions: number }> {
+  const gitOps = new GitOperations(projectRoot);
+  if (!(await gitOps.isRepo())) {
+    return { additions: 0, deletions: 0 };
+  }
+
+  const window = await resolveDiffWindow(gitOps, commitsQuery);
+  if (window.mode === "working") {
+    const raw = await gitOps.getDiffWithArgs(["--numstat"]);
+    return parseNumstat(raw);
+  }
+  if (window.mode === "head") {
+    const raw = await gitOps.getCommitNumstat("HEAD");
+    return parseNumstat(raw);
+  }
+  const raw = await gitOps.getDiffWithArgs([window.range ?? "HEAD~1..HEAD", "--numstat"]);
+  return parseNumstat(raw);
 }

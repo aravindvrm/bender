@@ -5,6 +5,7 @@ import {
   discardGit,
   fetchGit,
   getGitDiff,
+  getGitDiffSummary,
   getGitIdentity,
   getGitRepoState,
   GitServiceError,
@@ -196,6 +197,16 @@ export function registerGitRoutes(app: Express, deps: GitRouteDeps): void {
   app.get("/api/git/diff", async (req, res) => {
     try {
       const result = await getGitDiff(deps.getProject(), req.query.commits);
+      res.json(result);
+    } catch (err) {
+      const mapped = toHttpError(err);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
+  app.get("/api/git/diff-summary", async (req, res) => {
+    try {
+      const result = await getGitDiffSummary(deps.getProject(), req.query.commits);
       res.json(result);
     } catch (err) {
       const mapped = toHttpError(err);

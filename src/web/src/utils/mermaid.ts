@@ -74,7 +74,10 @@ export function normalizeMermaidChartInput(input: string): string {
 
 export function looksLikeMermaidErrorSvg(svg: string): boolean {
   if (!svg) return false;
-  return /syntax error in text|parse error on line|mermaid version/i.test(svg);
+  // Match actual Mermaid error messages embedded in the SVG <text> elements.
+  // Deliberately excludes "mermaid version" which appears in valid SVG metadata
+  // emitted by Mermaid v10+ (e.g. <!-- Mermaid version 10.x.x -->).
+  return /syntax error in (?:text|graph)|parse error on line|Lexical error on line/i.test(svg);
 }
 
 export function isFlowchartChart(input: string): boolean {

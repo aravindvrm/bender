@@ -10,7 +10,7 @@ export interface TierModelConfig {
 
 export const MODEL_TIERS: ModelTier[] = ["fast", "default", "strong"];
 
-export const PROVIDERS = ["anthropic", "openai", "google", "groq", "ollama", "openai-compatible"] as const;
+export const PROVIDERS = ["anthropic", "openai", "google", "groq", "ollama", "local"] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export interface FullConfig {
@@ -181,7 +181,7 @@ export const PROVIDER_MODEL_HINTS: Record<string, { fast: string; default: strin
   google: { fast: "gemini-2.0-flash", default: "gemini-2.5-pro", strong: "gemini-2.5-pro" },
   groq: { fast: "llama-3.3-70b-versatile", default: "llama-3.3-70b-versatile", strong: "llama-3.3-70b-versatile" },
   ollama: { fast: "llama3.2", default: "llama3.1:70b", strong: "llama3.1:70b" },
-  "openai-compatible": { fast: "local-model", default: "local-model", strong: "local-model" },
+  "local": { fast: "local-model", default: "local-model", strong: "local-model" },
 };
 
 export const PROVIDER_MODEL_OPTIONS: Record<string, string[]> = {
@@ -214,7 +214,7 @@ export const PROVIDER_MODEL_OPTIONS: Record<string, string[]> = {
     "llama3.1:70b",
     "llama3.2",
   ],
-  "openai-compatible": [
+  "local": [
     "local-model",
   ],
 };

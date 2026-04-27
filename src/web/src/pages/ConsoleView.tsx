@@ -518,7 +518,7 @@ function InputModal({ title, placeholder, value, onChange, onSubmit, onCancel }:
           <p className="text-xs text-zinc-600">⌘ Enter to start</p>
         </div>
         <div className="px-5 py-3 border-t border-zinc-800 flex justify-end gap-2">
-          <button onClick={onCancel} className="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
+          <button onClick={onCancel} className="px-3 py-1.5 text-xs rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors">
             Cancel
           </button>
           <button

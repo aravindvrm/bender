@@ -56,10 +56,10 @@ export function SettingsView() {
         const normalizedModels = normalizeTierModels(data.llm.models, fallbackProvider, providers);
         for (const tier of MODEL_TIERS) {
           const entry = normalizedModels[tier];
-          if (entry.provider === "openai-compatible" && looksLikeHostedOpenAiModel(entry.model)) {
+          if (entry.provider === "local" && looksLikeHostedOpenAiModel(entry.model)) {
             normalizedModels[tier] = {
               ...entry,
-              model: getDefaultModelForProviderTier("openai-compatible", tier, providers),
+              model: getDefaultModelForProviderTier("local", tier, providers),
             };
           }
         }
@@ -207,13 +207,13 @@ export function SettingsView() {
     if (!config || !provider) return;
     const hasKey = (() => {
       if (provider === "ollama") return true;
-      if (provider === "openai-compatible") return (config.providers?.[provider]?.baseUrl ?? "").trim().length > 0;
+      if (provider === "local") return (config.providers?.[provider]?.baseUrl ?? "").trim().length > 0;
       return (config.providers?.[provider]?.apiKey ?? "").trim().length > 0 || !!llmStatus?.providers?.[provider]?.configured;
     })();
     if (!hasKey) {
       setModelRefreshError(
-        provider === "openai-compatible"
-          ? "Set an openai-compatible base URL before refreshing models."
+        provider === "local"
+          ? "Set a local base URL before refreshing models."
           : `Configure a valid ${provider} API key before refreshing models.`,
       );
       return;
@@ -226,13 +226,13 @@ export function SettingsView() {
       if (!res.ok) throw new Error(body.error ?? "Failed to refresh models");
       const models = (Array.isArray(body.models) ? body.models : []).map((item: unknown) => String(item).trim()).filter(Boolean);
       if (models.length === 0) throw new Error("No models returned by provider");
-      const sanitized = provider === "openai-compatible"
+      const sanitized = provider === "local"
         ? models.filter((m: string) => !looksLikeHostedOpenAiModel(m))
         : models;
-      const fallbackLocalModel = getDefaultModelForProviderTier("openai-compatible", "default", config.providers);
+      const fallbackLocalModel = getDefaultModelForProviderTier("local", "default", config.providers);
       setLiveModelOptions((prev) => ({
         ...prev,
-        [provider]: provider === "openai-compatible"
+        [provider]: provider === "local"
           ? (sanitized.length > 0 ? sanitized : [fallbackLocalModel])
           : sanitized,
       }));

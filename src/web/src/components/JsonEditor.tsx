@@ -134,7 +134,7 @@ export function JsonEditor({
                 onClick={handleFormat}
                 disabled={disabled}
                 title="Format JSON"
-                className="flex items-center gap-1 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-40"
+                className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800/60 transition-colors disabled:opacity-40"
               >
                 <WrapText className="h-3 w-3" />
                 Format

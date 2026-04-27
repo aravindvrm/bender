@@ -20,7 +20,7 @@ export type LlmProvider =
   | "google"
   | "groq"
   | "ollama"
-  | "openai-compatible";
+  | "local";
 
 export interface ChatThread {
   id: string;

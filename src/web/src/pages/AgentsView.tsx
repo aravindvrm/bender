@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Pin, PinOff, Plus, X } from "lucide-react";
 import { LoadingDots } from "../components/LoadingDots";
 import { roleLabel, type BaseRole } from "../lib/roleLabels";
+import { CreateSkillModal } from "../components/drawer/CreateSkillModal";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 type ModelTier = "fast" | "default" | "strong";
 type CapabilityId =
@@ -50,9 +55,14 @@ interface SkillLibrarySummary {
   runtimeCuratedPool: number;
 }
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
 const BASE_ROLES: BaseRole[] = ["analyzer", "architect", "planner", "implementer", "reviewer"];
 const MODEL_TIERS: ModelTier[] = ["fast", "default", "strong"];
 const MAX_PINNED_SKILLS_PER_AGENT = 6;
+
 const CAPABILITY_CHOICES: Array<{ id: CapabilityId; label: string }> = [
   { id: "connector.github.use", label: "GitHub Connector" },
   { id: "github.repo.read", label: "Read Repos" },
@@ -67,93 +77,906 @@ const CAPABILITY_CHOICES: Array<{ id: CapabilityId; label: string }> = [
   { id: "connector.neon.use", label: "Neon Connector" },
   { id: "connector.vercel.use", label: "Vercel Connector" },
 ];
-type AgentSectionId = "role-defaults" | "skill-library" | "create-agent" | "builtin-agents" | "custom-agents";
-const AGENT_SECTIONS_STORAGE_KEY = "bender.agents.openSections.v1";
-const DEFAULT_OPEN_SECTIONS: Record<AgentSectionId, boolean> = {
-  "role-defaults": false,
-  "skill-library": false,
-  "create-agent": false,
-  "builtin-agents": false,
-  "custom-agents": false,
+
+// ---------------------------------------------------------------------------
+// Visual constants
+// ---------------------------------------------------------------------------
+
+const ROLE_DOT: Record<BaseRole, string> = {
+  analyzer: "bg-blue-400",
+  architect: "bg-violet-400",
+  planner: "bg-amber-400",
+  implementer: "bg-emerald-400",
+  reviewer: "bg-rose-400",
 };
 
-function readOpenSections(): Record<AgentSectionId, boolean> {
-  if (typeof window === "undefined") {
-    return { ...DEFAULT_OPEN_SECTIONS };
-  }
-  try {
-    const raw = window.localStorage.getItem(AGENT_SECTIONS_STORAGE_KEY);
-    if (!raw) {
-      return { ...DEFAULT_OPEN_SECTIONS };
-    }
-    const parsed = JSON.parse(raw) as Partial<Record<AgentSectionId, unknown>>;
-    return {
-      "role-defaults": typeof parsed["role-defaults"] === "boolean" ? parsed["role-defaults"] : DEFAULT_OPEN_SECTIONS["role-defaults"],
-      "skill-library": typeof parsed["skill-library"] === "boolean" ? parsed["skill-library"] : DEFAULT_OPEN_SECTIONS["skill-library"],
-      "create-agent": typeof parsed["create-agent"] === "boolean" ? parsed["create-agent"] : DEFAULT_OPEN_SECTIONS["create-agent"],
-      "builtin-agents": typeof parsed["builtin-agents"] === "boolean" ? parsed["builtin-agents"] : DEFAULT_OPEN_SECTIONS["builtin-agents"],
-      "custom-agents": typeof parsed["custom-agents"] === "boolean" ? parsed["custom-agents"] : DEFAULT_OPEN_SECTIONS["custom-agents"],
-    };
-  } catch {
-    return { ...DEFAULT_OPEN_SECTIONS };
-  }
-}
+const ROLE_BADGE: Record<BaseRole, string> = {
+  analyzer: "text-blue-300 bg-blue-950/40 border-blue-900/40",
+  architect: "text-violet-300 bg-violet-950/40 border-violet-900/40",
+  planner: "text-amber-300 bg-amber-950/40 border-amber-900/40",
+  implementer: "text-emerald-300 bg-emerald-950/40 border-emerald-900/40",
+  reviewer: "text-rose-300 bg-rose-950/40 border-rose-900/40",
+};
 
-function AccordionSection({
-  title,
-  description,
-  count,
-  open,
-  onToggle,
-  children,
-}: {
-  title: string;
-  description?: string;
-  count?: number;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 overflow-hidden">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="w-full px-4 py-3 text-left hover:bg-zinc-900/60 transition-colors"
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] uppercase tracking-wider text-zinc-500">{title}</span>
-          {typeof count === "number" && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">{count}</span>
-          )}
-          <ChevronDown className={`ml-auto h-3.5 w-3.5 text-zinc-500 transition-transform ${open ? "rotate-180" : ""}`} />
-        </div>
-        {description && <p className="mt-1 text-xs text-zinc-600">{description}</p>}
-      </button>
-      {open && (
-        <div className="px-4 pb-4 border-t border-zinc-800">
-          <div className="pt-3">{children}</div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function slugify(value: string): string {
-  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-}
+const TIER_BADGE: Record<ModelTier, string> = {
+  fast: "text-sky-300 bg-sky-950/40 border-sky-900/40",
+  default: "text-zinc-400 bg-zinc-800 border-zinc-700",
+  strong: "text-violet-300 bg-violet-950/40 border-violet-900/40",
+};
 
 function sourceTone(source?: SkillMeta["source"]): string {
   if (source === "project") return "bg-cyan-950/70 text-cyan-300 border-cyan-900/60";
   if (source === "user") return "bg-emerald-950/70 text-emerald-300 border-emerald-900/60";
   return "bg-zinc-800 text-zinc-300 border-zinc-700";
 }
-
 function sourceLabel(source?: SkillMeta["source"]): string {
   if (source === "project") return "Project";
   if (source === "user") return "User";
   return "Curated";
 }
+
+function slugify(value: string): string {
+  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+// ---------------------------------------------------------------------------
+// Small shared sub-components
+// ---------------------------------------------------------------------------
+
+function RoleDot({ role }: { role: BaseRole }) {
+  return <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ROLE_DOT[role]}`} />;
+}
+
+function RoleBadge({ role }: { role: BaseRole }) {
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium uppercase tracking-wide ${ROLE_BADGE[role]}`}>
+      {roleLabel(role)}
+    </span>
+  );
+}
+
+function TierChip({ tier }: { tier: ModelTier }) {
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${TIER_BADGE[tier]}`}>
+      {tier}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Skill row used inside agent detail panels (chips, not checkboxes)
+// ---------------------------------------------------------------------------
+
+function PinnedSkillChips({
+  pinnedSkills,
+  onRemove,
+}: {
+  pinnedSkills: string[];
+  onRemove?: (skill: string) => void;
+}) {
+  if (pinnedSkills.length === 0) {
+    return <p className="text-xs text-zinc-600">None pinned.</p>;
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {pinnedSkills.map((s) => (
+        <span
+          key={s}
+          className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono"
+        >
+          {s}
+          {onRemove && (
+            <button
+              type="button"
+              onClick={() => onRemove(s)}
+              className="text-zinc-500 hover:text-zinc-200 transition-colors leading-none"
+              tabIndex={-1}
+            >
+              <X className="h-2.5 w-2.5" />
+            </button>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Capability checkboxes (shared between create and edit panels)
+// ---------------------------------------------------------------------------
+
+function CapabilityGrid({
+  allowed,
+  onChange,
+}: {
+  allowed: CapabilityId[];
+  onChange: (next: CapabilityId[]) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+      {CAPABILITY_CHOICES.map((cap) => {
+        const enabled = allowed.includes(cap.id);
+        return (
+          <label
+            key={cap.id}
+            className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-2.5 py-1.5 text-xs text-zinc-300 cursor-pointer hover:border-zinc-700 transition-colors"
+          >
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => {
+                const next = e.target.checked
+                  ? [...new Set([...allowed, cap.id])]
+                  : allowed.filter((id) => id !== cap.id);
+                onChange(next);
+              }}
+            />
+            <span>{cap.label}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Builtin agent detail (read-only)
+// ---------------------------------------------------------------------------
+
+function BuiltinAgentDetail({
+  agent,
+  promptSnippet,
+}: {
+  agent: AgentConfig;
+  promptSnippet?: string;
+}) {
+  return (
+    <div className="p-5 space-y-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-base font-medium text-zinc-100">{agent.name}</p>
+          <p className="text-xs text-zinc-500 font-mono mt-0.5">{agent.id}</p>
+        </div>
+        <span className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 uppercase tracking-wide flex-shrink-0">
+          Builtin
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <RoleBadge role={agent.baseRole} />
+        <TierChip tier={agent.modelTier} />
+      </div>
+
+      {promptSnippet && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-zinc-500">System prompt</p>
+          <p className="text-xs text-zinc-400 leading-relaxed bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2">
+            {promptSnippet}
+          </p>
+        </div>
+      )}
+
+      <div className="space-y-1.5">
+        <p className="text-xs text-zinc-500">
+          Pinned skills ({agent.pinnedSkills.length})
+        </p>
+        <PinnedSkillChips pinnedSkills={agent.pinnedSkills} />
+      </div>
+
+      {(agent.capabilityPolicy?.allow?.length ?? 0) > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-zinc-500">Capabilities</p>
+          <div className="flex flex-wrap gap-1.5">
+            {(agent.capabilityPolicy?.allow ?? []).map((cap) => (
+              <span
+                key={cap}
+                className="text-[11px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono"
+              >
+                {cap}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Custom agent edit panel
+// ---------------------------------------------------------------------------
+
+function CustomAgentEditPanel({
+  agent,
+  edit,
+  skills,
+  saving,
+  onEditChange,
+  onSave,
+  onDelete,
+}: {
+  agent: AgentConfig;
+  edit: AgentConfig;
+  skills: SkillMeta[];
+  saving: boolean;
+  onEditChange: (next: AgentConfig) => void;
+  onSave: () => void;
+  onDelete: () => void;
+}) {
+  const [skillSearch, setSkillSearch] = useState("");
+  const [showSkillPicker, setShowSkillPicker] = useState(false);
+  const atLimit = edit.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT;
+
+  const filteredSkills = useMemo(
+    () =>
+      skills.filter(
+        (s) =>
+          !skillSearch ||
+          s.name.toLowerCase().includes(skillSearch.toLowerCase()) ||
+          s.description.toLowerCase().includes(skillSearch.toLowerCase()),
+      ),
+    [skills, skillSearch],
+  );
+
+  return (
+    <div className="p-5 space-y-5">
+      {/* Name / role / tier */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <input
+          value={edit.name}
+          onChange={(e) => onEditChange({ ...edit, name: e.target.value })}
+          className="bg-zinc-950/50 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
+        />
+        <div className="relative">
+          <select
+            value={edit.baseRole}
+            onChange={(e) => onEditChange({ ...edit, baseRole: e.target.value as BaseRole })}
+            className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+          >
+            {BASE_ROLES.map((r) => (
+              <option key={r} value={r}>
+                {roleLabel(r)}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+        </div>
+        <div className="relative">
+          <select
+            value={edit.modelTier}
+            onChange={(e) => onEditChange({ ...edit, modelTier: e.target.value as ModelTier })}
+            className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+          >
+            {MODEL_TIERS.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+        </div>
+      </div>
+
+      <p className="text-[11px] text-zinc-600 font-mono -mt-3">{agent.id}</p>
+
+      {/* System prompt */}
+      <div className="space-y-1.5">
+        <label className="text-xs text-zinc-500">System prompt addition</label>
+        <textarea
+          value={edit.systemPromptAddition ?? ""}
+          onChange={(e) => onEditChange({ ...edit, systemPromptAddition: e.target.value })}
+          placeholder="Extra instructions appended to this agent's system prompt…"
+          rows={3}
+          className="w-full bg-zinc-950/50 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 resize-none"
+        />
+      </div>
+
+      {/* Pinned skills */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <p className="text-xs text-zinc-500">
+            Pinned skills ({edit.pinnedSkills.length}/{MAX_PINNED_SKILLS_PER_AGENT})
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowSkillPicker((p) => !p)}
+            className="ml-auto text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            {showSkillPicker ? "Close picker" : "+ Add skill"}
+          </button>
+        </div>
+
+        <PinnedSkillChips
+          pinnedSkills={edit.pinnedSkills}
+          onRemove={(s) =>
+            onEditChange({ ...edit, pinnedSkills: edit.pinnedSkills.filter((x) => x !== s) })
+          }
+        />
+
+        {showSkillPicker && (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+            <div className="px-2 py-1.5 border-b border-zinc-800">
+              <input
+                autoFocus
+                value={skillSearch}
+                onChange={(e) => setSkillSearch(e.target.value)}
+                placeholder="Filter skills…"
+                className="w-full bg-transparent text-xs text-zinc-300 placeholder:text-zinc-600 outline-none"
+              />
+            </div>
+            <div className="max-h-36 overflow-y-auto">
+              {skills.length === 0 ? (
+                <p className="px-3 py-3 text-xs text-zinc-600">No skills loaded yet.</p>
+              ) : filteredSkills.length === 0 ? (
+                <p className="px-3 py-3 text-xs text-zinc-600">No skills match.</p>
+              ) : (
+                filteredSkills.map((skill) => {
+                  const pinned = edit.pinnedSkills.includes(skill.name);
+                  const disabled = !pinned && atLimit;
+                  return (
+                    <button
+                      key={skill.name}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => {
+                        const next = pinned
+                          ? edit.pinnedSkills.filter((s) => s !== skill.name)
+                          : [...edit.pinnedSkills, skill.name];
+                        onEditChange({ ...edit, pinnedSkills: next });
+                      }}
+                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left border-b border-zinc-800/60 last:border-b-0 transition-colors
+                        ${pinned ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400 hover:bg-zinc-900/50 hover:text-zinc-200"}
+                        ${disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
+                    >
+                      {pinned ? (
+                        <PinOff className="h-3 w-3 flex-shrink-0 text-zinc-400" />
+                      ) : (
+                        <Pin className="h-3 w-3 flex-shrink-0 text-zinc-600" />
+                      )}
+                      <span className="font-mono text-zinc-200">{skill.name}</span>
+                      <span
+                        className={`ml-0.5 inline-flex items-center rounded border px-1 py-0 text-[10px] font-medium uppercase tracking-wide ${sourceTone(skill.source)}`}
+                      >
+                        {sourceLabel(skill.source)}
+                      </span>
+                      {skill.description && (
+                        <span className="text-zinc-600 truncate">{skill.description}</span>
+                      )}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        {atLimit && (
+          <p className="text-[11px] text-zinc-600">
+            Max {MAX_PINNED_SKILLS_PER_AGENT} pinned skills reached. Remove one to add another.
+          </p>
+        )}
+      </div>
+
+      {/* Capabilities */}
+      <div className="space-y-2">
+        <p className="text-xs text-zinc-500">
+          Capabilities ({edit.capabilityPolicy?.allow?.length ?? 0} allowed)
+        </p>
+        <CapabilityGrid
+          allowed={edit.capabilityPolicy?.allow ?? []}
+          onChange={(next) =>
+            onEditChange({
+              ...edit,
+              capabilityPolicy: { allow: next, deny: edit.capabilityPolicy?.deny ?? [] },
+            })
+          }
+        />
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={onSave}
+          disabled={saving}
+          className="px-4 py-1.5 rounded-md text-xs font-medium bg-zinc-100 text-zinc-900 hover:bg-white disabled:opacity-40 transition-colors"
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+        <button
+          onClick={onDelete}
+          disabled={saving}
+          className="px-3 py-1.5 rounded-md text-xs border border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300 disabled:opacity-40 transition-colors"
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// New agent create panel
+// ---------------------------------------------------------------------------
+
+function CreateAgentPanel({
+  draft,
+  setDraft,
+  skills,
+  saving,
+  onCreate,
+}: {
+  draft: AgentConfig;
+  setDraft: React.Dispatch<React.SetStateAction<AgentConfig>>;
+  skills: SkillMeta[];
+  saving: boolean;
+  onCreate: () => void;
+}) {
+  const [skillSearch, setSkillSearch] = useState("");
+  const [showSkillPicker, setShowSkillPicker] = useState(false);
+  const atLimit = draft.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT;
+
+  const filteredSkills = useMemo(
+    () =>
+      skills.filter(
+        (s) =>
+          !skillSearch ||
+          s.name.toLowerCase().includes(skillSearch.toLowerCase()) ||
+          s.description.toLowerCase().includes(skillSearch.toLowerCase()),
+      ),
+    [skills, skillSearch],
+  );
+
+  return (
+    <div className="p-5 space-y-5">
+      <div>
+        <p className="text-sm font-medium text-zinc-100">New Agent</p>
+        <p className="text-xs text-zinc-600 mt-0.5">
+          Custom agents extend the built-in defaults. They can be assigned per-task or set as the
+          default for a role.
+        </p>
+      </div>
+
+      {/* Name / role / tier */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <input
+          autoFocus
+          value={draft.name}
+          onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+          placeholder="Name (e.g. Security Reviewer)"
+          className="bg-zinc-950/50 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
+        />
+        <div className="relative">
+          <select
+            value={draft.baseRole}
+            onChange={(e) => setDraft((d) => ({ ...d, baseRole: e.target.value as BaseRole }))}
+            className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+          >
+            {BASE_ROLES.map((r) => (
+              <option key={r} value={r}>
+                {roleLabel(r)}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+        </div>
+        <div className="relative">
+          <select
+            value={draft.modelTier}
+            onChange={(e) => setDraft((d) => ({ ...d, modelTier: e.target.value as ModelTier }))}
+            className="select-flat w-full pl-3 pr-8 py-2 text-sm"
+          >
+            {MODEL_TIERS.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+        </div>
+      </div>
+
+      {/* System prompt */}
+      <div className="space-y-1.5">
+        <label className="text-xs text-zinc-500">System prompt addition</label>
+        <textarea
+          value={draft.systemPromptAddition ?? ""}
+          onChange={(e) => setDraft((d) => ({ ...d, systemPromptAddition: e.target.value }))}
+          placeholder="Extra instructions appended to this agent's system prompt…"
+          rows={3}
+          className="w-full bg-zinc-950/50 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 resize-none"
+        />
+      </div>
+
+      {/* Pinned skills */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <p className="text-xs text-zinc-500">
+            Pinned skills ({draft.pinnedSkills.length}/{MAX_PINNED_SKILLS_PER_AGENT})
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowSkillPicker((p) => !p)}
+            className="ml-auto text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            {showSkillPicker ? "Close picker" : "+ Add skill"}
+          </button>
+        </div>
+
+        <PinnedSkillChips
+          pinnedSkills={draft.pinnedSkills}
+          onRemove={(s) =>
+            setDraft((d) => ({ ...d, pinnedSkills: d.pinnedSkills.filter((x) => x !== s) }))
+          }
+        />
+
+        {showSkillPicker && (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 overflow-hidden">
+            <div className="px-2 py-1.5 border-b border-zinc-800">
+              <input
+                autoFocus
+                value={skillSearch}
+                onChange={(e) => setSkillSearch(e.target.value)}
+                placeholder="Filter skills…"
+                className="w-full bg-transparent text-xs text-zinc-300 placeholder:text-zinc-600 outline-none"
+              />
+            </div>
+            <div className="max-h-36 overflow-y-auto">
+              {skills.length === 0 ? (
+                <p className="px-3 py-3 text-xs text-zinc-600">No skills loaded yet.</p>
+              ) : filteredSkills.length === 0 ? (
+                <p className="px-3 py-3 text-xs text-zinc-600">No skills match.</p>
+              ) : (
+                filteredSkills.map((skill) => {
+                  const pinned = draft.pinnedSkills.includes(skill.name);
+                  const disabled = !pinned && atLimit;
+                  return (
+                    <button
+                      key={skill.name}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => {
+                        const next = pinned
+                          ? draft.pinnedSkills.filter((s) => s !== skill.name)
+                          : [...draft.pinnedSkills, skill.name];
+                        setDraft((d) => ({ ...d, pinnedSkills: next }));
+                      }}
+                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left border-b border-zinc-800/60 last:border-b-0 transition-colors
+                        ${pinned ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400 hover:bg-zinc-900/50 hover:text-zinc-200"}
+                        ${disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
+                    >
+                      {pinned ? (
+                        <PinOff className="h-3 w-3 flex-shrink-0 text-zinc-400" />
+                      ) : (
+                        <Pin className="h-3 w-3 flex-shrink-0 text-zinc-600" />
+                      )}
+                      <span className="font-mono text-zinc-200">{skill.name}</span>
+                      <span
+                        className={`ml-0.5 inline-flex items-center rounded border px-1 py-0 text-[10px] font-medium uppercase tracking-wide ${sourceTone(skill.source)}`}
+                      >
+                        {sourceLabel(skill.source)}
+                      </span>
+                      {skill.description && (
+                        <span className="text-zinc-600 truncate">{skill.description}</span>
+                      )}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Capabilities */}
+      <div className="space-y-2">
+        <p className="text-xs text-zinc-500">
+          Capabilities ({draft.capabilityPolicy?.allow?.length ?? 0} allowed)
+        </p>
+        <CapabilityGrid
+          allowed={draft.capabilityPolicy?.allow ?? []}
+          onChange={(next) =>
+            setDraft((d) => ({
+              ...d,
+              capabilityPolicy: { allow: next, deny: d.capabilityPolicy?.deny ?? [] },
+            }))
+          }
+        />
+      </div>
+
+      {/* Action */}
+      <button
+        onClick={onCreate}
+        disabled={saving || !draft.name.trim()}
+        className="px-4 py-1.5 rounded-md text-xs font-medium bg-zinc-100 text-zinc-900 hover:bg-white disabled:opacity-40 transition-colors"
+      >
+        {saving ? "Creating…" : "Create Agent"}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Skills section (tabbed)
+// ---------------------------------------------------------------------------
+
+type SkillTab = "curated" | "user" | "project";
+
+function SkillsSection({
+  skills,
+  summary,
+  stale,
+  skillsRefreshing,
+  onRefresh,
+  onNewSkill,
+  pinnedSkills,
+  canPin,
+  onPinToggle,
+}: {
+  skills: SkillMeta[];
+  summary: SkillLibrarySummary | null;
+  stale: boolean;
+  skillsRefreshing: boolean;
+  onRefresh: () => void;
+  onNewSkill: () => void;
+  pinnedSkills: string[];
+  canPin: boolean;
+  onPinToggle: (skillName: string) => void;
+}) {
+  const [tab, setTab] = useState<SkillTab>("curated");
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(true);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importScope, setImportScope] = useState<"user" | "project">("project");
+  const [importPath, setImportPath] = useState("");
+  const [importName, setImportName] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
+
+  const tabSkills = useMemo(
+    () =>
+      skills.filter((s) => {
+        const matchesTab =
+          tab === "curated"
+            ? s.source === "curated" || !s.source
+            : s.source === tab;
+        const q = search.toLowerCase();
+        const matchesSearch =
+          !q ||
+          s.name.toLowerCase().includes(q) ||
+          s.description.toLowerCase().includes(q);
+        return matchesTab && matchesSearch;
+      }),
+    [skills, tab, search],
+  );
+
+  const counts = {
+    curated: skills.filter((s) => s.source === "curated" || !s.source).length,
+    user: skills.filter((s) => s.source === "user").length,
+    project: skills.filter((s) => s.source === "project").length,
+  };
+
+  async function handleImport() {
+    const trimmedPath = importPath.trim();
+    if (!trimmedPath) {
+      setImportError("Source path is required.");
+      return;
+    }
+    setImportBusy(true);
+    setImportError(null);
+    setImportNotice(null);
+    try {
+      const res = await fetch("/api/skills/library/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: importScope,
+          sourcePath: trimmedPath,
+          name: importName.trim() || undefined,
+        }),
+      });
+      const body = (await res.json()) as { name?: string; error?: string };
+      if (!res.ok) throw new Error(body.error ?? "Import failed");
+      setImportPath("");
+      setImportName("");
+      setImportNotice(`Imported: ${body.name ?? "skill"}`);
+    } catch (err) {
+      setImportError((err as Error).message);
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  const totalSkills = summary?.total ?? skills.length;
+
+  return (
+    <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 overflow-hidden">
+      {/* Section header */}
+      <button
+        type="button"
+        onClick={() => setOpen((p) => !p)}
+        className="w-full px-4 py-3 flex items-center gap-2 hover:bg-zinc-900/50 transition-colors text-left"
+      >
+        <span className="text-[11px] uppercase tracking-wider text-zinc-500">Skills</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">
+          {totalSkills}
+        </span>
+        {stale && (
+          <span className="text-[10px] text-amber-400 bg-amber-950/40 border border-amber-900/40 rounded px-1.5 py-0.5">
+            offline · cached
+          </span>
+        )}
+        <ChevronDown
+          className={`ml-auto h-3.5 w-3.5 text-zinc-500 transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+
+      {open && (
+        <div className="border-t border-zinc-800">
+          {/* Tab strip + search + actions */}
+          <div className="px-4 py-2 flex items-center gap-1 border-b border-zinc-800">
+            {(["curated", "user", "project"] as SkillTab[]).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTab(t)}
+                className={`px-2.5 py-1 rounded-md text-xs transition-colors capitalize ${
+                  tab === t
+                    ? "bg-zinc-800 text-zinc-100"
+                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/50"
+                }`}
+              >
+                {t}
+                <span className="ml-1 text-[10px] text-zinc-600">{counts[t]}</span>
+              </button>
+            ))}
+            <div className="ml-auto flex items-center gap-2">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search…"
+                className="bg-zinc-950/50 border border-zinc-800 rounded-md px-2 py-1 text-xs text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 w-36"
+              />
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={skillsRefreshing}
+                title="Refresh curated catalog"
+                className="px-2.5 py-1 rounded-md text-[11px] border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 disabled:opacity-40 transition-colors"
+              >
+                {skillsRefreshing ? "…" : "Refresh"}
+              </button>
+              <button
+                type="button"
+                onClick={onNewSkill}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] border border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-zinc-100 transition-colors"
+              >
+                <Plus className="h-3 w-3" />
+                New Skill
+              </button>
+            </div>
+          </div>
+
+          {/* Skill list */}
+          {tabSkills.length === 0 ? (
+            <p className="px-4 py-4 text-xs text-zinc-600">
+              {search ? "No skills match this search." : `No ${tab} skills yet.`}
+            </p>
+          ) : (
+            <div className="divide-y divide-zinc-800/60">
+              {tabSkills.map((skill) => {
+                const pinned = pinnedSkills.includes(skill.name);
+                const atLimit = !pinned && pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT;
+                return (
+                  <div
+                    key={skill.name}
+                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-900/30 transition-colors group"
+                  >
+                    <span className="font-mono text-xs text-zinc-200 flex-shrink-0">
+                      {skill.name}
+                    </span>
+                    <span
+                      className={`inline-flex items-center rounded border px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide flex-shrink-0 ${sourceTone(skill.source)}`}
+                    >
+                      {sourceLabel(skill.source)}
+                    </span>
+                    {skill.defaultRuntimeEnabled && (
+                      <span className="text-[10px] text-amber-300 flex-shrink-0">
+                        runtime baseline
+                      </span>
+                    )}
+                    <span className="text-xs text-zinc-600 truncate flex-1 min-w-0">
+                      {skill.description}
+                    </span>
+                    {canPin && (
+                      <button
+                        type="button"
+                        disabled={atLimit}
+                        title={
+                          pinned
+                            ? "Unpin from agent"
+                            : atLimit
+                              ? `Max ${MAX_PINNED_SKILLS_PER_AGENT} skills`
+                              : "Pin to agent"
+                        }
+                        onClick={() => onPinToggle(skill.name)}
+                        className={`flex-shrink-0 flex items-center gap-1 px-2 py-0.5 rounded text-[11px] transition-colors
+                          ${pinned
+                            ? "text-zinc-200 bg-zinc-700 hover:bg-zinc-600"
+                            : "text-zinc-600 hover:text-zinc-300 opacity-0 group-hover:opacity-100 disabled:opacity-30"
+                          } disabled:cursor-not-allowed`}
+                      >
+                        {pinned ? (
+                          <PinOff className="h-3 w-3" />
+                        ) : (
+                          <Pin className="h-3 w-3" />
+                        )}
+                        {pinned ? "Unpin" : "Pin"}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Import form (secondary, hidden by default) */}
+          <div className="border-t border-zinc-800 px-4 py-2">
+            <button
+              type="button"
+              onClick={() => setImportOpen((p) => !p)}
+              className="text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors"
+            >
+              {importOpen ? "▾ Hide import" : "▸ Import from local path"}
+            </button>
+            {importOpen && (
+              <div className="mt-2 space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                  <div className="relative">
+                    <select
+                      value={importScope}
+                      onChange={(e) => setImportScope(e.target.value as "user" | "project")}
+                      className="select-flat w-full pl-3 pr-8 py-1.5 text-xs"
+                    >
+                      <option value="project">Project</option>
+                      <option value="user">User</option>
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
+                  </div>
+                  <input
+                    value={importPath}
+                    onChange={(e) => setImportPath(e.target.value)}
+                    placeholder="Source directory path"
+                    className="bg-zinc-950/50 border border-zinc-800 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
+                  />
+                  <input
+                    value={importName}
+                    onChange={(e) => setImportName(e.target.value)}
+                    placeholder="Override name (optional)"
+                    className="bg-zinc-950/50 border border-zinc-800 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
+                  />
+                  <button
+                    onClick={() => void handleImport()}
+                    disabled={importBusy}
+                    className="px-2.5 py-1.5 rounded-md text-xs border border-zinc-700 text-zinc-300 hover:border-zinc-500 disabled:opacity-40"
+                  >
+                    {importBusy ? "Importing…" : "Import"}
+                  </button>
+                </div>
+                {importError && <p className="text-xs text-red-400">{importError}</p>}
+                {importNotice && <p className="text-xs text-zinc-400">{importNotice}</p>}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main view
+// ---------------------------------------------------------------------------
 
 export function AgentsView() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
@@ -168,16 +991,8 @@ export function AgentsView() {
   const [savingRole, setSavingRole] = useState<BaseRole | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [skillSearch, setSkillSearch] = useState("");
-  const [createSkillSearch, setCreateSkillSearch] = useState("");
-  const [openSections, setOpenSections] = useState<Record<AgentSectionId, boolean>>(() => readOpenSections());
-  const [skillLibraryScope, setSkillLibraryScope] = useState<"user" | "project">("project");
-  const [newSkillName, setNewSkillName] = useState("");
-  const [newSkillDescription, setNewSkillDescription] = useState("");
-  const [importSkillScope, setImportSkillScope] = useState<"user" | "project">("project");
-  const [importSkillPath, setImportSkillPath] = useState("");
-  const [importSkillName, setImportSkillName] = useState("");
-  const [skillLibraryBusy, setSkillLibraryBusy] = useState<"create" | "import" | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null | "__new__">(null);
+  const [showCreateSkill, setShowCreateSkill] = useState(false);
 
   const [draft, setDraft] = useState<AgentConfig>({
     id: "",
@@ -187,16 +1002,25 @@ export function AgentsView() {
     pinnedSkills: [],
     mcpServerIds: [],
     capabilityPolicy: { allow: [], deny: [] },
-      systemPromptAddition: "",
+    systemPromptAddition: "",
   });
 
   const [customEdits, setCustomEdits] = useState<Record<string, AgentConfig>>({});
 
-  async function loadSkillsCatalog(options?: { forceCuratedRefresh?: boolean }): Promise<{ skills: SkillMeta[]; summary: SkillLibrarySummary | null; stale: boolean }> {
+  // ── Data loading ──────────────────────────────────────────────────────────
+
+  async function loadSkillsCatalog(options?: {
+    forceCuratedRefresh?: boolean;
+  }): Promise<{ skills: SkillMeta[]; summary: SkillLibrarySummary | null; stale: boolean }> {
     const forceCuratedRefresh = !!options?.forceCuratedRefresh;
     try {
       const catalogRes = await fetch("/api/skills/catalog");
-      const catalogBody = await catalogRes.json() as { skills?: SkillMeta[]; summary?: SkillLibrarySummary; stale?: boolean; error?: string };
+      const catalogBody = (await catalogRes.json()) as {
+        skills?: SkillMeta[];
+        summary?: SkillLibrarySummary;
+        stale?: boolean;
+        error?: string;
+      };
       if (catalogRes.ok) {
         return {
           skills: Array.isArray(catalogBody.skills) ? catalogBody.skills : [],
@@ -205,24 +1029,28 @@ export function AgentsView() {
         };
       }
     } catch {
-      // Fallback to legacy registry endpoint below.
+      // fall through to legacy endpoint
     }
 
     const registryRes = await fetch("/api/skills/registry");
-    const registryBody = await registryRes.json() as { skills?: SkillMeta[]; needsRefresh?: boolean; error?: string };
-    if (!registryRes.ok) {
-      throw new Error(registryBody.error ?? "Failed to load skills");
-    }
-    let resolvedSkills: SkillMeta[] = Array.isArray(registryBody.skills) ? registryBody.skills : [];
+    const registryBody = (await registryRes.json()) as {
+      skills?: SkillMeta[];
+      needsRefresh?: boolean;
+      error?: string;
+    };
+    if (!registryRes.ok) throw new Error(registryBody.error ?? "Failed to load skills");
+    let resolvedSkills: SkillMeta[] = Array.isArray(registryBody.skills)
+      ? registryBody.skills
+      : [];
     if (forceCuratedRefresh || registryBody.needsRefresh || resolvedSkills.length === 0) {
       try {
         const refreshRes = await fetch("/api/skills/refresh", { method: "POST" });
-        const refreshBody = await refreshRes.json() as { skills?: SkillMeta[] };
+        const refreshBody = (await refreshRes.json()) as { skills?: SkillMeta[] };
         if (refreshRes.ok && Array.isArray(refreshBody.skills)) {
           resolvedSkills = refreshBody.skills;
         }
       } catch {
-        // Keep initial result on refresh failure.
+        // keep initial result
       }
     }
     return { skills: resolvedSkills, summary: null, stale: false };
@@ -242,17 +1070,18 @@ export function AgentsView() {
       const selectionsBody = await selectionsRes.json();
       const snippetsBody = await snippetsRes.json();
       if (!agentsRes.ok) throw new Error(agentsBody.error ?? "Failed to load agents");
-      setAgents(
-        ((agentsBody.agents ?? []) as AgentConfig[]).map((agent) => ({
-          ...agent,
-          pinnedSkills: agent.pinnedSkills ?? [],
-          mcpServerIds: agent.mcpServerIds ?? [],
-          capabilityPolicy: {
-            allow: [...new Set(agent.capabilityPolicy?.allow ?? [])],
-            deny: [...new Set(agent.capabilityPolicy?.deny ?? [])],
-          },
-        })),
-      );
+
+      const normalised = ((agentsBody.agents ?? []) as AgentConfig[]).map((a) => ({
+        ...a,
+        pinnedSkills: a.pinnedSkills ?? [],
+        mcpServerIds: a.mcpServerIds ?? [],
+        capabilityPolicy: {
+          allow: [...new Set(a.capabilityPolicy?.allow ?? [])],
+          deny: [...new Set(a.capabilityPolicy?.deny ?? [])],
+        },
+      }));
+
+      setAgents(normalised);
       setSkills(skillsCatalog.skills);
       setSkillLibrarySummary(skillsCatalog.summary);
       setSkillsStale(skillsCatalog.stale);
@@ -260,18 +1089,8 @@ export function AgentsView() {
       setPromptSnippets(snippetsBody.snippets ?? {});
 
       const nextEdits: Record<string, AgentConfig> = {};
-      for (const agent of (agentsBody.agents ?? []) as AgentConfig[]) {
-        if (!agent.isBuiltin) {
-          nextEdits[agent.id] = {
-            ...agent,
-            pinnedSkills: agent.pinnedSkills ?? [],
-            mcpServerIds: agent.mcpServerIds ?? [],
-            capabilityPolicy: {
-              allow: [...new Set(agent.capabilityPolicy?.allow ?? [])],
-              deny: [...new Set(agent.capabilityPolicy?.deny ?? [])],
-            },
-          };
-        }
+      for (const agent of normalised) {
+        if (!agent.isBuiltin) nextEdits[agent.id] = { ...agent };
       }
       setCustomEdits(nextEdits);
     } catch (err) {
@@ -285,38 +1104,34 @@ export function AgentsView() {
     void loadData();
   }, []);
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.localStorage.setItem(AGENT_SECTIONS_STORAGE_KEY, JSON.stringify(openSections));
-  }, [openSections]);
+  // ── Derived state ─────────────────────────────────────────────────────────
 
   const orderedAgents = useMemo(
-    () => [...agents].sort((a, b) => Number(!!b.isBuiltin) - Number(!!a.isBuiltin) || a.name.localeCompare(b.name)),
+    () =>
+      [...agents].sort(
+        (a, b) => Number(!!b.isBuiltin) - Number(!!a.isBuiltin) || a.name.localeCompare(b.name),
+      ),
     [agents],
   );
-  const builtinAgents = useMemo(
-    () => orderedAgents.filter((agent) => !!agent.isBuiltin),
-    [orderedAgents],
-  );
-  const customAgents = useMemo(
-    () => orderedAgents.filter((agent) => !agent.isBuiltin),
-    [orderedAgents],
-  );
-  const filteredSkills = useMemo(
-    () => skills.filter((s) => !skillSearch || s.name.includes(skillSearch.toLowerCase()) || s.description.toLowerCase().includes(skillSearch.toLowerCase())),
-    [skills, skillSearch],
-  );
-  const createFilteredSkills = useMemo(
-    () => skills.filter((s) => !createSkillSearch || s.name.includes(createSkillSearch.toLowerCase()) || s.description.toLowerCase().includes(createSkillSearch.toLowerCase())),
-    [skills, createSkillSearch],
-  );
-  const capabilityChoices = CAPABILITY_CHOICES;
+  const builtinAgents = useMemo(() => orderedAgents.filter((a) => !!a.isBuiltin), [orderedAgents]);
+  const customAgents = useMemo(() => orderedAgents.filter((a) => !a.isBuiltin), [orderedAgents]);
 
-  function toggleSection(section: AgentSectionId) {
-    setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
-  }
+  const selectedAgent = agents.find((a) => a.id === selectedId);
+
+  // The pinned skills for the currently-selected entity (for the skills section pin button)
+  const activePinnedSkills: string[] = useMemo(() => {
+    if (selectedId === "__new__") return draft.pinnedSkills;
+    if (selectedId && !selectedAgent?.isBuiltin) {
+      return customEdits[selectedId]?.pinnedSkills ?? [];
+    }
+    return [];
+  }, [selectedId, draft.pinnedSkills, customEdits, selectedAgent]);
+
+  const canPinToSelected =
+    selectedId !== null &&
+    (selectedId === "__new__" || (!!selectedAgent && !selectedAgent.isBuiltin));
+
+  // ── Actions ───────────────────────────────────────────────────────────────
 
   async function createAgent() {
     setError(null);
@@ -328,20 +1143,17 @@ export function AgentsView() {
     }
     const baseId = slugify(name) || `agent-${Date.now()}`;
     let id = baseId;
-    if (agents.some((a) => a.id === id)) {
-      id = `${baseId}-${Date.now().toString().slice(-5)}`;
-    }
+    if (agents.some((a) => a.id === id)) id = `${baseId}-${Date.now().toString().slice(-5)}`;
 
     const payload: AgentConfig = {
       ...draft,
       id,
       name,
-      mcpServerIds: draft.mcpServerIds,
+      systemPromptAddition: draft.systemPromptAddition?.trim() || undefined,
       capabilityPolicy: {
         allow: [...new Set(draft.capabilityPolicy?.allow ?? [])],
         deny: [...new Set(draft.capabilityPolicy?.deny ?? [])],
       },
-      systemPromptAddition: draft.systemPromptAddition?.trim() || undefined,
     };
 
     setSavingId("__new__");
@@ -364,32 +1176,12 @@ export function AgentsView() {
         systemPromptAddition: "",
       });
       setNotice(`Created agent: ${payload.name}`);
+      setSelectedId(id);
       await loadData();
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setSavingId(null);
-    }
-  }
-
-  async function setRoleSelection(role: BaseRole, agentId: string) {
-    setSavingRole(role);
-    setError(null);
-    setNotice(null);
-    try {
-      const res = await fetch(`/api/agents/selection/${role}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: agentId || null }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Failed to update role selection");
-      setSelectedByRole(body.selectedByRole ?? {});
-      setNotice(`Updated default agent for ${roleLabel(role)}.`);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSavingRole(null);
     }
   }
 
@@ -418,7 +1210,7 @@ export function AgentsView() {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Failed to save agent");
-      setNotice(`Saved agent: ${edit.name}`);
+      setNotice(`Saved: ${edit.name}`);
       await loadData();
     } catch (err) {
       setError((err as Error).message);
@@ -428,6 +1220,7 @@ export function AgentsView() {
   }
 
   async function deleteCustomAgent(id: string) {
+    if (!window.confirm("Delete this agent?")) return;
     setSavingId(id);
     setError(null);
     setNotice(null);
@@ -435,7 +1228,8 @@ export function AgentsView() {
       const res = await fetch(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Failed to delete agent");
-      setNotice("Deleted agent.");
+      setNotice("Agent deleted.");
+      if (selectedId === id) setSelectedId(null);
       await loadData();
     } catch (err) {
       setError((err as Error).message);
@@ -444,136 +1238,24 @@ export function AgentsView() {
     }
   }
 
-  function toggleSkill(agentId: string, skill: string, enabled: boolean) {
-    setCustomEdits((prev) => {
-      const current = prev[agentId];
-      if (!current) return prev;
-      if (enabled && !current.pinnedSkills.includes(skill) && current.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT) {
-        return prev;
-      }
-      const nextSkills = enabled
-        ? [...current.pinnedSkills, skill]
-        : current.pinnedSkills.filter((s) => s !== skill);
-      return { ...prev, [agentId]: { ...current, pinnedSkills: nextSkills } };
-    });
-  }
-
-  function toggleDraftSkill(skill: string, enabled: boolean) {
-    setDraft((prev) => {
-      if (enabled && !prev.pinnedSkills.includes(skill) && prev.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT) {
-        return prev;
-      }
-      const next = enabled
-        ? [...prev.pinnedSkills, skill]
-        : prev.pinnedSkills.filter((s) => s !== skill);
-      return { ...prev, pinnedSkills: next };
-    });
-  }
-
-  function toggleDraftCapability(capability: CapabilityId, enabled: boolean) {
-    setDraft((prev) => {
-      const allow = prev.capabilityPolicy?.allow ?? [];
-      const nextAllow = enabled
-        ? [...new Set([...allow, capability])]
-        : allow.filter((id) => id !== capability);
-      return {
-        ...prev,
-        capabilityPolicy: {
-          allow: nextAllow,
-          deny: prev.capabilityPolicy?.deny ?? [],
-        },
-      };
-    });
-  }
-
-  function toggleCustomCapability(agentId: string, capability: CapabilityId, enabled: boolean) {
-    setCustomEdits((prev) => {
-      const current = prev[agentId];
-      if (!current) return prev;
-      const allow = current.capabilityPolicy?.allow ?? [];
-      const nextAllow = enabled
-        ? [...new Set([...allow, capability])]
-        : allow.filter((id) => id !== capability);
-      return {
-        ...prev,
-        [agentId]: {
-          ...current,
-          capabilityPolicy: {
-            allow: nextAllow,
-            deny: current.capabilityPolicy?.deny ?? [],
-          },
-        },
-      };
-    });
-  }
-
-  async function createLibrarySkill() {
-    const trimmedName = newSkillName.trim();
-    if (!trimmedName) {
-      setError("Skill name is required.");
-      return;
-    }
-    setSkillLibraryBusy("create");
+  async function setRoleSelection(role: BaseRole, agentId: string) {
+    setSavingRole(role);
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch("/api/skills/library/create", {
-        method: "POST",
+      const res = await fetch(`/api/agents/selection/${role}`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          scope: skillLibraryScope,
-          name: trimmedName,
-          description: newSkillDescription.trim() || undefined,
-        }),
+        body: JSON.stringify({ agentId: agentId || null }),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Failed to create skill package");
-      setNewSkillName("");
-      setNewSkillDescription("");
-      const catalog = await loadSkillsCatalog();
-      setSkills(catalog.skills);
-      setSkillLibrarySummary(catalog.summary);
-      setSkillsStale(catalog.stale);
-      setNotice(`Created skill package: ${body.name ?? trimmedName}`);
+      if (!res.ok) throw new Error(body.error ?? "Failed to update role default");
+      setSelectedByRole(body.selectedByRole ?? {});
+      setNotice(`Updated default agent for ${roleLabel(role)}.`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setSkillLibraryBusy(null);
-    }
-  }
-
-  async function importLibrarySkill() {
-    const trimmedPath = importSkillPath.trim();
-    if (!trimmedPath) {
-      setError("Skill source path is required.");
-      return;
-    }
-    setSkillLibraryBusy("import");
-    setError(null);
-    setNotice(null);
-    try {
-      const res = await fetch("/api/skills/library/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          scope: importSkillScope,
-          sourcePath: trimmedPath,
-          name: importSkillName.trim() || undefined,
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Failed to import skill package");
-      setImportSkillPath("");
-      setImportSkillName("");
-      const catalog = await loadSkillsCatalog();
-      setSkills(catalog.skills);
-      setSkillLibrarySummary(catalog.summary);
-      setSkillsStale(catalog.stale);
-      setNotice(`Imported skill package: ${body.name ?? "skill"}`);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSkillLibraryBusy(null);
+      setSavingRole(null);
     }
   }
 
@@ -595,6 +1277,35 @@ export function AgentsView() {
     }
   }
 
+  function handlePinToggle(skillName: string) {
+    if (selectedId === "__new__") {
+      const pinned = draft.pinnedSkills.includes(skillName);
+      if (!pinned && draft.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT) return;
+      setDraft((d) => ({
+        ...d,
+        pinnedSkills: pinned
+          ? d.pinnedSkills.filter((s) => s !== skillName)
+          : [...d.pinnedSkills, skillName],
+      }));
+    } else if (selectedId && !selectedAgent?.isBuiltin) {
+      const edit = customEdits[selectedId];
+      if (!edit) return;
+      const pinned = edit.pinnedSkills.includes(skillName);
+      if (!pinned && edit.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT) return;
+      setCustomEdits((prev) => ({
+        ...prev,
+        [selectedId]: {
+          ...edit,
+          pinnedSkills: pinned
+            ? edit.pinnedSkills.filter((s) => s !== skillName)
+            : [...edit.pinnedSkills, skillName],
+        },
+      }));
+    }
+  }
+
+  // ── Loading state ─────────────────────────────────────────────────────────
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24">
@@ -603,528 +1314,211 @@ export function AgentsView() {
     );
   }
 
-  return (
-    <div className="max-w-5xl space-y-6">
-      <section className="space-y-2">
-        <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-zinc-300">Agents</h3>
-          <button
-            onClick={() => void refreshSkillsRegistry()}
-            disabled={skillsRefreshing}
-            className="ml-auto px-2.5 py-1 rounded-md text-[11px] border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {skillsRefreshing ? "Refreshing skills..." : "Refresh catalog"}
-          </button>
-        </div>
-        <p className="text-xs text-zinc-600">Default agents are read-only. Create custom agents and assign them per role (global) or per task (implementer).</p>
-      </section>
+  // ── Render ────────────────────────────────────────────────────────────────
 
+  return (
+    <div className="max-w-5xl space-y-5">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <h3 className="text-sm font-semibold text-zinc-300">Agents</h3>
+        <p className="text-xs text-zinc-600">
+          Built-in agents are read-only. Create custom agents and assign per role or per task.
+        </p>
+      </div>
+
+      {/* Error / notice banner */}
       {(error || notice) && (
-        <p className={`text-xs ${error ? "text-red-400" : "text-zinc-400"}`}>{error ?? notice}</p>
+        <p className={`text-xs px-3 py-2 rounded-lg border ${
+          error
+            ? "text-red-400 bg-red-950/20 border-red-900/30"
+            : "text-zinc-400 bg-zinc-900/40 border-zinc-800"
+        }`}>
+          {error ?? notice}
+        </p>
       )}
 
-      <AccordionSection
-        title="Role Defaults"
-        description="Choose which agent runs by default for each role. Leave empty to use builtin defaults."
-        open={openSections["role-defaults"]}
-        onToggle={() => toggleSection("role-defaults")}
-      >
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+      {/* ── Two-panel layout ── */}
+      <div className="flex gap-4" style={{ minHeight: 400 }}>
+        {/* Left: agent list */}
+        <div className="w-64 flex-shrink-0 space-y-0.5">
+          {/* Built-ins */}
+          <p className="text-[10px] uppercase tracking-wider text-zinc-600 px-2 mb-1">
+            Built-in
+          </p>
+          {builtinAgents.map((agent) => (
+            <button
+              key={agent.id}
+              type="button"
+              onClick={() => setSelectedId(agent.id)}
+              className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-colors
+                ${
+                  selectedId === agent.id
+                    ? "bg-zinc-800 text-zinc-100"
+                    : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+                }`}
+            >
+              <RoleDot role={agent.baseRole} />
+              <span className="flex-1 truncate text-sm">{agent.name}</span>
+              <TierChip tier={agent.modelTier} />
+            </button>
+          ))}
+
+          {/* Custom agents */}
+          <p className="text-[10px] uppercase tracking-wider text-zinc-600 px-2 mt-3 mb-1">
+            Custom
+          </p>
+          {customAgents.length === 0 ? (
+            <p className="px-2.5 py-1.5 text-xs text-zinc-600">No custom agents yet.</p>
+          ) : (
+            customAgents.map((agent) => (
+              <button
+                key={agent.id}
+                type="button"
+                onClick={() => setSelectedId(agent.id)}
+                className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-colors
+                  ${
+                    selectedId === agent.id
+                      ? "bg-zinc-800 text-zinc-100"
+                      : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+                  }`}
+              >
+                <RoleDot role={agent.baseRole} />
+                <span className="flex-1 truncate text-sm">{agent.name}</span>
+                <TierChip tier={agent.modelTier} />
+              </button>
+            ))
+          )}
+
+          {/* New agent button */}
+          <button
+            type="button"
+            onClick={() => setSelectedId("__new__")}
+            className={`w-full flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-left transition-colors mt-1
+              ${
+                selectedId === "__new__"
+                  ? "bg-zinc-800 text-zinc-300"
+                  : "text-zinc-600 hover:text-zinc-400 hover:bg-zinc-900/50"
+              }`}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span className="text-xs">New agent</span>
+          </button>
+        </div>
+
+        {/* Right: detail panel */}
+        <div className="flex-1 min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/20 overflow-y-auto">
+          {selectedId === null ? (
+            <div className="flex items-center justify-center h-full py-20 text-zinc-600 text-sm">
+              Select an agent or{" "}
+              <button
+                type="button"
+                onClick={() => setSelectedId("__new__")}
+                className="ml-1 text-zinc-400 underline underline-offset-2 hover:text-zinc-200 transition-colors"
+              >
+                create a new one
+              </button>
+            </div>
+          ) : selectedId === "__new__" ? (
+            <CreateAgentPanel
+              draft={draft}
+              setDraft={setDraft}
+              skills={skills}
+              saving={savingId === "__new__"}
+              onCreate={() => void createAgent()}
+            />
+          ) : selectedAgent?.isBuiltin ? (
+            <BuiltinAgentDetail
+              agent={selectedAgent}
+              promptSnippet={promptSnippets[selectedAgent.baseRole]}
+            />
+          ) : selectedAgent ? (
+            <CustomAgentEditPanel
+              agent={selectedAgent}
+              edit={customEdits[selectedAgent.id] ?? selectedAgent}
+              skills={skills}
+              saving={savingId === selectedAgent.id}
+              onEditChange={(next) =>
+                setCustomEdits((prev) => ({ ...prev, [selectedAgent.id]: next }))
+              }
+              onSave={() => void saveCustomAgent(selectedAgent.id)}
+              onDelete={() => void deleteCustomAgent(selectedAgent.id)}
+            />
+          ) : (
+            // Agent was deleted while selected
+            <div className="flex items-center justify-center h-full py-20 text-zinc-600 text-sm">
+              Agent not found.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Role defaults ── */}
+      <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 space-y-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-wider text-zinc-500">Role defaults</p>
+          <p className="text-xs text-zinc-600 mt-0.5">
+            Override the default agent for each pipeline role. Leave empty to use the built-in
+            default.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
           {BASE_ROLES.map((role) => {
             const roleAgents = agents.filter((a) => a.baseRole === role);
             return (
-              <label key={role} className="space-y-1">
-                <span className="text-xs text-zinc-500">{roleLabel(role)}</span>
+              <div key={role} className="space-y-1">
+                <div className="flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${ROLE_DOT[role]}`} />
+                  <span className="text-xs text-zinc-500">{roleLabel(role)}</span>
+                </div>
                 <div className="relative">
                   <select
                     value={selectedByRole[role] ?? ""}
                     onChange={(e) => void setRoleSelection(role, e.target.value)}
                     disabled={savingRole === role}
-                    className="select-flat w-full pl-3 pr-8 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="select-flat w-full pl-3 pr-8 py-1.5 text-xs disabled:opacity-50"
                   >
-                    <option value="">Builtin default</option>
+                    <option value="">Built-in default</option>
                     {roleAgents.map((agent) => (
                       <option key={agent.id} value={agent.id}>
                         {agent.name} ({agent.modelTier}){agent.isBuiltin ? " [builtin]" : ""}
                       </option>
                     ))}
                   </select>
-                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-500" />
                 </div>
-              </label>
+              </div>
             );
           })}
         </div>
-      </AccordionSection>
+      </section>
 
-      <AccordionSection
-        title="Skill Library"
-        description={
-          skillsStale
-            ? "Showing cached skills · offline"
-            : "Curated defaults stay lean; extend the user/project library for custom agents."
-        }
-        count={skills.length}
-        open={openSections["skill-library"]}
-        onToggle={() => toggleSection("skill-library")}
-      >
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 text-xs">
-            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
-              <p className="text-zinc-600">Total</p>
-              <p className="text-zinc-300 mt-0.5">{skillLibrarySummary?.total ?? skills.length}</p>
-            </div>
-            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
-              <p className="text-zinc-600">Curated</p>
-              <p className="text-zinc-300 mt-0.5">{skillLibrarySummary?.curated ?? skills.filter((s) => s.source === "curated").length}</p>
-            </div>
-            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
-              <p className="text-zinc-600">User</p>
-              <p className="text-zinc-300 mt-0.5">{skillLibrarySummary?.user ?? skills.filter((s) => s.source === "user").length}</p>
-            </div>
-            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
-              <p className="text-zinc-600">Project</p>
-              <p className="text-zinc-300 mt-0.5">{skillLibrarySummary?.project ?? skills.filter((s) => s.source === "project").length}</p>
-            </div>
-            <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
-              <p className="text-zinc-600">Runtime curated pool</p>
-              <p className="text-zinc-300 mt-0.5">{skillLibrarySummary?.runtimeCuratedPool ?? "—"}</p>
-            </div>
-          </div>
+      {/* ── Skills section ── */}
+      <SkillsSection
+        skills={skills}
+        summary={skillLibrarySummary}
+        stale={skillsStale}
+        skillsRefreshing={skillsRefreshing}
+        onRefresh={() => void refreshSkillsRegistry()}
+        onNewSkill={() => setShowCreateSkill(true)}
+        pinnedSkills={activePinnedSkills}
+        canPin={canPinToSelected}
+        onPinToggle={handlePinToggle}
+      />
 
-          <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3 space-y-2">
-            <p className="text-xs text-zinc-500">Create skill package</p>
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-2">
-              <div className="relative">
-                <select
-                  value={skillLibraryScope}
-                  onChange={(e) => setSkillLibraryScope(e.target.value as "user" | "project")}
-                  className="select-flat w-full pl-3 pr-8 py-2 text-sm"
-                >
-                  <option value="project">Project library</option>
-                  <option value="user">User library</option>
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
-              </div>
-              <input
-                value={newSkillName}
-                onChange={(e) => setNewSkillName(e.target.value)}
-                placeholder="Skill name (e.g. api-contract-qa)"
-                className="bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-              />
-              <input
-                value={newSkillDescription}
-                onChange={(e) => setNewSkillDescription(e.target.value)}
-                placeholder="Short description (optional)"
-                className="bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-              />
-              <button
-                onClick={() => void createLibrarySkill()}
-                disabled={skillLibraryBusy === "create"}
-                className="px-3 py-2 rounded-md text-xs border border-zinc-700 text-zinc-300 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {skillLibraryBusy === "create" ? "Creating..." : "Create"}
-              </button>
-            </div>
-          </div>
-
-          <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3 space-y-2">
-            <p className="text-xs text-zinc-500">Import skill package from local path</p>
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-2">
-              <div className="relative">
-                <select
-                  value={importSkillScope}
-                  onChange={(e) => setImportSkillScope(e.target.value as "user" | "project")}
-                  className="select-flat w-full pl-3 pr-8 py-2 text-sm"
-                >
-                  <option value="project">Project library</option>
-                  <option value="user">User library</option>
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
-              </div>
-              <input
-                value={importSkillPath}
-                onChange={(e) => setImportSkillPath(e.target.value)}
-                placeholder="Source directory path"
-                className="bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-              />
-              <input
-                value={importSkillName}
-                onChange={(e) => setImportSkillName(e.target.value)}
-                placeholder="Override name (optional)"
-                className="bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-              />
-              <button
-                onClick={() => void importLibrarySkill()}
-                disabled={skillLibraryBusy === "import"}
-                className="px-3 py-2 rounded-md text-xs border border-zinc-700 text-zinc-300 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {skillLibraryBusy === "import" ? "Importing..." : "Import"}
-              </button>
-            </div>
-          </div>
-        </div>
-      </AccordionSection>
-
-      <AccordionSection
-        title="Create Agent"
-        description="Create custom agents and tune role, model tier, skills, capability policy, and prompt addition."
-        open={openSections["create-agent"]}
-        onToggle={() => toggleSection("create-agent")}
-      >
-        <div className="space-y-3">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-2">
-            <input
-              value={draft.name}
-              onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-              placeholder="Name (e.g. Security Reviewer)"
-              className="bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-            />
-            <div className="relative">
-              <select
-                value={draft.baseRole}
-                onChange={(e) => setDraft((d) => ({ ...d, baseRole: e.target.value as BaseRole }))}
-                className="select-flat w-full pl-3 pr-8 py-2 text-sm"
-              >
-                {BASE_ROLES.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
-            </div>
-            <div className="relative">
-              <select
-                value={draft.modelTier}
-                onChange={(e) => setDraft((d) => ({ ...d, modelTier: e.target.value as ModelTier }))}
-                className="select-flat w-full pl-3 pr-8 py-2 text-sm"
-              >
-                {MODEL_TIERS.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
-            </div>
-          </div>
-          <textarea
-            value={draft.systemPromptAddition ?? ""}
-            onChange={(e) => setDraft((d) => ({ ...d, systemPromptAddition: e.target.value }))}
-            placeholder="Optional system prompt addition"
-            rows={3}
-            className="w-full bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-          />
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <p className="text-xs text-zinc-500">
-                Skills ({draft.pinnedSkills.length}/{MAX_PINNED_SKILLS_PER_AGENT})
-              </p>
-              <input
-                value={createSkillSearch}
-                onChange={(e) => setCreateSkillSearch(e.target.value)}
-                placeholder="Filter skills..."
-                className="ml-auto bg-zinc-950/50 border border-zinc-800 rounded-md px-2 py-1 text-xs text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-              />
-            </div>
-            <div className="max-h-32 overflow-y-auto border border-zinc-800 rounded-md">
-              {skills.length === 0 ? (
-                <div className="px-3 py-3 space-y-2">
-                  <p className="text-xs text-zinc-600">No skills loaded yet.</p>
-                  <button
-                    onClick={() => void refreshSkillsRegistry()}
-                    disabled={skillsRefreshing}
-                    className="px-2.5 py-1 rounded-md text-[11px] border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-                  >
-                    {skillsRefreshing ? <LoadingDots size={14} label="Loading…" textClassName="text-[11px] text-zinc-400" /> : "Load skills"}
-                  </button>
-                </div>
-              ) : createFilteredSkills.length === 0 ? (
-                <p className="px-3 py-3 text-xs text-zinc-600">No skills match this filter.</p>
-              ) : (
-                createFilteredSkills.map((skill) => {
-                  const enabled = draft.pinnedSkills.includes(skill.name);
-                  const atLimit = !enabled && draft.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT;
-                  return (
-                    <label key={skill.name} className="flex items-start gap-2 px-2.5 py-1.5 text-xs text-zinc-300 border-b border-zinc-800/60 last:border-b-0">
-                      <input
-                        type="checkbox"
-                        checked={enabled}
-                        disabled={atLimit}
-                        onChange={(e) => toggleDraftSkill(skill.name, e.target.checked)}
-                      />
-                      <span className="leading-4">
-                        <span className="font-mono text-zinc-200">{skill.name}</span>
-                        <span className={`ml-1 inline-flex items-center rounded border px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide ${sourceTone(skill.source)}`}>
-                          {sourceLabel(skill.source)}
-                        </span>
-                        {skill.defaultRuntimeEnabled && (
-                          <span className="ml-1 text-[10px] text-amber-300">runtime baseline</span>
-                        )}
-                        {skill.description && (
-                          <span className="block text-zinc-500">{skill.description}</span>
-                        )}
-                      </span>
-                    </label>
-                  );
-                })
-              )}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <p className="text-xs text-zinc-500">
-              Capability policy ({draft.capabilityPolicy?.allow?.length ?? 0} allowed)
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-              {capabilityChoices.map((cap) => {
-                const enabled = (draft.capabilityPolicy?.allow ?? []).includes(cap.id);
-                return (
-                  <label key={cap.id} className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-2.5 py-2 text-xs text-zinc-300">
-                    <input
-                      type="checkbox"
-                      checked={enabled}
-                      onChange={(e) => toggleDraftCapability(cap.id, e.target.checked)}
-                    />
-                    <span>{cap.label}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-          <button
-            onClick={() => void createAgent()}
-            disabled={savingId === "__new__"}
-            className="px-3 py-1.5 rounded-md text-xs border border-zinc-700 text-zinc-300 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {savingId === "__new__" ? "Creating..." : "Create Agent"}
-          </button>
-        </div>
-      </AccordionSection>
-
-      <AccordionSection
-        title="Built-in Agents"
-        description="Read-only defaults shipped with Bender."
-        count={builtinAgents.length}
-        open={openSections["builtin-agents"]}
-        onToggle={() => toggleSection("builtin-agents")}
-      >
-        {builtinAgents.length === 0 ? (
-          <p className="text-sm text-zinc-600">No built-in agents found.</p>
-        ) : (
-          <div className="space-y-3">
-            {builtinAgents.map((agent) => (
-              <div key={agent.id} className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-zinc-100">{agent.name}</p>
-                    <p className="text-[11px] text-zinc-500 font-mono">{agent.id}</p>
-                  </div>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 uppercase tracking-wide">Builtin</span>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 text-xs">
-                  <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
-                    <p className="text-zinc-600">Role</p>
-                    <p className="text-zinc-300 mt-0.5">{roleLabel(agent.baseRole)}</p>
-                  </div>
-                  <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
-                    <p className="text-zinc-600">Model tier</p>
-                    <p className="text-zinc-300 mt-0.5">{agent.modelTier}</p>
-                  </div>
-                  <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2">
-                    <p className="text-zinc-600">Prompt snippet</p>
-                    <p className="text-zinc-500 mt-0.5 leading-relaxed">
-                      {promptSnippets[agent.baseRole] ?? "Prompt snippet unavailable."}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <p className="text-xs text-zinc-500">Pinned skills</p>
-                  {agent.pinnedSkills.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {agent.pinnedSkills.map((skill) => (
-                        <span key={skill} className="text-[11px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">
-                          {skill}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-zinc-600">None</p>
-                  )}
-                </div>
-                <div className="space-y-1.5">
-                  <p className="text-xs text-zinc-500">Allowed capabilities</p>
-                  {(agent.capabilityPolicy?.allow?.length ?? 0) > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {(agent.capabilityPolicy?.allow ?? []).map((cap) => (
-                        <span key={cap} className="text-[11px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">
-                          {cap}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-zinc-600">None</p>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </AccordionSection>
-
-      <AccordionSection
-        title="Custom Agents"
-        description="Edit, assign skills, and manage custom agents."
-        count={customAgents.length}
-        open={openSections["custom-agents"]}
-        onToggle={() => toggleSection("custom-agents")}
-      >
-        {customAgents.length === 0 ? (
-          <p className="text-sm text-zinc-600">No custom agents yet.</p>
-        ) : (
-          <div className="space-y-3">
-            {customAgents.map((agent) => {
-              const edit = customEdits[agent.id] ?? agent;
-              const busy = savingId === agent.id;
-              return (
-                <div key={agent.id} className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
-                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-2">
-                    <input
-                      value={edit.name}
-                      onChange={(e) => setCustomEdits((prev) => ({ ...prev, [agent.id]: { ...edit, name: e.target.value } }))}
-                      className="bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
-                    />
-                    <div className="relative">
-                      <select
-                        value={edit.baseRole}
-                        onChange={(e) => setCustomEdits((prev) => ({ ...prev, [agent.id]: { ...edit, baseRole: e.target.value as BaseRole } }))}
-                        className="select-flat w-full pl-3 pr-8 py-2 text-sm"
-                      >
-                        {BASE_ROLES.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
-                      </select>
-                      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
-                    </div>
-                    <div className="relative">
-                      <select
-                        value={edit.modelTier}
-                        onChange={(e) => setCustomEdits((prev) => ({ ...prev, [agent.id]: { ...edit, modelTier: e.target.value as ModelTier } }))}
-                        className="select-flat w-full pl-3 pr-8 py-2 text-sm"
-                      >
-                        {MODEL_TIERS.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
-                      </select>
-                      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] text-zinc-500 font-mono truncate">{agent.id}</span>
-                    </div>
-                  </div>
-
-                  <textarea
-                    value={edit.systemPromptAddition ?? ""}
-                    onChange={(e) => setCustomEdits((prev) => ({ ...prev, [agent.id]: { ...edit, systemPromptAddition: e.target.value } }))}
-                    placeholder="Optional system prompt addition"
-                    rows={2}
-                    className="w-full bg-zinc-950/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-                  />
-
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <p className="text-xs text-zinc-500">
-                        Pinned skills ({edit.pinnedSkills.length}/{MAX_PINNED_SKILLS_PER_AGENT})
-                      </p>
-                      <input
-                        value={skillSearch}
-                        onChange={(e) => setSkillSearch(e.target.value)}
-                        placeholder="Filter skills..."
-                        className="ml-auto bg-zinc-950/50 border border-zinc-800 rounded-md px-2 py-1 text-xs text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
-                      />
-                    </div>
-                    <div className="max-h-36 overflow-y-auto border border-zinc-800 rounded-md">
-                      {skills.length === 0 ? (
-                        <div className="px-3 py-3 space-y-2">
-                          <p className="text-xs text-zinc-600">No skills loaded yet.</p>
-                          <button
-                            onClick={() => void refreshSkillsRegistry()}
-                            disabled={skillsRefreshing}
-                            className="px-2.5 py-1 rounded-md text-[11px] border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-                          >
-                            {skillsRefreshing ? <LoadingDots size={14} label="Loading…" textClassName="text-[11px] text-zinc-400" /> : "Load skills"}
-                          </button>
-                        </div>
-                      ) : filteredSkills.length === 0 ? (
-                        <p className="px-3 py-3 text-xs text-zinc-600">No skills match this filter.</p>
-                      ) : (
-                        filteredSkills.map((skill) => {
-                          const enabled = edit.pinnedSkills.includes(skill.name);
-                          const atLimit = !enabled && edit.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT;
-                          return (
-                            <label key={skill.name} className="flex items-start gap-2 px-2.5 py-1.5 text-xs text-zinc-300 border-b border-zinc-800/60 last:border-b-0">
-                              <input
-                                type="checkbox"
-                                checked={enabled}
-                                disabled={atLimit}
-                                onChange={(e) => toggleSkill(agent.id, skill.name, e.target.checked)}
-                              />
-                              <span className="leading-4">
-                                <span className="font-mono text-zinc-200">{skill.name}</span>
-                                <span className={`ml-1 inline-flex items-center rounded border px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide ${sourceTone(skill.source)}`}>
-                                  {sourceLabel(skill.source)}
-                                </span>
-                                {skill.defaultRuntimeEnabled && (
-                                  <span className="ml-1 text-[10px] text-amber-300">runtime baseline</span>
-                                )}
-                                {skill.description && (
-                                  <span className="block text-zinc-500">{skill.description}</span>
-                                )}
-                              </span>
-                            </label>
-                          );
-                        })
-                      )}
-                    </div>
-                    {edit.pinnedSkills.length >= MAX_PINNED_SKILLS_PER_AGENT && (
-                      <p className="text-[11px] text-zinc-600">
-                        Max pinned skills reached. Uncheck one to add another.
-                      </p>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-xs text-zinc-500">
-                      Capability policy ({edit.capabilityPolicy?.allow?.length ?? 0} allowed)
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                      {capabilityChoices.map((cap) => {
-                        const enabled = (edit.capabilityPolicy?.allow ?? []).includes(cap.id);
-                        return (
-                          <label key={cap.id} className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-2.5 py-2 text-xs text-zinc-300">
-                            <input
-                              type="checkbox"
-                              checked={enabled}
-                              onChange={(e) => toggleCustomCapability(agent.id, cap.id, e.target.checked)}
-                            />
-                            <span>{cap.label}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => void saveCustomAgent(agent.id)}
-                      disabled={busy}
-                      className="px-3 py-1.5 rounded-md text-xs border border-zinc-700 text-zinc-300 hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      {busy ? "Saving..." : "Save"}
-                    </button>
-                    <button
-                      onClick={() => void deleteCustomAgent(agent.id)}
-                      disabled={busy}
-                      className="px-3 py-1.5 rounded-md text-xs border border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </AccordionSection>
+      {/* ── Create skill modal ── */}
+      {showCreateSkill && (
+        <CreateSkillModal
+          onClose={() => setShowCreateSkill(false)}
+          onCreated={async (name) => {
+            setShowCreateSkill(false);
+            const catalog = await loadSkillsCatalog();
+            setSkills(catalog.skills);
+            setSkillLibrarySummary(catalog.summary);
+            setSkillsStale(catalog.stale);
+            setNotice(`Skill '${name}' created.`);
+          }}
+        />
+      )}
     </div>
   );
 }

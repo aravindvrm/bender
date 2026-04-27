@@ -2,6 +2,13 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "swapaday-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000,
+      "cwd": "/Users/avrm/Documents/Repos/Codex/swapaday/apps/web"
+    },
+    {
       "name": "bender-web",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev:web"],

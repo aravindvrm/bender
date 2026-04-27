@@ -25,7 +25,7 @@ import { runAnalyzeOperation, runAuditOperation, runImplementOperation } from ".
 
 const MAX_THREAD_TITLE_CHARS = 120;
 const MAX_MESSAGE_TEXT_CHARS = 40_000;
-const PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "ollama", "openai-compatible"];
+const PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "ollama", "local"];
 
 const CHAT_SYSTEM_PROMPT = [
   "You are Bender Operator, the fixed project assistant for this repository.",
@@ -103,7 +103,7 @@ function normalizeThreadId(raw: string | undefined): string {
 function normalizeProvider(raw: unknown): LlmProvider {
   const provider = typeof raw === "string" ? raw.trim() : "";
   if (!provider || !PROVIDERS.includes(provider as LlmProvider)) {
-    throw new ChatServiceError(400, "provider must be one of anthropic/openai/google/groq/ollama/openai-compatible");
+    throw new ChatServiceError(400, "provider must be one of anthropic/openai/google/groq/ollama/local");
   }
   return provider as LlmProvider;
 }

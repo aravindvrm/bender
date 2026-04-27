@@ -8,8 +8,9 @@ import {
   CirclePlus,
   FolderTree,
   GitBranch,
-  GitCompareArrows,
   MonitorCog,
+  PanelLeftClose,
+  PanelLeftOpen,
   ScanEye,
   Settings,
   Bot,
@@ -18,7 +19,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-export type View = "plan" | "workflows" | "architecture" | "brief" | "evals" | "git" | "agents" | "settings";
+export type View = "plan" | "workflows" | "architecture" | "brief" | "evals" | "agents" | "settings";
 
 function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -34,7 +35,7 @@ function displayProviderName(provider?: string): string {
   if (p === "google") return "Google";
   if (p === "groq") return "Groq";
   if (p === "ollama") return "Ollama";
-  if (p === "openai-compatible") return "Local";
+  if (p === "local") return "Local";
   return provider ?? "—";
 }
 
@@ -97,6 +98,8 @@ interface SidebarProps {
   state: ProjectState | null;
   onProjectChange: () => Promise<void> | void;
   onGlobalAction: (action: "new-project" | "analyze") => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   operationStatus?: OperationStatus;
   operationLabel?: string | null;
 }
@@ -107,10 +110,20 @@ const projectNav: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "plan", label: "Tasks", icon: MonitorCog },
   { id: "workflows", label: "Workflows", icon: GitBranch },
   { id: "architecture", label: "Architecture", icon: FolderTree },
-  { id: "git", label: "Git", icon: GitCompareArrows },
+  { id: "evals", label: "Evals", icon: Beaker },
 ];
 
-export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGlobalAction, operationStatus, operationLabel }: SidebarProps) {
+export function Sidebar({
+  activeView,
+  onViewChange,
+  state,
+  onProjectChange,
+  onGlobalAction,
+  collapsed,
+  onToggleCollapsed,
+  operationStatus,
+  operationLabel,
+}: SidebarProps) {
   const taskCount = state?.currentTaskPlan?.tasks?.length
     ?? state?.currentTasks?.match(/###\s*Task\s+[^:\n]+/g)?.length
     ?? 0;
@@ -160,10 +173,17 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
   }, [hasProject, operationStatus]); // re-fetch after operations
 
   return (
-    <aside className="w-[280px] shrink-0 border-r border-zinc-800 bg-zinc-950 flex overflow-visible">
+    <aside className={`shrink-0 border-r border-zinc-800 bg-zinc-950 flex overflow-visible ${collapsed ? "w-[52px]" : "w-[280px]"}`}>
 
       {/* Narrow icon rail — global controls */}
       <div className="w-[52px] shrink-0 border-r border-zinc-800/60 flex flex-col items-center py-3 gap-1">
+        <button
+          onClick={onToggleCollapsed}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
+        >
+          {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+        </button>
 
         {/* Project switcher */}
         <ProjectSelector
@@ -191,21 +211,29 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
           <ScanEye className="h-4 w-4" />
         </button>
 
-        {/* Evals */}
-        <button
-          onClick={() => onViewChange("evals")}
-          disabled={!hasProject}
-          title="Evals"
-          className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
-            activeView === "evals"
-              ? "bg-zinc-800 text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
-          }`}
-        >
-          <Beaker className="h-4 w-4" />
-        </button>
+        {collapsed && (
+          <div className="w-full flex flex-col items-center gap-1 pt-1">
+            {projectNav.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeView === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => onViewChange(item.id)}
+                  title={item.label}
+                  className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
+                    isActive
+                      ? "bg-zinc-800 text-zinc-100"
+                      : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                </button>
+              );
+            })}
+          </div>
+        )}
 
-        {/* Spacer */}
         <div className="flex-1" />
 
         {/* Settings */}
@@ -223,7 +251,8 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
       </div>
 
       {/* Main panel — project-specific */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {!collapsed && (
+        <div className="flex-1 flex flex-col min-w-0">
 
         {/* Project header */}
         <div className="px-4 h-10 border-b border-zinc-800/60 flex items-center">
@@ -335,7 +364,8 @@ export function Sidebar({ activeView, onViewChange, state, onProjectChange, onGl
             </div>
           )}
         </div>
-      </div>
+        </div>
+      )}
     </aside>
   );
 }

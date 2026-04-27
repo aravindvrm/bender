@@ -45,7 +45,7 @@ export function registerRunRoutes(app: Express, deps: RunRouteDeps): void {
       description?: string;
       path?: string;
       template?: "nextjs-saas" | "express-api" | "auto";
-      llmProvider?: "anthropic" | "openai" | "google" | "groq" | "ollama" | "openai-compatible";
+      llmProvider?: "anthropic" | "openai" | "google" | "groq" | "ollama" | "local";
       llmApiKey?: string;
     };
 

@@ -101,18 +101,19 @@ function createStartupHtml(): string {
       }
       .stack {
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 10px;
+        gap: 14px;
       }
       .label {
         font-size: 13px;
         color: #a1a1aa;
         width: 220px;
-        text-align: left;
+        text-align: center;
       }
       .bender-loader {
-        width: var(--loader-size, 18px);
+        width: var(--loader-size, 30px);
         aspect-ratio: 1;
         --loader-color: #fff;
         --g1: conic-gradient(from 90deg at top 5.45% left 5.45%, #0000 90deg, var(--loader-color) 0);
@@ -137,14 +138,14 @@ function createStartupHtml(): string {
   <body>
       <div class="stack">
       <div class="bender-loader" aria-hidden="true"></div>
-      <div class="label" id="startup-label">Spinning the wheel...</div>
+      <div class="label" id="startup-label">Spinning the wheel</div>
     </div>
     <script>
       (function () {
         const lines = [
-          "Spinning the wheel...",
-          "Dealing the cards....",
-          "Jacking in...",
+          "Spinning the wheel",
+          "Dealing the cards",
+          "Jacking in",
         ];
         let index = 0;
         const label = document.getElementById("startup-label");

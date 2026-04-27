@@ -4,7 +4,7 @@ import { LoadingDots } from "../LoadingDots";
 import { SecretInput } from "../SecretInput";
 
 type StackTemplate = "nextjs-saas" | "express-api" | "auto";
-type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "openai-compatible";
+type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "local";
 
 interface DirEntry {
   name: string;
@@ -238,7 +238,7 @@ export function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewP
   }, [pathInput]);
 
   const showLlmSetup = llmStatus ? !llmStatus.hasAnyKey : true;
-  const providerNeedsApiKey = selectedProvider !== "ollama" && selectedProvider !== "openai-compatible";
+  const providerNeedsApiKey = selectedProvider !== "ollama" && selectedProvider !== "local";
   const canSubmit =
     pathInput.trim().length > 0
     && description.trim().length > 0
@@ -265,7 +265,7 @@ export function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewP
       <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-3xl shadow-2xl max-h-[92vh] flex flex-col">
         <div className="px-5 py-4 border-b border-zinc-800 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-zinc-100">New Project</h3>
-          <button onClick={onCancel} className="text-zinc-500 hover:text-zinc-200 transition-colors">
+          <button onClick={onCancel} className="rounded-md p-1 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -408,7 +408,7 @@ export function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewP
                 No API key found for this project/environment. Set one now to avoid init failing immediately.
               </div>
               <div className="flex flex-wrap gap-2">
-                {(["anthropic", "openai", "google", "groq", "ollama", "openai-compatible"] as LlmProvider[]).map((provider) => (
+                {(["anthropic", "openai", "google", "groq", "ollama", "local"] as LlmProvider[]).map((provider) => (
                   <button
                     key={provider}
                     onClick={() => setSelectedProvider(provider)}
@@ -437,7 +437,7 @@ export function NewProjectModal({ currentProjectPath, onCancel, onSubmit }: NewP
         </div>
 
         <div className="px-5 py-3 border-t border-zinc-800 flex justify-end gap-2">
-          <button onClick={onCancel} className="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
+          <button onClick={onCancel} className="px-3 py-1.5 text-xs rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors">
             Cancel
           </button>
           <button
