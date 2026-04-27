@@ -294,7 +294,6 @@ export function App() {
 
             {/* Operation drawer — sits at the bottom of the main column */}
             <OperationDrawer
-              lines={op.lines}
               status={op.status}
               drawerOpen={op.drawerOpen}
               modal={op.modal}
@@ -303,8 +302,6 @@ export function App() {
               onSetDrawerOpen={op.setDrawerOpen}
               onSetModal={op.setModal}
               onSetInputText={op.setInputText}
-              onConfirm={op.handleConfirm}
-              onPromptSubmit={op.handlePromptSubmit}
               onClear={op.clearOutput}
               onAbort={op.abort}
               onSubmitInit={handleSubmitInit}
