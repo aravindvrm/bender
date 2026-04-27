@@ -1,8 +1,8 @@
 import type { Express } from "express";
 import { readEffectiveConfig, type BenderConfig } from "../../state/config.js";
 
-type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "local";
-const LLM_PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "ollama", "local"];
+type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "local" | "openai-compatible";
+const LLM_PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "ollama", "local", "openai-compatible"];
 
 interface LlmRouteDeps {
   getCurrentProject: () => string | null;
@@ -57,6 +57,7 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         groq: { configured: envFlags.groq || configFlags.groq },
         ollama: { configured: envFlags.ollama || configFlags.ollama },
         "local": { configured: envFlags["local"] || configFlags["local"] },
+        "openai-compatible": { configured: envFlags["local"] || configFlags["local"] },
       };
 
       const hasAnyKey =
@@ -115,8 +116,8 @@ export function registerLlmRoutes(app: Express, deps: LlmRouteDeps): void {
         models?: string[];
       };
       const provider = body.provider;
-      if (provider !== "local") {
-        res.status(400).json({ error: "capability detection currently supports provider=local only" });
+      if (provider !== "local" && provider !== "openai-compatible") {
+        res.status(400).json({ error: "capability detection currently supports provider=local or provider=openai-compatible" });
         return;
       }
       const baseUrl = String(body.baseUrl ?? "").trim();

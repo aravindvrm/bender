@@ -1,6 +1,6 @@
 import type { BenderConfig } from "../../state/config.js";
 
-export type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "local";
+export type LlmProvider = "anthropic" | "openai" | "google" | "groq" | "ollama" | "local" | "openai-compatible";
 
 const MODEL_LIST_TIMEOUT_MS = 15_000;
 const CAPABILITY_PROBE_TIMEOUT_MS = 20_000;

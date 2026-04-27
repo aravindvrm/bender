@@ -29,7 +29,7 @@ import { RunHistoryStore, wrapAdapterWithHistory } from "./run-history.js";
 
 const MAX_THREAD_TITLE_CHARS = 120;
 const MAX_MESSAGE_TEXT_CHARS = 40_000;
-const PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "ollama", "local"];
+const PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "ollama", "local", "openai-compatible"];
 
 const CHAT_SYSTEM_PROMPT = [
   "You are Bender Operator, the fixed project assistant for this repository.",
