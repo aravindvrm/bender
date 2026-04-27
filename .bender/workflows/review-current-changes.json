@@ -1,0 +1,53 @@
+{
+  "id": "review-current-changes",
+  "name": "Review Current Changes",
+  "description": "Run reviewer checks on the current repository diff.",
+  "acceptanceCriteria": [
+    "Produces a persisted workflow run record",
+    "Returns reviewer findings summary"
+  ],
+  "version": 1,
+  "enabled": true,
+  "inputSchema": {
+    "type": "object",
+    "properties": {}
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "type": "string"
+      },
+      "issueCount": {
+        "type": "number"
+      },
+      "message": {
+        "type": "string"
+      }
+    }
+  },
+  "steps": [
+    {
+      "id": "review",
+      "type": "action",
+      "name": "Run review pipeline",
+      "config": {
+        "action": "review"
+      }
+    },
+    {
+      "id": "response",
+      "type": "response",
+      "name": "Return review findings summary",
+      "config": {
+        "fields": [
+          "steps.review.status",
+          "steps.review.issueCount",
+          "steps.review.message"
+        ]
+      }
+    }
+  ],
+  "createdAt": 1776696758772,
+  "updatedAt": 1776696758772
+}
