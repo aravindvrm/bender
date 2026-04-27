@@ -11,7 +11,7 @@ import {
   type UIMessage,
 } from "ai";
 import { z } from "zod";
-import { createModelForSelection, getProviderCapabilities } from "../../llm/provider.js";
+import { createModelForSelection, createModelSet, getModelForRole, getProviderCapabilities } from "../../llm/provider.js";
 import { createRoleRuntime, type RoleRuntime } from "../../llm/runtime.js";
 import { createLogger, logError, toLoggerOptions } from "../../logger.js";
 import { readEffectiveConfig, type BenderConfig } from "../../state/config.js";
@@ -19,6 +19,9 @@ import { ChatStore, type ChatThread, type LlmProvider } from "../../state/chat.j
 import { StateManager, formatContextForPrompt } from "../../state/manager.js";
 import { normalizeTaskId } from "../../state/task-plan.js";
 import { appendTask, deleteTask, patchTask } from "./tasks.js";
+import { generateClarifyingQuestions, generateBrief } from "../../roles/clarifier.js";
+import { generateArchitecture, updateArchitecture } from "../../roles/architect.js";
+import { generateInitialPlan, generateFeaturePlan } from "../../roles/planner.js";
 import { getAllAgents } from "../../state/agents.js";
 import type { SpinnerAdapter, UIAdapter } from "../adapter.js";
 import { runAnalyzeOperation, runAuditOperation, runImplementOperation } from "./run-operations.js";
@@ -30,12 +33,38 @@ const PROVIDERS: LlmProvider[] = ["anthropic", "openai", "google", "groq", "olla
 
 const CHAT_SYSTEM_PROMPT = [
   "You are Bender Operator, the fixed project assistant for this repository.",
-  "You can execute built-in Bender actions via tools: list/add/update/delete tasks, run a task, run audits, and run project analysis.",
-  "When the user asks to perform one of those actions, call the appropriate Bender tool instead of only describing what to do.",
-  "AGENT IDs: When specifying an implementerAgentId, you MUST use an exact agent ID from the list shown in the tool description. Never invent, guess, or paraphrase agent names. If unsure which agent fits, omit implementerAgentId entirely rather than fabricating one.",
-  "Use external MCP tools only when needed for repository/external context, not for core Bender task/audit actions.",
-  "After each tool call, summarize what changed and provide the resulting IDs/status clearly.",
-  "If uncertain, state assumptions explicitly instead of hallucinating facts.",
+  "",
+  "## Core capabilities",
+  "You have two categories of tools:",
+  "",
+  "**Task management:** list, add, update, delete tasks; run a specific task; run audits; re-analyze the project.",
+  "",
+  "**Planning pipeline (propose → approve → save):**",
+  "These tools drive the full planning workflow conversationally. The flow is:",
+  "  1. bender_clarify_project  — ask targeted questions about what the user wants to build",
+  "  2. bender_generate_brief   — produce a structured product brief from the description + your Q&A answers",
+  "  3. bender_save_brief       — persist the approved brief (only after user says it looks right)",
+  "  4. bender_propose_architecture — generate architecture doc from the brief (or update for a new feature)",
+  "  5. bender_save_architecture — persist the approved architecture",
+  "  6. bender_propose_tasks    — break the work into ordered implementation tasks",
+  "  7. bender_save_tasks       — persist the approved task plan",
+  "",
+  "## Rules for the planning pipeline",
+  "- ALWAYS call bender_clarify_project before generating a brief for a new project or major feature.",
+  "- Present each proposal (brief, architecture, tasks) to the user before saving. Ask: 'Does this look right? Any changes?'",
+  "- Only call a _save_ tool after the user explicitly approves. Never save without approval.",
+  "- If the user edits something, incorporate their edits into the content before saving.",
+  "- For an EXISTING project feature: skip clarify/brief steps and go straight to bender_propose_architecture with the feature description.",
+  "- For a NEW project: run the full pipeline in order.",
+  "",
+  "## Question formatting",
+  "When asking the user questions (clarifying or approval), format them as clear prose — one question at a time or a short numbered list if multiple are needed. Be specific about what you need and why it matters.",
+  "",
+  "## General rules",
+  "- When the user asks to perform an action, call the appropriate tool instead of only describing what to do.",
+  "- AGENT IDs: when specifying an implementerAgentId, use an exact agent ID from the tool description. Never invent or guess agent names; omit the field rather than fabricate one.",
+  "- After each tool call, summarize what happened and provide resulting IDs/status clearly.",
+  "- If uncertain, state assumptions explicitly instead of hallucinating facts.",
 ].join("\n");
 
 const inFlightChatResponses = new Set<string>();
@@ -426,6 +455,230 @@ export async function createBenderChatTools(
         return {
           ok: true,
           ...summary,
+        };
+      },
+    }),
+
+    // -----------------------------------------------------------------------
+    // Planning pipeline tools
+    // -----------------------------------------------------------------------
+
+    bender_clarify_project: tool({
+      description: [
+        "Ask targeted clarifying questions about what the user wants to build.",
+        "Use this as the first step before generating a product brief for a new project or major feature.",
+        "Returns a numbered list of clarifying questions. Present them to the user and wait for answers.",
+        "Then call bender_generate_brief with the description and the Q&A exchange.",
+      ].join(" "),
+      inputSchema: z.object({
+        description: z.string().min(1).describe("The user's raw description of what they want to build."),
+      }),
+      execute: async ({ description }, context?: { abortSignal?: AbortSignal }) => {
+        const effectiveSignal = context?.abortSignal ?? signal;
+        throwIfAborted(effectiveSignal);
+        const config = await readEffectiveConfig(projectRoot);
+        const models = createModelSet(config);
+        const model = getModelForRole(models, "clarifier");
+        const state = new StateManager(projectRoot);
+        const existingContext = state.isInitialized() ? await state.gatherContext() : null;
+        throwIfAborted(effectiveSignal);
+        const questions = await generateClarifyingQuestions(model, description, existingContext);
+        throwIfAborted(effectiveSignal);
+        return { ok: true, questions };
+      },
+    }),
+
+    bender_generate_brief: tool({
+      description: [
+        "Generate a structured product brief from the user's description and the clarification Q&A.",
+        "Call this after bender_clarify_project and after the user has answered the questions.",
+        "Returns the brief as markdown text. Present it to the user for review.",
+        "Only call bender_save_brief after the user explicitly approves.",
+      ].join(" "),
+      inputSchema: z.object({
+        description: z.string().min(1).describe("The original description of what the user wants to build."),
+        qa: z.array(z.object({
+          role: z.enum(["user", "assistant"]),
+          content: z.string(),
+        })).describe("The clarification conversation: assistant questions and user answers, in order."),
+      }),
+      execute: async ({ description, qa }, context?: { abortSignal?: AbortSignal }) => {
+        const effectiveSignal = context?.abortSignal ?? signal;
+        throwIfAborted(effectiveSignal);
+        const config = await readEffectiveConfig(projectRoot);
+        const models = createModelSet(config);
+        const model = getModelForRole(models, "clarifier");
+        const state = new StateManager(projectRoot);
+        const existingContext = state.isInitialized() ? await state.gatherContext() : null;
+        throwIfAborted(effectiveSignal);
+        const brief = await generateBrief(model, description, qa, existingContext);
+        throwIfAborted(effectiveSignal);
+        return { ok: true, brief };
+      },
+    }),
+
+    bender_save_brief: tool({
+      description: [
+        "Persist the approved product brief to .bender/brief.md.",
+        "Only call this after the user has explicitly approved the brief content.",
+        "Pass the final brief text (including any user edits).",
+      ].join(" "),
+      inputSchema: z.object({
+        content: z.string().min(1).describe("The approved brief markdown content to save."),
+      }),
+      execute: async ({ content }, context?: { abortSignal?: AbortSignal }) => {
+        throwIfAborted(context?.abortSignal ?? signal);
+        const state = new StateManager(projectRoot);
+        if (!state.isInitialized()) await state.init();
+        await state.writeBrief(content.trim());
+        return { ok: true, message: "Brief saved to .bender/brief.md" };
+      },
+    }),
+
+    bender_propose_architecture: tool({
+      description: [
+        "Generate an architecture document from the product brief.",
+        "For a NEW project: reads the saved brief (or accepts briefContent directly) and calls the architect role.",
+        "For an EXISTING project feature: pass featureDescription and the architect will produce targeted updates",
+        "  (schema migrations, API changes, new conventions) relative to the existing architecture.",
+        "Returns the proposed architecture as markdown. Present it to the user for review.",
+        "Only call bender_save_architecture after the user explicitly approves.",
+      ].join(" "),
+      inputSchema: z.object({
+        featureDescription: z.string().optional().describe("For existing projects: the feature or change being planned. Omit for new projects."),
+        briefContent: z.string().optional().describe("For new projects: the brief text to use. If omitted, reads .bender/brief.md."),
+      }),
+      execute: async ({ featureDescription, briefContent }, context?: { abortSignal?: AbortSignal }) => {
+        const effectiveSignal = context?.abortSignal ?? signal;
+        throwIfAborted(effectiveSignal);
+        const config = await readEffectiveConfig(projectRoot);
+        const models = createModelSet(config);
+        const model = getModelForRole(models, "architect");
+        const state = new StateManager(projectRoot);
+        const existingContext = state.isInitialized() ? await state.gatherContext() : null;
+        throwIfAborted(effectiveSignal);
+
+        if (featureDescription && existingContext?.architecture) {
+          // Existing project — produce targeted architecture update
+          const result = await updateArchitecture(model, featureDescription, config, existingContext);
+          throwIfAborted(effectiveSignal);
+          return {
+            ok: true,
+            kind: "update" as const,
+            architectureUpdate: result.architectureUpdate,
+            schemaMigration: result.schemaMigration,
+          };
+        } else {
+          // New project — generate full architecture from brief
+          const brief = briefContent?.trim() || existingContext?.brief || null;
+          if (!brief) {
+            return { ok: false, error: "No brief available. Call bender_generate_brief first or pass briefContent." };
+          }
+          const architecture = await generateArchitecture(model, brief, config, existingContext);
+          throwIfAborted(effectiveSignal);
+          return {
+            ok: true,
+            kind: "full" as const,
+            architecture,
+            schemaMigration: null,
+          };
+        }
+      },
+    }),
+
+    bender_save_architecture: tool({
+      description: [
+        "Persist the approved architecture to .bender/architecture.md.",
+        "For architecture updates (existing project), also writes any schema migration to .bender/schema.sql.",
+        "Only call this after the user has explicitly approved the architecture content.",
+      ].join(" "),
+      inputSchema: z.object({
+        content: z.string().min(1).describe("The approved architecture markdown content to save."),
+        schemaMigration: z.string().optional().describe("SQL migration to append to .bender/schema.sql, if any."),
+      }),
+      execute: async ({ content, schemaMigration }, context?: { abortSignal?: AbortSignal }) => {
+        throwIfAborted(context?.abortSignal ?? signal);
+        const state = new StateManager(projectRoot);
+        if (!state.isInitialized()) await state.init();
+        await state.writeArchitecture(content.trim());
+        if (schemaMigration?.trim()) {
+          const existing = await state.readSchema();
+          const separator = existing?.trim() ? "\n\n-- Migration\n" : "";
+          await state.writeSchema(`${existing ?? ""}${separator}${schemaMigration.trim()}\n`);
+        }
+        return {
+          ok: true,
+          message: schemaMigration?.trim()
+            ? "Architecture and schema migration saved."
+            : "Architecture saved to .bender/architecture.md",
+        };
+      },
+    }),
+
+    bender_propose_tasks: tool({
+      description: [
+        "Generate an ordered implementation task plan.",
+        "For an EXISTING project feature: pass featureDescription and architectureUpdate (from bender_propose_architecture).",
+        "For a NEW project: pass briefContent and architectureContent (full architecture text).",
+        "Returns the task plan as markdown. Present it to the user for review.",
+        "Only call bender_save_tasks after the user explicitly approves.",
+      ].join(" "),
+      inputSchema: z.object({
+        featureDescription: z.string().optional().describe("For existing projects: the feature being planned."),
+        architectureUpdate: z.string().optional().describe("For existing projects: the architecture update text from bender_propose_architecture."),
+        briefContent: z.string().optional().describe("For new projects: the brief text. If omitted, reads .bender/brief.md."),
+        architectureContent: z.string().optional().describe("For new projects: the full architecture text. If omitted, reads .bender/architecture.md."),
+      }),
+      execute: async ({ featureDescription, architectureUpdate, briefContent, architectureContent }, context?: { abortSignal?: AbortSignal }) => {
+        const effectiveSignal = context?.abortSignal ?? signal;
+        throwIfAborted(effectiveSignal);
+        const config = await readEffectiveConfig(projectRoot);
+        const models = createModelSet(config);
+        const model = getModelForRole(models, "planner");
+        const state = new StateManager(projectRoot);
+        const existingContext = state.isInitialized() ? await state.gatherContext() : null;
+        throwIfAborted(effectiveSignal);
+
+        let tasks: string;
+        if (featureDescription && architectureUpdate && existingContext) {
+          // Existing project feature plan
+          tasks = await generateFeaturePlan(model, featureDescription, architectureUpdate, existingContext);
+        } else {
+          // New project initial plan
+          const brief = briefContent?.trim() || existingContext?.brief || null;
+          const architecture = architectureContent?.trim() || existingContext?.architecture || null;
+          if (!brief || !architecture) {
+            return {
+              ok: false,
+              error: "Both brief and architecture are required for a new project plan. Save them first or pass content directly.",
+            };
+          }
+          tasks = await generateInitialPlan(model, brief, architecture);
+        }
+        throwIfAborted(effectiveSignal);
+        return { ok: true, tasks };
+      },
+    }),
+
+    bender_save_tasks: tool({
+      description: [
+        "Persist the approved task plan to .bender/tasks/current.md, replacing the current task list.",
+        "Only call this after the user has explicitly approved the task plan.",
+        "Pass the final task markdown (including any user edits).",
+      ].join(" "),
+      inputSchema: z.object({
+        content: z.string().min(1).describe("The approved task plan markdown content to save."),
+      }),
+      execute: async ({ content }, context?: { abortSignal?: AbortSignal }) => {
+        throwIfAborted(context?.abortSignal ?? signal);
+        const state = new StateManager(projectRoot);
+        if (!state.isInitialized()) await state.init();
+        await state.writeCurrentTasks(content.trim());
+        const plan = await state.readCurrentTaskPlan();
+        return {
+          ok: true,
+          taskCount: plan?.tasks.length ?? 0,
+          message: `Task plan saved with ${plan?.tasks.length ?? 0} tasks.`,
         };
       },
     }),
