@@ -7,7 +7,8 @@ import {
   readUIMessageStream,
   type UIMessage,
 } from "ai";
-import { Check, MessageSquarePlus, Send, Square, X } from "lucide-react";
+import { Check, ChevronDown, MessageSquarePlus, Pencil, Send, Square, X } from "lucide-react";
+// MessageSquarePlus used in ConversationPicker
 import { LoadingDots } from "./LoadingDots";
 
 // ---------------------------------------------------------------------------
@@ -89,13 +90,13 @@ function buildCommands(opts: {
     },
     {
       name: "new",
-      description: "Start a new conversation thread (⌘K)",
+      description: "Start a new conversation (⌘K) — prior conversations are saved and accessible",
       kind: "action",
       onAction: opts.onNewThread,
     },
     {
       name: "clear",
-      description: "Hide messages in this thread",
+      description: "Hide messages in this conversation (doesn't delete them)",
       kind: "action",
       onAction: opts.onClear,
     },
@@ -191,6 +192,80 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const data = await res.json().catch(() => ({})) as { error?: string } & T;
   if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`);
   return data;
+}
+
+// ---------------------------------------------------------------------------
+// Relative time helper
+// ---------------------------------------------------------------------------
+
+function relativeTime(ts: number): string {
+  const diffMs = Date.now() - ts;
+  const secs = Math.floor(diffMs / 1000);
+  if (secs < 60) return "just now";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// ---------------------------------------------------------------------------
+// ConversationPicker sub-component
+// ---------------------------------------------------------------------------
+
+interface ConversationPickerProps {
+  threads: ChatThread[];
+  activeThreadId: string | null;
+  onSelect: (threadId: string) => void;
+  onNew: () => void;
+  onClose: () => void;
+}
+
+function ConversationPicker({ threads, activeThreadId, onSelect, onNew, onClose }: ConversationPickerProps) {
+  return (
+    <>
+      {/* Backdrop */}
+      <div className="absolute inset-0 z-40" onClick={onClose} />
+      {/* Panel */}
+      <div className="absolute top-full left-0 right-0 z-50 mt-px bg-zinc-900 border border-zinc-700/80 rounded-b-lg shadow-2xl overflow-hidden">
+        <div className="px-3 py-2 border-b border-zinc-800/60 flex items-center justify-between">
+          <span className="text-[10px] text-zinc-600 uppercase tracking-wide">Conversations</span>
+          <button
+            onClick={onNew}
+            className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            <MessageSquarePlus className="h-3 w-3" />
+            New
+            <kbd className="ml-0.5 text-[9px] text-zinc-700">⌘K</kbd>
+          </button>
+        </div>
+        <ul className="max-h-52 overflow-y-auto py-1">
+          {threads.map((thread) => {
+            const isActive = thread.id === activeThreadId;
+            return (
+              <li key={thread.id}>
+                <button
+                  onClick={() => { onSelect(thread.id); onClose(); }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors ${
+                    isActive ? "bg-zinc-800/60 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+                  }`}
+                >
+                  <span className="flex-1 min-w-0 text-xs truncate">{thread.title}</span>
+                  <span className="shrink-0 text-[10px] text-zinc-600">{relativeTime(thread.updatedAt)}</span>
+                  {isActive && <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500" />}
+                </button>
+              </li>
+            );
+          })}
+          {threads.length === 0 && (
+            <li className="px-3 py-2 text-[11px] text-zinc-600 italic">No conversations yet</li>
+          )}
+        </ul>
+      </div>
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +378,9 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
   // Slash command menu state
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuIndex, setMenuIndex] = useState(0);
+
+  // Conversation picker
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const userCancelledRef = useRef(false);
@@ -703,12 +781,49 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
 
   return (
     <div className="h-full min-h-0 flex flex-col bg-zinc-950 text-zinc-200">
+      {/* Conversation bar */}
+      <div className="relative shrink-0">
+        <div className="flex items-center gap-1 px-3 h-8 border-b border-zinc-800/50">
+          <button
+            onClick={() => setPickerOpen((v) => !v)}
+            className="flex items-center gap-1 min-w-0 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+            title="Switch conversation"
+          >
+            <span className="truncate max-w-[220px]">
+              {activeThread?.title ?? (loadingThreads ? "Loading…" : "Chat")}
+            </span>
+            <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${pickerOpen ? "rotate-180" : ""}`} />
+          </button>
+          <div className="flex-1" />
+          <button
+            onClick={() => void createNewThreadRef.current()}
+            disabled={sending || loadingThreads}
+            title="New conversation (⌘K)"
+            className="flex items-center gap-1 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 px-1 py-0.5 rounded"
+          >
+            <Pencil className="h-3 w-3" />
+            <span className="hidden sm:inline">New</span>
+          </button>
+        </div>
+        {pickerOpen && (
+          <ConversationPicker
+            threads={threads}
+            activeThreadId={activeThreadId}
+            onSelect={(id) => setActiveThreadId(id)}
+            onNew={() => { void createNewThreadRef.current(); setPickerOpen(false); }}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
+      </div>
+
       {/* Messages */}
       <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-        {loadingMessages && <LoadingDots size={18} label="Loading chat…" textClassName="text-xs text-zinc-500" />}
+        {loadingMessages && <LoadingDots size={18} label="Loading…" textClassName="text-xs text-zinc-500" />}
         {!loadingMessages && visibleMessages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full min-h-[80px] gap-2 select-none">
-            <p className="text-[11px] text-zinc-600 italic">Type <span className="font-mono text-zinc-500">/</span> for commands or ask anything about your project…</p>
+            <p className="text-[11px] text-zinc-600 italic">
+              Ask anything about your project, or type <span className="font-mono text-zinc-500">/</span> for commands
+            </p>
           </div>
         )}
         {!loadingMessages && visibleMessages.map((message) => {
@@ -799,31 +914,20 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={activeThread ? "Message… (/ for commands, ⌘K new thread)" : "Loading…"}
+            placeholder={activeThread ? "Message… (/ for commands)" : "Loading…"}
             disabled={!activeThread || sending}
             rows={2}
-            className="w-full resize-none bg-zinc-900 border border-zinc-700 rounded-md pl-3 pr-20 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
+            className="w-full resize-none bg-zinc-900 border border-zinc-700 rounded-md pl-3 pr-12 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
           />
-          {/* Right button cluster */}
-          <div className="absolute right-1.5 bottom-1.5 flex items-center gap-1">
-            <button
-              onClick={() => void createNewThreadRef.current()}
-              disabled={sending || loadingThreads}
-              title="New thread (⌘K)"
-              className="inline-flex h-7 w-7 items-center justify-center rounded border border-zinc-800 text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              <MessageSquarePlus className="h-3 w-3" />
-            </button>
-            <button
-              onClick={() => { if (sending) { stopMessage(); return; } void sendMessage(); }}
-              disabled={!sending && (!activeThread || !draft.trim())}
-              aria-label={sending ? "Stop response" : "Send message"}
-              title={sending ? "Stop (Esc)" : "Send (Enter)"}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              {sending ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
-            </button>
-          </div>
+          <button
+            onClick={() => { if (sending) { stopMessage(); return; } void sendMessage(); }}
+            disabled={!sending && (!activeThread || !draft.trim())}
+            aria-label={sending ? "Stop response" : "Send message"}
+            title={sending ? "Stop (Esc)" : "Send (Enter)"}
+            className="absolute right-1.5 bottom-1.5 inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {sending ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
+          </button>
         </div>
       </div>
     </div>

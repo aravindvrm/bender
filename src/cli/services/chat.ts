@@ -1270,6 +1270,16 @@ export async function streamChatThreadResponse(
   if (incomingUser && !(await store.hasMessage(threadId, incomingUser.id))) {
     throwIfAborted(signal);
     await appendChatMessage(projectRoot, threadId, { message: incomingUser });
+    // Auto-title the thread from the first user message when it still has the default name.
+    if (activeThread.title === "New Chat" || activeThread.title === "Chat") {
+      const userText = extractUserMessageText(incomingUser).trim();
+      if (userText) {
+        const autoTitle = userText.length > 60
+          ? userText.slice(0, 57).replace(/\s+\S*$/, "").trimEnd() + "…"
+          : userText;
+        await store.upsertThread({ ...activeThread, title: autoTitle, updatedAt: Date.now() });
+      }
+    }
   }
 
   throwIfAborted(signal);
