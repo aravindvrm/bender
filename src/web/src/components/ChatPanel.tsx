@@ -7,7 +7,7 @@ import {
   readUIMessageStream,
   type UIMessage,
 } from "ai";
-import { Send, Square } from "lucide-react";
+import { Check, MessageSquarePlus, Send, Square, X } from "lucide-react";
 import { LoadingDots } from "./LoadingDots";
 
 // ---------------------------------------------------------------------------
@@ -29,6 +29,7 @@ interface SlashCommand {
 // Commands are built once inside the component so they can close over props.
 function buildCommands(opts: {
   onClear: () => void;
+  onNewThread: () => void;
   onRunOperation?: (url: string, body?: Record<string, unknown>) => void;
 }): SlashCommand[] {
   return [
@@ -87,8 +88,14 @@ function buildCommands(opts: {
       prompt: "List all available slash commands and what they do.",
     },
     {
+      name: "new",
+      description: "Start a new conversation thread (⌘K)",
+      kind: "action",
+      onAction: opts.onNewThread,
+    },
+    {
       name: "clear",
-      description: "Clear this conversation",
+      description: "Hide messages in this thread",
       kind: "action",
       onAction: opts.onClear,
     },
@@ -300,6 +307,7 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
   const abortControllerRef = useRef<AbortController | null>(null);
   const userCancelledRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === activeThreadId) ?? null,
@@ -328,8 +336,17 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
     });
   }, [activeThread, sending, messages]);
 
+  // createNewThread is defined after createThread in the thread management section below.
+  // We use a stable ref so the commands memo and keydown handler can reference it without
+  // circular dependency issues.
+  const createNewThreadRef = useRef<() => Promise<void>>(async () => {});
+
   const commands = useMemo(
-    () => buildCommands({ onClear: () => void clearMessages(), onRunOperation }),
+    () => buildCommands({
+      onClear: () => void clearMessages(),
+      onNewThread: () => void createNewThreadRef.current(),
+      onRunOperation,
+    }),
     [clearMessages, onRunOperation],
   );
 
@@ -428,6 +445,24 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
     return data.thread;
   }, []);
 
+  // Create a fresh thread and switch to it (⌘K).
+  const createNewThread = useCallback(async () => {
+    if (!projectPath) return;
+    try {
+      const thread = await createThread("Chat");
+      setThreads((prev) => [thread, ...prev]);
+      setActiveThreadId(thread.id);
+      setMessages([]);
+      setDraft("");
+      setError(null);
+    } catch (err) {
+      setError(parseErrorMessage(err));
+    }
+  }, [createThread, projectPath]);
+
+  // Keep the ref in sync so commands/keydown can call it without stale closures.
+  useEffect(() => { createNewThreadRef.current = createNewThread; }, [createNewThread]);
+
   const loadThreads = useCallback(async (): Promise<string | null> => {
     if (!projectPath) { setThreads([]); setActiveThreadId(null); return null; }
     setLoadingThreads(true);
@@ -477,19 +512,23 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
     void clearMessages();
   }, [clearMessages, clearToken]);
 
+  // Auto-scroll to bottom when messages change or while streaming.
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, sending]);
+
   // ---------------------------------------------------------------------------
   // Send
   // ---------------------------------------------------------------------------
 
-  const sendMessage = useCallback(async () => {
+  const sendText = useCallback(async (text: string) => {
     if (!activeThread || sending) return;
-    const text = draft.trim();
-    if (!text) return;
+    if (!text.trim()) return;
 
     const userMessage: UIMessage = {
       id: safeNowId(),
       role: "user",
-      parts: [{ type: "text", text }],
+      parts: [{ type: "text", text: text.trim() }],
       metadata: {
         provider: activeThread.provider,
         model: activeThread.model,
@@ -498,7 +537,6 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
       },
     };
 
-    // Filter out trigger notification rows — they are UI-only and must not be sent to the LLM.
     const outgoingMessages = [...messages.filter((m) => msgMeta(m).kind !== "trigger"), userMessage];
     setMessages(outgoingMessages);
     setDraft("");
@@ -571,7 +609,12 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
       userCancelledRef.current = false;
       setSending(false);
     }
-  }, [activeThread, draft, loadThreads, messages, sending]);
+  }, [activeThread, loadThreads, messages, sending]);
+
+  /** Send the current draft text. */
+  const sendMessage = useCallback(async () => {
+    await sendText(draft);
+  }, [draft, sendText]);
 
   const stopMessage = useCallback(() => {
     userCancelledRef.current = true;
@@ -581,34 +624,69 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
   }, []);
 
   // ---------------------------------------------------------------------------
-  // Keyboard handler for textarea
+  // Keyboard shortcuts
   // ---------------------------------------------------------------------------
 
+  // Approve shortcut: send a quick "yes, proceed" when the last visible message
+  // is from the assistant and the draft is empty.
+  const lastVisibleMessage = visibleMessages[visibleMessages.length - 1] ?? null;
+  const canQuickApprove =
+    !sending &&
+    !draft.trim() &&
+    lastVisibleMessage?.role === "assistant";
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    const meta = e.metaKey || e.ctrlKey;
+
+    // Slash-menu navigation
     if (menuOpen && filteredCommands.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setMenuIndex((i) => Math.min(i + 1, filteredCommands.length - 1));
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setMenuIndex((i) => Math.max(i - 1, 0));
-        return;
-      }
+      if (e.key === "ArrowDown") { e.preventDefault(); setMenuIndex((i) => Math.min(i + 1, filteredCommands.length - 1)); return; }
+      if (e.key === "ArrowUp")   { e.preventDefault(); setMenuIndex((i) => Math.max(i - 1, 0)); return; }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
         const cmd = filteredCommands[menuIndex];
         if (cmd) selectCommand(cmd);
         return;
       }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setMenuOpen(false);
-        return;
-      }
+      if (e.key === "Escape") { e.preventDefault(); setMenuOpen(false); return; }
     }
 
+    // Escape — stop streaming if active, else dismiss menu
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (sending) { stopMessage(); return; }
+      setMenuOpen(false);
+      return;
+    }
+
+    // ⌘K — new thread
+    if (meta && e.key === "k") {
+      e.preventDefault();
+      void createNewThreadRef.current();
+      return;
+    }
+
+    // ⌘Enter — quick approve (send "Looks good." when draft is empty and last msg is assistant)
+    if (meta && e.key === "Enter" && !draft.trim() && canQuickApprove) {
+      e.preventDefault();
+      void sendText("Looks good. Please proceed.");
+      return;
+    }
+
+    // ⌘⇧⌫ — open a revision prompt
+    if (meta && e.shiftKey && e.key === "Backspace" && !draft.trim() && canQuickApprove) {
+      e.preventDefault();
+      setDraft("Let me revise this: ");
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      });
+      return;
+    }
+
+    // Enter — send
     if (e.key === "Enter" && !e.shiftKey && !menuOpen) {
       e.preventDefault();
       void sendMessage();
@@ -672,11 +750,38 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
             <LoadingDots size={14} label="Thinking…" textClassName="text-xs text-zinc-500" />
           </div>
         )}
+        {/* Scroll anchor */}
+        <div ref={messagesEndRef} />
       </div>
 
       {/* Input area */}
-      <div className="px-3 py-2 border-t border-zinc-800 shrink-0">
-        {error && <p className="text-xs text-red-400 mb-2">{error}</p>}
+      <div className="px-3 pt-1.5 pb-2 border-t border-zinc-800 shrink-0 space-y-1.5">
+        {error && <p className="text-xs text-red-400">{error}</p>}
+
+        {/* Quick-approve bar — shown when last message is from assistant and draft is empty */}
+        {canQuickApprove && (
+          <div className="flex items-center gap-2 px-1">
+            <button
+              onClick={() => void sendText("Looks good. Please proceed.")}
+              className="flex items-center gap-1 text-[10px] text-emerald-500 hover:text-emerald-400 border border-emerald-900/60 hover:border-emerald-700 rounded px-2 py-0.5 transition-colors"
+              title="Approve (⌘↩)"
+            >
+              <Check className="h-2.5 w-2.5" />
+              Approve
+              <kbd className="ml-1 text-[9px] text-emerald-700">⌘↩</kbd>
+            </button>
+            <button
+              onClick={() => { setDraft("Let me revise this: "); textareaRef.current?.focus(); }}
+              className="flex items-center gap-1 text-[10px] text-zinc-600 hover:text-zinc-400 border border-zinc-800 hover:border-zinc-600 rounded px-2 py-0.5 transition-colors"
+              title="Revise (⌘⇧⌫)"
+            >
+              <X className="h-2.5 w-2.5" />
+              Revise
+              <kbd className="ml-1 text-[9px] text-zinc-700">⌘⇧⌫</kbd>
+            </button>
+          </div>
+        )}
+
         <div className="relative">
           {/* Slash command menu */}
           {menuOpen && filteredCommands.length > 0 && (
@@ -694,20 +799,31 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={activeThread ? "Type / for commands…" : "Loading…"}
+            placeholder={activeThread ? "Message… (/ for commands, ⌘K new thread)" : "Loading…"}
             disabled={!activeThread || sending}
             rows={2}
-            className="w-full resize-none bg-zinc-900 border border-zinc-700 rounded-md pl-3 pr-12 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
+            className="w-full resize-none bg-zinc-900 border border-zinc-700 rounded-md pl-3 pr-20 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
           />
-          <button
-            onClick={() => { if (sending) { stopMessage(); return; } void sendMessage(); }}
-            disabled={!sending && (!activeThread || !draft.trim())}
-            aria-label={sending ? "Stop response" : "Send message"}
-            title={sending ? "Stop" : "Send"}
-            className="absolute right-1.5 bottom-1.5 inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            {sending ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
-          </button>
+          {/* Right button cluster */}
+          <div className="absolute right-1.5 bottom-1.5 flex items-center gap-1">
+            <button
+              onClick={() => void createNewThreadRef.current()}
+              disabled={sending || loadingThreads}
+              title="New thread (⌘K)"
+              className="inline-flex h-7 w-7 items-center justify-center rounded border border-zinc-800 text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <MessageSquarePlus className="h-3 w-3" />
+            </button>
+            <button
+              onClick={() => { if (sending) { stopMessage(); return; } void sendMessage(); }}
+              disabled={!sending && (!activeThread || !draft.trim())}
+              aria-label={sending ? "Stop response" : "Send message"}
+              title={sending ? "Stop (Esc)" : "Send (Enter)"}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {sending ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
+            </button>
+          </div>
         </div>
       </div>
     </div>
