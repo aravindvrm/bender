@@ -7,45 +7,40 @@ import {
 } from "lucide-react";
 import type { OperationStatus, OperationModal } from "../hooks/useOperation";
 import { LoadingDots } from "./LoadingDots";
-import { ChatPanel } from "./ChatPanel";
+import { ChatPanel, type ChatTrigger } from "./ChatPanel";
 import { TerminalPanel } from "./drawer/TerminalPanel";
 import { RunHistoryPanel } from "./RunHistoryPanel";
 import { NewProjectModal } from "./drawer/NewProjectModal";
-import { PlanTaskModal } from "./drawer/PlanTaskModal";
 
 export type { InitModalSubmission } from "./drawer/NewProjectModal";
-export type { TaskCreateSubmission } from "./drawer/PlanTaskModal";
 
 interface OperationDrawerProps {
   status: OperationStatus;
   drawerOpen: boolean;
   modal: OperationModal;
-  inputText: string;
   currentProjectPath: string | null;
   onSetDrawerOpen: (open: boolean) => void;
   onSetModal: (modal: OperationModal) => void;
-  onSetInputText: (text: string) => void;
   onClear: () => void;
   onAbort: () => void;
   onSubmitInit: (submission: import("./drawer/NewProjectModal").InitModalSubmission) => void;
-  onCreateTask: (submission: import("./drawer/PlanTaskModal").TaskCreateSubmission) => Promise<void>;
   onRunOperation?: (url: string, body?: Record<string, unknown>) => void;
+  /** Trigger fired by sidebar / onNewTask buttons — auto-switches to chat tab. */
+  chatTrigger?: ChatTrigger | null;
 }
 
 export function OperationDrawer({
   status,
   drawerOpen,
   modal,
-  inputText,
   currentProjectPath,
   onSetDrawerOpen: _onSetDrawerOpen,
   onSetModal,
-  onSetInputText,
   onClear,
   onAbort,
   onSubmitInit,
-  onCreateTask,
   onRunOperation,
+  chatTrigger,
 }: OperationDrawerProps) {
   const initialDrawerHeight = (() => {
     if (typeof window === "undefined") return 320;
@@ -81,6 +76,16 @@ export function OperationDrawer({
       setCollapsed(false);
     }
   }, [status]);
+
+  // Auto-switch to the chat tab whenever a new trigger fires.
+  const prevTriggerTokenRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!chatTrigger) return;
+    if (chatTrigger.token === prevTriggerTokenRef.current) return;
+    prevTriggerTokenRef.current = chatTrigger.token;
+    setActiveTab("chat");
+    setCollapsed(false);
+  }, [chatTrigger]);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -124,18 +129,6 @@ export function OperationDrawer({
           onSubmit={(submission) => {
             onSetModal(null);
             onSubmitInit(submission);
-          }}
-        />
-      )}
-
-      {modal?.kind === "plan" && (
-        <PlanTaskModal
-          initialDescription={inputText}
-          onCancel={() => { onSetModal(null); onSetInputText(""); }}
-          onSubmit={async (submission) => {
-            await onCreateTask(submission);
-            onSetInputText("");
-            onSetModal(null);
           }}
         />
       )}
@@ -239,6 +232,7 @@ export function OperationDrawer({
               projectPath={currentProjectPath}
               clearToken={chatClearToken}
               onRunOperation={onRunOperation}
+              trigger={chatTrigger}
             />
           </div>
         )}

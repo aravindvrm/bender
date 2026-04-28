@@ -114,6 +114,11 @@ function keyForProject(projectPath: string): string {
   return `bender.chat.activeThread.${projectPath}`;
 }
 
+/** Cast UIMessage.metadata (typed as {}) to a looser type for custom fields. */
+function msgMeta(message: UIMessage): Record<string, unknown> {
+  return (message.metadata ?? {}) as Record<string, unknown>;
+}
+
 function safeNowId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -185,11 +190,21 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 // Props
 // ---------------------------------------------------------------------------
 
+export type ChatTriggerKind = "analyze" | "new-task" | "new-project";
+
+export interface ChatTrigger {
+  /** Increments each time a new trigger fires; ChatPanel uses this to detect changes. */
+  token: number;
+  kind: ChatTriggerKind;
+}
+
 interface ChatPanelProps {
   projectPath: string | null;
   clearToken?: number;
   /** Called when a slash command triggers a backend operation */
   onRunOperation?: (url: string, body?: Record<string, unknown>) => void;
+  /** Imperative trigger fired by parent (sidebar buttons, onNewTask, etc.) */
+  trigger?: ChatTrigger | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +282,7 @@ function SlashMenu({
 // Main component
 // ---------------------------------------------------------------------------
 
-export function ChatPanel({ projectPath, clearToken = 0, onRunOperation }: ChatPanelProps) {
+export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger }: ChatPanelProps) {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
@@ -359,6 +374,48 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation }: ChatP
   }
 
   // ---------------------------------------------------------------------------
+  // Trigger handling (sidebar buttons / onNewTask)
+  // ---------------------------------------------------------------------------
+
+  const prevTriggerTokenRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    if (!trigger) return;
+    if (trigger.token === prevTriggerTokenRef.current) return;
+    prevTriggerTokenRef.current = trigger.token;
+
+    if (trigger.kind === "analyze") {
+      // Run analyze op + inject a notification row
+      onRunOperation?.("/api/run/analyze");
+      const note: UIMessage = {
+        id: safeNowId(),
+        role: "user",
+        parts: [{ type: "text", text: "🔍 Analyzing project…" }],
+        metadata: { kind: "trigger", label: "Analyzing project…" },
+      };
+      setMessages((prev) => [...prev, note]);
+    } else if (trigger.kind === "new-task") {
+      setDraft("Add a new task to the plan: ");
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      });
+    } else if (trigger.kind === "new-project") {
+      // Send as a user message — the LLM will call bender_clarify_project
+      setDraft("I want to set up a new project. Help me get started.");
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trigger]);
+
+  // ---------------------------------------------------------------------------
   // Thread management
   // ---------------------------------------------------------------------------
 
@@ -441,7 +498,8 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation }: ChatP
       },
     };
 
-    const outgoingMessages = [...messages, userMessage];
+    // Filter out trigger notification rows — they are UI-only and must not be sent to the LLM.
+    const outgoingMessages = [...messages.filter((m) => msgMeta(m).kind !== "trigger"), userMessage];
     setMessages(outgoingMessages);
     setDraft("");
     setSending(true);
@@ -576,6 +634,22 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation }: ChatP
           </div>
         )}
         {!loadingMessages && visibleMessages.map((message) => {
+          // Trigger notification rows — slim system event style, not a chat bubble.
+          const meta = msgMeta(message);
+          if (meta.kind === "trigger") {
+            const label = typeof meta.label === "string"
+              ? meta.label
+              : messageToText(message);
+            if (!label) return null;
+            return (
+              <div key={message.id} className="flex items-center gap-2 py-1 select-none">
+                <div className="flex-1 h-px bg-zinc-800/60" />
+                <span className="text-[10px] text-zinc-600 shrink-0">{label}</span>
+                <div className="flex-1 h-px bg-zinc-800/60" />
+              </div>
+            );
+          }
+
           const text = messageToText(message);
           if (!text) return null;
           return (

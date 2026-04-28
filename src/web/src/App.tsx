@@ -3,9 +3,10 @@ import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useProjectState } from "./hooks/useApi";
 import { useOperation } from "./hooks/useOperation";
 import { Sidebar, type View } from "./components/Sidebar";
-import { OperationDrawer, type InitModalSubmission, type TaskCreateSubmission } from "./components/OperationDrawer";
+import { OperationDrawer, type InitModalSubmission } from "./components/OperationDrawer";
 import { LoadingDots } from "./components/LoadingDots";
 import { GitDiffSidebar } from "./components/GitDiffSidebar";
+import type { ChatTrigger } from "./components/ChatPanel";
 
 interface GitDiffSummaryResponse {
   additions?: number;
@@ -21,12 +22,6 @@ const SettingsView = lazy(() => import("./pages/SettingsView").then((m) => ({ de
 const AgentsView = lazy(() => import("./pages/AgentsView").then((m) => ({ default: m.AgentsView })));
 const EvalsView = lazy(() => import("./pages/EvalsView").then((m) => ({ default: m.EvalsView })));
 const WorkflowsView = lazy(() => import("./pages/WorkflowsView").then((m) => ({ default: m.WorkflowsView })));
-
-interface AppendTaskResponse {
-  ok?: boolean;
-  taskId?: string;
-  error?: string;
-}
 
 const VIEW_LABELS: Record<View, string> = {
   plan: "Tasks",
@@ -49,6 +44,7 @@ export function App() {
   });
   const [reviewOpen, setReviewOpen] = useState(false);
   const [diffSummary, setDiffSummary] = useState<{ additions: number; deletions: number } | null>(null);
+  const [chatTrigger, setChatTrigger] = useState<ChatTrigger | null>(null);
   const { state, loading, error, refresh } = useProjectState();
   const op = useOperation(refresh);
   const operationLabel = op.lines.find((line) => line.kind === "header")?.text ?? null;
@@ -110,34 +106,24 @@ export function App() {
   const allowsUninitialized = activeView === "workflows";
   const needsProject = !hasProject && !allowsNoProject;
   const needsInit = hasProject && !isInitialized && !allowsNoProject && !allowsUninitialized;
+  function fireChatTrigger(kind: ChatTrigger["kind"]) {
+    setChatTrigger((prev) => ({ token: (prev?.token ?? 0) + 1, kind }));
+    op.setDrawerOpen(true);
+  }
+
   function handleGlobalAction(action: "new-project" | "analyze") {
     if (action === "new-project") {
       op.setModal({ kind: "init" });
       op.setDrawerOpen(true);
     } else {
+      // Open drawer → chat tab, inject trigger notification, and start the operation.
+      fireChatTrigger("analyze");
       op.startOperation("/api/run/analyze", {}, { onSuccess: () => setActiveView("architecture") });
     }
   }
 
   function handleSubmitInit(submission: InitModalSubmission) {
     op.startOperation("/api/run/init", submission as unknown as Record<string, unknown>);
-  }
-
-  async function handleCreateTask(submission: TaskCreateSubmission) {
-    const res = await fetch("/api/tasks/append", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: submission.title,
-        description: submission.description,
-        agentId: submission.agentId,
-      }),
-    });
-    const body = await res.json().catch(() => ({})) as AppendTaskResponse;
-    if (!res.ok || !body.ok) {
-      throw new Error(body.error ?? `Failed to create task (${res.status})`);
-    }
-    await refresh();
   }
 
   return (
@@ -263,7 +249,7 @@ export function App() {
                     {activeView === "evals" && state && (
                       <EvalsView
                         state={state}
-                        onNewTask={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
+                        onNewTask={() => fireChatTrigger("new-task")}
                         runOperation={(url, body, options) => op.startOperation(url, body, options)}
                       />
                     )}
@@ -271,7 +257,7 @@ export function App() {
                       <PlanView
                         state={state}
                         onImplement={() => op.startOperation("/api/run/implement", {})}
-                        onNewTask={() => { op.setModal({ kind: "plan" }); op.setDrawerOpen(true); }}
+                        onNewTask={() => fireChatTrigger("new-task")}
                         onRunTask={(taskId) => op.startOperation("/api/run/implement", { taskId })}
                         onTasksChanged={refresh}
                       />
@@ -297,16 +283,14 @@ export function App() {
               status={op.status}
               drawerOpen={op.drawerOpen}
               modal={op.modal}
-              inputText={op.inputText}
               currentProjectPath={state?.projectRoot ?? null}
               onSetDrawerOpen={op.setDrawerOpen}
               onSetModal={op.setModal}
-              onSetInputText={op.setInputText}
               onClear={op.clearOutput}
               onAbort={op.abort}
               onSubmitInit={handleSubmitInit}
-              onCreateTask={handleCreateTask}
               onRunOperation={(url, body) => op.startOperation(url, body ?? {})}
+              chatTrigger={chatTrigger}
             />
           </section>
 
