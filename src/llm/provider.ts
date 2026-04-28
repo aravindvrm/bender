@@ -15,6 +15,7 @@ const PROVIDER_DEFAULT_CAPABILITIES: Record<string, { supportsTools: boolean; su
   // Many OpenAI-compatible local servers do not implement stable SSE semantics.
   // Prefer non-streaming by default for reliability.
   "local": { supportsTools: false, supportsJson: false, supportsStreaming: false },
+  "openai-compatible": { supportsTools: false, supportsJson: false, supportsStreaming: false },
 };
 
 function normalizeOpenAiCompatibleBaseUrl(value?: string): string {
@@ -68,13 +69,12 @@ function resolveOpenAiCompatibleBaseUrlForModel(cfg: ProviderConfig, modelId: st
 
 function resolveOpenAiCompatibleBaseUrlCandidatesForModel(cfg: ProviderConfig, modelId: string): string[] {
   const hinted = deriveBaseUrlFromEndpoint(cfg.modelCapabilities?.[modelId]?.endpoint);
-  // Even when the user has pinned a specific endpoint via modelCapabilities,
-  // still generate /v1 and non-/v1 sibling candidates. Users commonly configure
-  // `http://host:port/chat/completions` when the server actually serves at
-  // `http://host:port/v1/chat/completions` (or vice-versa). Trying both is
-  // cheap and avoids forcing users to guess the correct path.
-  const source = hinted ?? cfg.baseUrl;
-  return openAiCompatibleBaseCandidates(source);
+  // When the user has pinned a specific endpoint URL via modelCapabilities, derive
+  // the base URL directly from it (e.g. http://host/chat/completions → http://host).
+  // Don't generate /v1 sibling candidates — if they explicitly specified an endpoint
+  // they've told us the exact path.
+  if (hinted) return [hinted];
+  return openAiCompatibleBaseCandidates(cfg.baseUrl);
 }
 
 function stringifyProviderError(error: unknown): string {
@@ -294,18 +294,11 @@ function resolveOpenAiCompatibleModel(
     }
   }
 
-  // For non-OpenAI chat-style: append responses across all base URLs as a
-  // last-resort fallback. Some servers (e.g., newer OpenAI-compatible
-  // deployments) implement only the /responses endpoint. We try chat
-  // exhaustively first to avoid confusing errors on servers that don't support
-  // responses, but fall back here rather than giving up entirely.
-  if (style === "chat") {
-    for (const baseURL of baseCandidates) {
-      if (!isOfficialOpenAiHost(baseURL)) {
-        fallbackAttempts.push({ style: "responses", baseURL });
-      }
-    }
-  }
+  // Non-OpenAI chat-style errors propagate directly — we don't silently fall back
+  // to responses on arbitrary hosts. LM Studio, llama.cpp, and similar servers
+  // typically don't implement /responses, so trying it would only produce a
+  // confusing second error. If you're hitting api.openai.com the interleaved
+  // responses attempt above handles the fallback already.
 
   const uniqueAttempts: Array<{ style: "chat" | "responses"; baseURL: string }> = [];
   const seen = new Set<string>();
@@ -528,7 +521,7 @@ const PROVIDER_ENV_KEYS: Record<string, string[]> = {
 };
 
 function providerNeedsApiKey(provider: string): boolean {
-  return provider !== "ollama" && provider !== "local";
+  return provider !== "ollama" && provider !== "local" && provider !== "openai-compatible";
 }
 
 function hasProviderEnvKey(provider: string): boolean {
@@ -558,7 +551,7 @@ function resolveModelConfig(
   rootConfig?: BenderConfig,
 ): LanguageModel {
   if (typeof tierConfig === "string") {
-    if (defaultProvider === "local") {
+    if (defaultProvider === "local" || defaultProvider === "openai-compatible") {
       const cfg = rootConfig ? getProviderConfig(rootConfig, defaultProvider) : {};
       const resolvedModel = tierConfig.trim() || cfg.model?.trim() || "local-model";
       return resolveOpenAiCompatibleModel(
@@ -575,11 +568,7 @@ function resolveModelConfig(
     return factory(defaultApiKey)(tierConfig);
   }
 
-  const factory = providerFactories[tierConfig.provider];
-  if (!factory) {
-    throw new Error(`Unknown LLM provider: ${tierConfig.provider}. Supported: ${Object.keys(providerFactories).join(", ")}`);
-  }
-  if (tierConfig.provider === "local") {
+  if (tierConfig.provider === "local" || tierConfig.provider === "openai-compatible") {
     const cfg = rootConfig ? getProviderConfig(rootConfig, tierConfig.provider) : {};
     const resolvedModel = tierConfig.model.trim() || cfg.model?.trim() || "local-model";
     return resolveOpenAiCompatibleModel(
@@ -587,6 +576,10 @@ function resolveModelConfig(
       cfg,
       tierConfig.apiKey?.trim() || cfg.apiKey?.trim() || "not-required",
     );
+  }
+  const factory = providerFactories[tierConfig.provider];
+  if (!factory) {
+    throw new Error(`Unknown LLM provider: ${tierConfig.provider}. Supported: ${Object.keys(providerFactories).join(", ")}`);
   }
   const providerApiKey = tierConfig.apiKey?.trim()
     || (rootConfig ? getProviderConfig(rootConfig, tierConfig.provider).apiKey?.trim() : undefined)
@@ -690,7 +683,7 @@ export function getProviderCapabilities(
   };
   const providerConfig = getProviderConfig(config, provider);
   const modelCaps = model ? providerConfig.modelCapabilities?.[model] : undefined;
-  if (provider === "local") {
+  if (provider === "local" || provider === "openai-compatible") {
     return {
       supportsTools: modelCaps?.supportsTools ?? providerConfig.supportsTools ?? defaults.supportsTools,
       supportsJson: modelCaps?.supportsJson ?? providerConfig.supportsJson ?? defaults.supportsJson,

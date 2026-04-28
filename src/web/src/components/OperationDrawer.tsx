@@ -2,93 +2,98 @@ import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
-  MessageSquare,
+  History,
   Terminal as TerminalIcon,
 } from "lucide-react";
 import type { OperationStatus, OperationModal } from "../hooks/useOperation";
 import { LoadingDots } from "./LoadingDots";
-import { ChatPanel } from "./ChatPanel";
+import { ChatPanel, type ChatTrigger } from "./ChatPanel";
 import { TerminalPanel } from "./drawer/TerminalPanel";
 import { RunHistoryPanel } from "./RunHistoryPanel";
 import { NewProjectModal } from "./drawer/NewProjectModal";
-import { PlanTaskModal } from "./drawer/PlanTaskModal";
 
 export type { InitModalSubmission } from "./drawer/NewProjectModal";
-export type { TaskCreateSubmission } from "./drawer/PlanTaskModal";
+
+type RightPanel = "none" | "console" | "terminal";
 
 interface OperationDrawerProps {
   status: OperationStatus;
   drawerOpen: boolean;
   modal: OperationModal;
-  inputText: string;
   currentProjectPath: string | null;
   onSetDrawerOpen: (open: boolean) => void;
   onSetModal: (modal: OperationModal) => void;
-  onSetInputText: (text: string) => void;
   onClear: () => void;
   onAbort: () => void;
   onSubmitInit: (submission: import("./drawer/NewProjectModal").InitModalSubmission) => void;
-  onCreateTask: (submission: import("./drawer/PlanTaskModal").TaskCreateSubmission) => Promise<void>;
   onRunOperation?: (url: string, body?: Record<string, unknown>) => void;
+  /** Trigger fired by sidebar / onNewTask buttons — auto-switches to chat tab. */
+  chatTrigger?: ChatTrigger | null;
 }
+
+const MIN_DRAWER_HEIGHT = 160;
+const MIN_RIGHT_PANEL_WIDTH = 220;
+const DEFAULT_RIGHT_PANEL_WIDTH = 360;
 
 export function OperationDrawer({
   status,
   drawerOpen,
   modal,
-  inputText,
   currentProjectPath,
   onSetDrawerOpen: _onSetDrawerOpen,
   onSetModal,
-  onSetInputText,
   onClear,
   onAbort,
   onSubmitInit,
-  onCreateTask,
   onRunOperation,
+  chatTrigger,
 }: OperationDrawerProps) {
   const initialDrawerHeight = (() => {
     if (typeof window === "undefined") return 320;
     return Math.floor(window.innerHeight / 3);
   })();
-  const [activeTab, setActiveTab] = useState<"console" | "terminal" | "chat">("chat");
-  const [chatClearToken, setChatClearToken] = useState(0);
+
   const [collapsed, setCollapsed] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(initialDrawerHeight);
-  const [isResizing, setIsResizing] = useState(false);
+  const [isResizingH, setIsResizingH] = useState(false);
   const resizeStartYRef = useRef(0);
   const resizeStartHeightRef = useRef(220);
+
+  // Right panel (console / terminal) — slides in from the right.
+  const [rightPanel, setRightPanel] = useState<RightPanel>("none");
+  const [rightPanelWidth, setRightPanelWidth] = useState(DEFAULT_RIGHT_PANEL_WIDTH);
+  const [isResizingV, setIsResizingV] = useState(false);
+  const resizeStartXRef = useRef(0);
+  const resizeStartWidthRef = useRef(DEFAULT_RIGHT_PANEL_WIDTH);
+
   const isRunning = status === "running";
 
+  // -------------------------------------------------------------------------
+  // Horizontal resize (drawer height)
+  // -------------------------------------------------------------------------
+
   function clampDrawerHeight(height: number): number {
-    const minHeight = 160;
     const maxHeight = typeof window !== "undefined"
       ? Math.floor(window.innerHeight * 0.78)
       : 640;
-    return Math.max(minHeight, Math.min(height, maxHeight));
+    return Math.max(MIN_DRAWER_HEIGHT, Math.min(height, maxHeight));
   }
 
-  function startResize(e: React.MouseEvent<HTMLDivElement>) {
+  function startResizeH(e: React.MouseEvent<HTMLDivElement>) {
     if (collapsed) return;
     e.preventDefault();
     resizeStartYRef.current = e.clientY;
     resizeStartHeightRef.current = drawerHeight;
-    setIsResizing(true);
+    setIsResizingH(true);
   }
 
   useEffect(() => {
-    if (status === "running") {
-      setCollapsed(false);
-    }
-  }, [status]);
-
-  useEffect(() => {
-    if (!isResizing) return;
+    if (!isResizingH) return;
     function onMouseMove(e: MouseEvent) {
       const delta = resizeStartYRef.current - e.clientY;
       setDrawerHeight(clampDrawerHeight(resizeStartHeightRef.current + delta));
     }
-    function stopResize() { setIsResizing(false); }
+    function stopResize() { setIsResizingH(false); }
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", stopResize);
     window.addEventListener("mouseleave", stopResize);
@@ -101,7 +106,74 @@ export function OperationDrawer({
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [isResizing]);
+  }, [isResizingH]);
+
+  // -------------------------------------------------------------------------
+  // Vertical resize (right panel width)
+  // -------------------------------------------------------------------------
+
+  function clampRightWidth(width: number): number {
+    const maxWidth = typeof window !== "undefined"
+      ? Math.floor(window.innerWidth * 0.6)
+      : 800;
+    return Math.max(MIN_RIGHT_PANEL_WIDTH, Math.min(width, maxWidth));
+  }
+
+  function startResizeV(e: React.MouseEvent<HTMLDivElement>) {
+    e.preventDefault();
+    resizeStartXRef.current = e.clientX;
+    resizeStartWidthRef.current = rightPanelWidth;
+    setIsResizingV(true);
+  }
+
+  useEffect(() => {
+    if (!isResizingV) return;
+    function onMouseMove(e: MouseEvent) {
+      const delta = resizeStartXRef.current - e.clientX;
+      setRightPanelWidth(clampRightWidth(resizeStartWidthRef.current + delta));
+    }
+    function stopResize() { setIsResizingV(false); }
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", stopResize);
+    window.addEventListener("mouseleave", stopResize);
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", stopResize);
+      window.removeEventListener("mouseleave", stopResize);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [isResizingV]);
+
+  // -------------------------------------------------------------------------
+  // Expand on running
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (status === "running") setCollapsed(false);
+  }, [status]);
+
+  // -------------------------------------------------------------------------
+  // Trigger: auto-uncollapse and focus chat
+  // -------------------------------------------------------------------------
+
+  const prevTriggerTokenRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!chatTrigger) return;
+    if (chatTrigger.token === prevTriggerTokenRef.current) return;
+    prevTriggerTokenRef.current = chatTrigger.token;
+    setCollapsed(false);
+  }, [chatTrigger]);
+
+  // -------------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------------
+
+  function toggleRight(panel: "console" | "terminal") {
+    setRightPanel((prev) => (prev === panel ? "none" : panel));
+  }
 
   const statusLabel =
     status === "running" ? "Running…" :
@@ -111,9 +183,11 @@ export function OperationDrawer({
   const statusColor =
     status === "running" ? "text-zinc-400" :
     status === "done" ? "text-emerald-400" :
-    status === "error" ? "text-red-400" : "text-zinc-500";
+    status === "error" ? "text-red-400" : "";
 
   if (!drawerOpen) return null;
+
+  const showRight = rightPanel !== "none";
 
   return (
     <>
@@ -128,127 +202,133 @@ export function OperationDrawer({
         />
       )}
 
-      {modal?.kind === "plan" && (
-        <PlanTaskModal
-          initialDescription={inputText}
-          onCancel={() => { onSetModal(null); onSetInputText(""); }}
-          onSubmit={async (submission) => {
-            await onCreateTask(submission);
-            onSetInputText("");
-            onSetModal(null);
-          }}
-        />
-      )}
-
       <div
-        className={`shrink-0 border-t border-zinc-800 bg-zinc-950 flex flex-col ${isResizing ? "" : "transition-[height] duration-150"} ${collapsed ? "h-10" : ""}`}
+        className={`shrink-0 border-t border-zinc-800 bg-zinc-950 flex flex-col ${
+          isResizingH || isResizingV ? "" : "transition-[height] duration-150"
+        } ${collapsed ? "h-10" : ""}`}
         style={!collapsed ? { height: `${drawerHeight}px` } : undefined}
       >
+        {/* Horizontal resize handle */}
         {!collapsed && (
           <div
-            onMouseDown={startResize}
-            className={`h-1.5 shrink-0 cursor-ns-resize transition-colors ${isResizing ? "bg-zinc-700/80" : "bg-zinc-900 hover:bg-zinc-800"}`}
-            title="Drag to resize console"
+            onMouseDown={startResizeH}
+            className={`h-1.5 shrink-0 cursor-ns-resize transition-colors ${
+              isResizingH ? "bg-zinc-700/80" : "bg-zinc-900 hover:bg-zinc-800"
+            }`}
+            title="Drag to resize"
           />
         )}
-        <div className="flex items-center gap-2 px-4 h-10 shrink-0 border-b border-zinc-800/60">
-          {isRunning && <LoadingDots size={12} />}
-          {statusLabel && (
-            <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
-          )}
 
-          <div className="ml-2 self-stretch flex items-stretch border border-zinc-800/60 rounded-md overflow-hidden">
-            <button
-              onClick={() => setActiveTab("chat")}
-              className={`px-3 h-full text-[11px] transition-colors flex items-center gap-1 ${
-                activeTab === "chat"
-                  ? "text-zinc-100 bg-zinc-900"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
-              }`}
-            >
-              <MessageSquare className="h-3 w-3" />
-              Chat
-            </button>
-            <button
-              onClick={() => setActiveTab("console")}
-              className={`px-3 h-full text-[11px] transition-colors border-l border-zinc-800/60 ${
-                activeTab === "console"
-                  ? "text-zinc-100 bg-zinc-900"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
-              }`}
-            >
-              Console
-            </button>
-            <button
-              onClick={() => setActiveTab("terminal")}
-              className={`px-3 h-full text-[11px] transition-colors flex items-center gap-1 border-l border-zinc-800/60 ${
-                activeTab === "terminal"
-                  ? "text-zinc-100 bg-zinc-900"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60"
-              }`}
-            >
-              <TerminalIcon className="h-3 w-3" />
-              Terminal
-            </button>
+        {/* Header */}
+        <div className="flex items-center gap-2 px-3 h-9 shrink-0 border-b border-zinc-800/60">
+          {/* Status */}
+          <div className="flex items-center gap-1.5 min-w-0">
+            {isRunning && <LoadingDots size={11} />}
+            {statusLabel && (
+              <span className={`text-[11px] font-medium shrink-0 ${statusColor}`}>
+                {statusLabel}
+              </span>
+            )}
           </div>
 
           <div className="flex-1" />
 
+          {/* Right-panel toggles */}
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={() => toggleRight("console")}
+              title="Toggle run console (⌘J)"
+              className={`flex items-center gap-1 px-2 h-6 rounded text-[11px] transition-colors ${
+                rightPanel === "console"
+                  ? "bg-zinc-800 text-zinc-200 border border-zinc-700"
+                  : "text-zinc-600 hover:text-zinc-400 hover:bg-zinc-900"
+              }`}
+            >
+              <History className="h-3 w-3" />
+              <span className="hidden sm:inline">Console</span>
+            </button>
+            <button
+              onClick={() => toggleRight("terminal")}
+              title="Toggle terminal (⌘`)"
+              className={`flex items-center gap-1 px-2 h-6 rounded text-[11px] transition-colors ${
+                rightPanel === "terminal"
+                  ? "bg-zinc-800 text-zinc-200 border border-zinc-700"
+                  : "text-zinc-600 hover:text-zinc-400 hover:bg-zinc-900"
+              }`}
+            >
+              <TerminalIcon className="h-3 w-3" />
+              <span className="hidden sm:inline">Terminal</span>
+            </button>
+          </div>
+
+          {/* Stop / clear */}
           {isRunning && (
             <button
               onClick={onAbort}
-              className="text-xs text-red-400/70 hover:text-red-400 transition-colors px-2 py-0.5 rounded border border-red-900/50 hover:border-red-700"
+              className="text-[11px] text-red-400/70 hover:text-red-400 transition-colors px-2 py-0.5 rounded border border-red-900/50 hover:border-red-700"
             >
               Stop
-            </button>
-          )}
-          {activeTab === "chat" && (
-            <button
-              onClick={() => setChatClearToken((prev) => prev + 1)}
-              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 rounded border border-zinc-800 hover:border-zinc-600"
-            >
-              Clear
             </button>
           )}
           {(status === "done" || status === "error") && (
             <button
               onClick={() => { onClear(); setCollapsed(true); }}
-              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 rounded border border-zinc-800 hover:border-zinc-600"
+              className="text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors px-2 py-0.5 rounded"
             >
-              Clear
+              Dismiss
             </button>
           )}
+
+          {/* Collapse toggle */}
           <button
             onClick={() => setCollapsed((v) => !v)}
-            className="text-zinc-600 hover:text-zinc-400 transition-colors ml-1"
-            title={collapsed ? "Expand" : "Collapse"}
+            className="text-zinc-600 hover:text-zinc-400 transition-colors ml-0.5"
+            title={collapsed ? "Expand (⌘↑)" : "Collapse (⌘↓)"}
           >
             {collapsed ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           </button>
         </div>
 
-        {!collapsed && activeTab === "terminal" && (
-          <div className="flex-1 min-h-0">
-            <TerminalPanel projectPath={currentProjectPath} />
-          </div>
-        )}
+        {/* Body — chat + optional right panel */}
+        {!collapsed && (
+          <div className="flex-1 min-h-0 flex overflow-hidden">
+            {/* Chat — always the primary panel */}
+            <div className="flex-1 min-w-0">
+              <ChatPanel
+                projectPath={currentProjectPath}
+                onRunOperation={onRunOperation}
+                trigger={chatTrigger}
+              />
+            </div>
 
-        {!collapsed && activeTab === "chat" && (
-          <div className="flex-1 min-h-0">
-            <ChatPanel
-              projectPath={currentProjectPath}
-              clearToken={chatClearToken}
-              onRunOperation={onRunOperation}
-            />
-          </div>
-        )}
+            {/* Vertical resize handle */}
+            {showRight && (
+              <div
+                onMouseDown={startResizeV}
+                className={`w-1.5 shrink-0 cursor-ew-resize transition-colors ${
+                  isResizingV ? "bg-zinc-700/80" : "bg-zinc-900 hover:bg-zinc-800"
+                }`}
+                title="Drag to resize"
+              />
+            )}
 
-        {!collapsed && activeTab === "console" && (
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <RunHistoryPanel
-              projectPath={currentProjectPath}
-              operationStatus={status}
-            />
+            {/* Right panel: console or terminal */}
+            {showRight && (
+              <div
+                className="shrink-0 border-l border-zinc-800/60 flex flex-col overflow-hidden"
+                style={{ width: `${rightPanelWidth}px` }}
+              >
+                {rightPanel === "console" && (
+                  <RunHistoryPanel
+                    projectPath={currentProjectPath}
+                    operationStatus={status}
+                  />
+                )}
+                {rightPanel === "terminal" && (
+                  <TerminalPanel projectPath={currentProjectPath} />
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
