@@ -354,7 +354,7 @@ export function WorkflowsView() {
                 <p className="text-[11px] text-zinc-500">Sequential pipeline definition with explicit acceptance criteria.</p>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={handleCreateNewWorkflow} className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-[12px] text-zinc-300 hover:border-zinc-600">
+                <button aria-label="New workflow" onClick={handleCreateNewWorkflow} className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-[12px] text-zinc-300 hover:border-zinc-600">
                   <Plus className="h-3.5 w-3.5" />
                   New
                 </button>

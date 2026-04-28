@@ -49,10 +49,10 @@ test("create new workflow draft and save it", async ({ page }) => {
   // has a deterministic baseline.
   await expect(page.getByText(BUILTIN_WORKFLOW_NAME)).toBeVisible({ timeout: 8000 });
 
-  // Click "New" to create a draft. The confirm() dialog (if any) is auto-
-  // accepted by the beforeEach handler. Use exact match to avoid colliding
-  // with the sidebar "New Project" button.
-  await page.getByRole("button", { name: "New", exact: true }).click();
+  // Click "New workflow" to create a draft. The confirm() dialog (if any) is
+  // auto-accepted by the beforeEach handler. The button has aria-label="New workflow"
+  // to distinguish it from the chat panel's "New conversation" button.
+  await page.getByRole("button", { name: "New workflow" }).click();
 
   // The editor should now show the draft's Name and ID fields.
   const nameInput = page.locator('label:has-text("Name") input');
