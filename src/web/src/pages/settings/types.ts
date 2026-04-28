@@ -73,6 +73,15 @@ export interface ConfigResponse extends FullConfig {
 export type ThemeAppearance = "dark" | "light";
 export type ThemeSource = "builtin" | "global" | "project";
 
+export interface ThemePreview {
+  appBg: string;
+  panelBg: string;
+  textPrimary: string;
+  accent: string;
+  success: string;
+  danger: string;
+}
+
 export interface ThemeSummary {
   id: string;
   name: string;
@@ -81,6 +90,7 @@ export interface ThemeSummary {
   author?: string;
   source: ThemeSource;
   isActive?: boolean;
+  preview?: ThemePreview;
 }
 
 export interface ThemeListResponse {

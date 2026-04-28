@@ -73,6 +73,15 @@ export const benderThemeSchema = z.object({
 
 export type BenderTheme = z.infer<typeof benderThemeSchema>;
 
+export interface ThemePreview {
+  appBg: string;
+  panelBg: string;
+  textPrimary: string;
+  accent: string;
+  success: string;
+  danger: string;
+}
+
 export interface ThemeSummary {
   id: string;
   name: string;
@@ -81,6 +90,7 @@ export interface ThemeSummary {
   author?: string;
   source: ThemeSource;
   isActive?: boolean;
+  preview?: ThemePreview;
 }
 
 export interface ThemeListResult {

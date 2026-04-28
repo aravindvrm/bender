@@ -1,4 +1,5 @@
 import type { BenderTheme } from "./types.js";
+import { BUNDLED_THEMES } from "./bundled.js";
 
 const DEFAULT_ZINC_DARK = {
   "50": "#fafafa",
@@ -153,4 +154,9 @@ export const BENDER_DEFAULT_LIGHT_THEME: BenderTheme = {
   },
 };
 
-export const BUILTIN_THEMES: BenderTheme[] = [BENDER_DEFAULT_DARK_THEME, BENDER_DEFAULT_LIGHT_THEME];
+// Bender defaults first (pinned), then popular VS Code themes alphabetically
+export const BUILTIN_THEMES: BenderTheme[] = [
+  BENDER_DEFAULT_DARK_THEME,
+  BENDER_DEFAULT_LIGHT_THEME,
+  ...BUNDLED_THEMES,
+];

@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { readConfig, readEffectiveConfig, readGlobalConfig, writeConfig, writeGlobalConfig } from "../../state/config.js";
-import { importVsCodeTheme, listThemes, resolveTheme, saveTheme } from "../../themes/service.js";
+import { deleteTheme, importVsCodeTheme, listThemes, resolveTheme, saveTheme } from "../../themes/service.js";
 
 interface ThemeRouteDeps {
   getCurrentProject: () => string | null;
@@ -101,6 +101,22 @@ export function registerThemeRoutes(app: Express, deps: ThemeRouteDeps): void {
         return;
       }
       res.status(500).json({ error: message });
+    }
+  });
+
+  app.delete("/api/themes/:id", async (req, res) => {
+    try {
+      const themeId = req.params.id;
+      const projectRoot = deps.getCurrentProject();
+      const scope = (req.query.scope === "project") ? "project" : "global";
+      if (scope === "project" && !projectRoot) {
+        res.status(400).json({ error: "No project selected." });
+        return;
+      }
+      await deleteTheme(themeId, scope, projectRoot);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 }

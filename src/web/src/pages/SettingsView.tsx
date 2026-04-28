@@ -212,6 +212,26 @@ export function SettingsView() {
     });
   }
 
+  async function handleDeleteTheme(themeId: string, deleteScope: "global" | "project"): Promise<void> {
+    setThemeError(null);
+    setThemeNotice(null);
+    try {
+      const res = await fetch(`/api/themes/${encodeURIComponent(themeId)}?scope=${deleteScope}`, {
+        method: "DELETE",
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Delete failed");
+      // If deleted theme was active, fall back to default
+      if ((config?.ui?.themeId ?? activeThemeId) === themeId) {
+        handleSetTheme(DEFAULT_THEME_ID);
+      }
+      await refreshThemes();
+      setThemeNotice("Theme deleted.");
+    } catch (err) {
+      setThemeError((err as Error).message);
+    }
+  }
+
   async function handleImportVsCodeTheme(jsonText: string): Promise<void> {
     const scope = configScope === "project" ? "project" : "global";
     setThemeImporting(true);
@@ -405,8 +425,7 @@ export function SettingsView() {
 
       <ThemeSection
         themes={themes}
-        selectedThemeId={config.ui?.themeId ?? activeThemeId}
-        activeThemeId={activeThemeId}
+        activeThemeId={config.ui?.themeId ?? activeThemeId}
         loading={themeLoading}
         importing={themeImporting}
         scope={configScope}
@@ -415,6 +434,7 @@ export function SettingsView() {
         onSelectTheme={handleSetTheme}
         onRefresh={refreshThemes}
         onImportVsCode={handleImportVsCodeTheme}
+        onDeleteTheme={handleDeleteTheme}
       />
 
       <PreferencesSection config={config} setConfig={setConfig} />
