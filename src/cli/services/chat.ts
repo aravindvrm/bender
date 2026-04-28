@@ -924,7 +924,7 @@ function parseOperatorCommandFromText(text: string): OperatorCommand | null {
   }
 
   {
-    const update = input.match(/^\/task\s+update\s+([a-z0-9_-]+)\\s+(.+)$/i);
+    const update = input.match(/^\/task\s+update\s+([a-z0-9_-]+)\s+(.+)$/i);
     if (update) {
       const taskId = parseTaskId(update[1]);
       const fields = parseKeyValueFields(update[2]);
@@ -1091,10 +1091,13 @@ async function requireThread(projectRoot: string, threadId: string): Promise<{ s
   return { store, thread };
 }
 
-export async function listChatThreads(projectRoot: string): Promise<ChatThread[]> {
+export async function listChatThreads(
+  projectRoot: string,
+  options?: { includeArchived?: boolean },
+): Promise<ChatThread[]> {
   const store = new ChatStore(projectRoot);
   await store.init();
-  return await store.listThreads();
+  return await store.listThreads({ includeArchived: options?.includeArchived === true });
 }
 
 export async function createChatThread(
@@ -1139,6 +1142,18 @@ export async function updateChatThread(
   };
   await store.upsertThread(next);
   return next;
+}
+
+export async function deleteChatThread(
+  projectRoot: string,
+  rawThreadId: string | undefined,
+): Promise<void> {
+  const threadId = normalizeThreadId(rawThreadId);
+  const { store, thread } = await requireThread(projectRoot, threadId);
+  if (inFlightChatResponses.has(thread.id)) {
+    throw new ChatServiceError(409, "Cannot delete a thread while a response is in progress.");
+  }
+  await store.deleteThread(thread.id);
 }
 
 export async function listChatMessages(

@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DefaultChatTransport,
+  getToolName,
   isReasoningUIPart,
   isTextUIPart,
   isToolUIPart,
   readUIMessageStream,
+  type DynamicToolUIPart,
   type UIMessage,
+  type UITools,
+  type ToolUIPart,
 } from "ai";
-import { Check, ChevronDown, MessageSquarePlus, Pencil, Send, Square, X } from "lucide-react";
-// MessageSquarePlus used in ConversationPicker
+import { Archive, ArchiveRestore, Check, ChevronDown, MessageSquarePlus, Pencil, Send, Square, Trash2, X } from "lucide-react";
+// MessageSquarePlus, Trash2 used in ConversationPicker
 import { LoadingDots } from "./LoadingDots";
 
 // ---------------------------------------------------------------------------
@@ -34,72 +38,34 @@ function buildCommands(opts: {
   onRunOperation?: (url: string, body?: Record<string, unknown>) => void;
 }): SlashCommand[] {
   return [
-    {
-      name: "analyze",
-      description: "Re-analyze the codebase structure and refresh architecture",
-      kind: "action",
-      onAction: () => opts.onRunOperation?.("/api/run/analyze"),
-    },
-    {
-      name: "implement",
-      description: "Run the current task plan",
-      kind: "action",
-      onAction: () => opts.onRunOperation?.("/api/run/implement"),
-    },
-    {
-      name: "plan",
-      description: "Describe a change and create a new task plan",
-      kind: "prompt",
-      prompt: "Create a task plan for: ",
-    },
-    {
-      name: "brief",
-      description: "Ask about the project brief and goals",
-      kind: "prompt",
-      prompt: "Summarize the current project brief — what are the goals, constraints, and key features?",
-    },
-    {
-      name: "architecture",
-      description: "Ask about the current architecture",
-      kind: "prompt",
-      prompt: "Describe the current architecture: stack, key patterns, schema, and any important decisions.",
-    },
-    {
-      name: "tasks",
-      description: "Ask about the current task list",
-      kind: "prompt",
-      prompt: "What tasks are currently in the plan? List them with their status.",
-    },
-    {
-      name: "status",
-      description: "Ask about recent changes and project health",
-      kind: "prompt",
-      prompt: "What is the current project status? Summarize recent changes, open tasks, and anything that needs attention.",
-    },
-    {
-      name: "review",
-      description: "Ask for a code review of recent changes",
-      kind: "prompt",
-      prompt: "Review the most recent changes in this project. Flag any issues with correctness, architecture, or code quality.",
-    },
-    {
-      name: "help",
-      description: "List all available slash commands",
-      kind: "prompt",
-      prompt: "List all available slash commands and what they do.",
-    },
-    {
-      name: "new",
-      description: "Start a new conversation (⌘K) — prior conversations are saved and accessible",
-      kind: "action",
-      onAction: opts.onNewThread,
-    },
-    {
-      name: "clear",
-      description: "Hide messages in this conversation (doesn't delete them)",
-      kind: "action",
-      onAction: opts.onClear,
-    },
+    // Task management — handled by the deterministic operator parser
+    { name: "task list",   description: "List all tasks and their status", kind: "prompt", prompt: "/task list" },
+    { name: "task add",    description: "Add a new task — type the title after the command", kind: "prompt", prompt: "/task add " },
+    { name: "task run",    description: "Run a task by ID — /task run <id>", kind: "prompt", prompt: "/task run " },
+    { name: "task update", description: "Update a task — /task update <id> title=… status=…", kind: "prompt", prompt: "/task update " },
+    { name: "task delete", description: "Delete a task — /task delete <id>", kind: "prompt", prompt: "/task delete " },
+
+    // Run operations — direct API, no LLM
+    { name: "run analyze",   description: "Re-analyze codebase and refresh architecture", kind: "action", onAction: () => opts.onRunOperation?.("/api/run/analyze") },
+    { name: "run implement", description: "Execute the current task plan", kind: "action", onAction: () => opts.onRunOperation?.("/api/run/implement") },
+
+    // Audit — deterministic operator parser
+    { name: "audit security", description: "Run a security audit on the codebase", kind: "prompt", prompt: "/audit security" },
+    { name: "audit tests",    description: "Audit test coverage and quality", kind: "prompt", prompt: "/audit tests" },
+    { name: "audit ci",       description: "Audit CI pipeline configuration", kind: "prompt", prompt: "/audit ci" },
+
+    // Planning — LLM prompt templates
+    { name: "plan init",    description: "Create an initial task plan from the project brief", kind: "prompt", prompt: "Create an initial task plan for this project. Analyze the codebase and brief, then generate a structured list of tasks needed to reach MVP." },
+    { name: "plan feature", description: "Extend the task plan with a new feature", kind: "prompt", prompt: "Add a new feature to the task plan: " },
+
+    // Ask — read-only LLM Q&A
+    { name: "ask brief",        description: "Summarize the project brief and goals", kind: "prompt", prompt: "Summarize the current project brief — what are the goals, constraints, and key features?" },
+    { name: "ask architecture", description: "Describe the current architecture and stack", kind: "prompt", prompt: "Describe the current architecture: stack, key patterns, schema, and any important decisions." },
+    { name: "ask status",       description: "Summarize recent changes and open tasks", kind: "prompt", prompt: "What is the current project status? Summarize recent changes, open tasks, and anything that needs attention." },
+
+    // Conversation utilities
+    { name: "new",   description: "Start a new conversation (⌘K)", kind: "action", onAction: opts.onNewThread },
+    { name: "clear", description: "Hide messages in this conversation", kind: "action", onAction: opts.onClear },
   ];
 }
 
@@ -120,6 +86,28 @@ interface ChatThread {
 
 function keyForProject(projectPath: string): string {
   return `bender.chat.activeThread.${projectPath}`;
+}
+
+function hiddenKey(projectPath: string): string {
+  return `bender.chat.hiddenMessages.${projectPath}`;
+}
+
+function loadHidden(projectPath: string): Record<string, Record<string, true>> {
+  try {
+    const raw = localStorage.getItem(hiddenKey(projectPath));
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, Record<string, true>>;
+  } catch {
+    return {};
+  }
+}
+
+function saveHidden(projectPath: string, hidden: Record<string, Record<string, true>>): void {
+  try {
+    localStorage.setItem(hiddenKey(projectPath), JSON.stringify(hidden));
+  } catch {
+    /* storage quota or private-mode — fail silently */
+  }
 }
 
 /** Cast UIMessage.metadata (typed as {}) to a looser type for custom fields. */
@@ -180,11 +168,35 @@ function messageToText(message: UIMessage): string {
   for (const part of message.parts) {
     if (isTextUIPart(part) || isReasoningUIPart(part)) {
       if (part.text.trim()) chunks.push(part.text.trim());
-      continue;
     }
-    if (isToolUIPart(part)) continue;
   }
   return chunks.join("\n\n").trim();
+}
+
+export function toolDisplayName(toolName: string): string {
+  return toolName.replace(/^bender_/, "").replace(/_/g, " ");
+}
+
+function ToolCallRow({ part }: { part: ToolUIPart<UITools> | DynamicToolUIPart }) {
+  const name = getToolName(part);
+  const state = part.state;
+  const label = toolDisplayName(name);
+  const isDone = state === "output-available" || state === "output-error" || state === "output-denied";
+  const isError = state === "output-error";
+
+  return (
+    <div className={`flex items-center gap-1.5 py-0.5 text-[10px] select-none ${
+      isError ? "text-bender-danger" : isDone ? "text-zinc-500" : "text-zinc-600"
+    }`}>
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+        isError ? "bg-bender-danger" : isDone ? "bg-zinc-600" : "bg-zinc-700 animate-pulse"
+      }`} />
+      <span className="font-mono">{label}</span>
+      {!isDone && <span className="text-zinc-700">…</span>}
+      {isDone && !isError && <span className="text-zinc-700">✓</span>}
+      {isError && <span>failed</span>}
+    </div>
+  );
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -198,7 +210,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 // Relative time helper
 // ---------------------------------------------------------------------------
 
-function relativeTime(ts: number): string {
+export function relativeTime(ts: number): string {
   const diffMs = Date.now() - ts;
   const secs = Math.floor(diffMs / 1000);
   if (secs < 60) return "just now";
@@ -221,9 +233,106 @@ interface ConversationPickerProps {
   onSelect: (threadId: string) => void;
   onNew: () => void;
   onClose: () => void;
+  onDelete: (threadId: string) => void;
+  onRename: (threadId: string, title: string) => void;
+  onArchiveToggle: (threadId: string, archive: boolean) => void;
 }
 
-function ConversationPicker({ threads, activeThreadId, onSelect, onNew, onClose }: ConversationPickerProps) {
+function ConversationPicker({
+  threads, activeThreadId, onSelect, onNew, onClose, onDelete, onRename, onArchiveToggle,
+}: ConversationPickerProps) {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const active = threads.filter((t) => !t.archived);
+  const archived = threads.filter((t) => t.archived);
+
+  function startRename(thread: ChatThread) {
+    setRenamingId(thread.id);
+    setRenameValue(thread.title);
+    requestAnimationFrame(() => renameInputRef.current?.select());
+  }
+
+  function commitRename(threadId: string) {
+    const trimmed = renameValue.trim();
+    if (trimmed) onRename(threadId, trimmed);
+    setRenamingId(null);
+  }
+
+  function renderThread(thread: ChatThread, isArchivedSection = false) {
+    const isActive = thread.id === activeThreadId;
+    const isRenaming = renamingId === thread.id;
+    return (
+      <li key={thread.id} className="group">
+        {isRenaming ? (
+          <div className="flex items-center gap-1 px-3 py-1.5">
+            <input
+              ref={renameInputRef}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename(thread.id);
+                if (e.key === "Escape") setRenamingId(null);
+              }}
+              onBlur={() => commitRename(thread.id)}
+              className="flex-1 min-w-0 text-xs bg-zinc-800 border border-zinc-600 rounded px-2 py-0.5 text-zinc-100 focus:outline-none focus:border-zinc-400"
+            />
+            <button
+              onMouseDown={(e) => { e.preventDefault(); setRenamingId(null); }}
+              className="text-zinc-600 hover:text-zinc-400 shrink-0"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ) : (
+          <div className={`flex items-center gap-2 px-3 py-2 transition-colors ${
+            isActive ? "bg-zinc-800/60 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+          }`}>
+            <button
+              onClick={() => { onSelect(thread.id); onClose(); }}
+              className="flex-1 min-w-0 flex items-center gap-2 text-left"
+            >
+              <span className={`flex-1 min-w-0 text-xs truncate ${isArchivedSection ? "opacity-60" : ""}`}>
+                {thread.title}
+              </span>
+              <span className="shrink-0 text-[10px] text-zinc-600">{relativeTime(thread.updatedAt)}</span>
+              {isActive && <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-bender-success" />}
+            </button>
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              {!isArchivedSection && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); startRename(thread); }}
+                  title="Rename"
+                  className="p-0.5 rounded text-zinc-600 hover:text-zinc-300 hover:bg-zinc-700/50 transition-colors"
+                >
+                  <Pencil className="h-2.5 w-2.5" />
+                </button>
+              )}
+              <button
+                onClick={(e) => { e.stopPropagation(); onArchiveToggle(thread.id, !isArchivedSection); }}
+                title={isArchivedSection ? "Restore" : "Archive"}
+                className="p-0.5 rounded text-zinc-600 hover:text-zinc-300 hover:bg-zinc-700/50 transition-colors"
+              >
+                {isArchivedSection
+                  ? <ArchiveRestore className="h-2.5 w-2.5" />
+                  : <Archive className="h-2.5 w-2.5" />}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(thread.id); }}
+                title="Delete"
+                className="p-0.5 rounded text-zinc-600 hover:text-bender-danger hover:bg-zinc-700/50 transition-colors"
+              >
+                <Trash2 className="h-2.5 w-2.5" />
+              </button>
+            </div>
+          </div>
+        )}
+      </li>
+    );
+  }
+
   return (
     <>
       {/* Backdrop */}
@@ -241,26 +350,25 @@ function ConversationPicker({ threads, activeThreadId, onSelect, onNew, onClose 
             <kbd className="ml-0.5 text-[9px] text-zinc-700">⌘K</kbd>
           </button>
         </div>
-        <ul className="max-h-52 overflow-y-auto py-1">
-          {threads.map((thread) => {
-            const isActive = thread.id === activeThreadId;
-            return (
-              <li key={thread.id}>
+        <ul className="max-h-64 overflow-y-auto py-1">
+          {active.map((t) => renderThread(t, false))}
+          {active.length === 0 && (
+            <li className="px-3 py-2 text-[11px] text-zinc-600 italic">No conversations yet</li>
+          )}
+          {archived.length > 0 && (
+            <>
+              <li>
                 <button
-                  onClick={() => { onSelect(thread.id); onClose(); }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors ${
-                    isActive ? "bg-zinc-800/60 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
-                  }`}
+                  onClick={() => setShowArchived((v) => !v)}
+                  className="w-full flex items-center gap-1.5 px-3 py-1.5 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors border-t border-zinc-800/60"
                 >
-                  <span className="flex-1 min-w-0 text-xs truncate">{thread.title}</span>
-                  <span className="shrink-0 text-[10px] text-zinc-600">{relativeTime(thread.updatedAt)}</span>
-                  {isActive && <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500" />}
+                  <Archive className="h-2.5 w-2.5" />
+                  <span>Archived ({archived.length})</span>
+                  <ChevronDown className={`h-2.5 w-2.5 ml-auto transition-transform ${showArchived ? "rotate-180" : ""}`} />
                 </button>
               </li>
-            );
-          })}
-          {threads.length === 0 && (
-            <li className="px-3 py-2 text-[11px] text-zinc-600 italic">No conversations yet</li>
+              {showArchived && archived.map((t) => renderThread(t, true))}
+            </>
           )}
         </ul>
       </div>
@@ -373,7 +481,9 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
   const [sending, setSending] = useState(false);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [hiddenMessageIdsByThread, setHiddenMessageIdsByThread] = useState<Record<string, Record<string, true>>>({});
+  const [hiddenMessageIdsByThread, setHiddenMessageIdsByThread] = useState<Record<string, Record<string, true>>>(
+    () => (projectPath ? loadHidden(projectPath) : {}),
+  );
 
   // Slash command menu state
   const [menuOpen, setMenuOpen] = useState(false);
@@ -404,15 +514,17 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
   // Slash commands
   // ---------------------------------------------------------------------------
 
-  const clearMessages = useCallback(async () => {
-    if (!activeThread || sending || messages.length === 0) return;
+  const clearMessages = useCallback(() => {
+    if (!activeThread || !projectPath || sending || messages.length === 0) return;
     setHiddenMessageIdsByThread((prev) => {
       const existing = prev[activeThread.id] ?? {};
       const nextHidden = { ...existing };
       for (const message of messages) { nextHidden[message.id] = true; }
-      return { ...prev, [activeThread.id]: nextHidden };
+      const next = { ...prev, [activeThread.id]: nextHidden };
+      saveHidden(projectPath, next);
+      return next;
     });
-  }, [activeThread, sending, messages]);
+  }, [activeThread, projectPath, sending, messages]);
 
   // createNewThread is defined after createThread in the thread management section below.
   // We use a stable ref so the commands memo and keydown handler can reference it without
@@ -545,14 +657,17 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
     if (!projectPath) { setThreads([]); setActiveThreadId(null); return null; }
     setLoadingThreads(true);
     try {
-      const data = await fetchJson<{ threads: ChatThread[] }>("/api/chat/threads");
+      const data = await fetchJson<{ threads: ChatThread[] }>("/api/chat/threads?includeArchived=true");
       let nextThreads = data.threads ?? [];
-      if (nextThreads.length === 0) {
+      const nonArchived = nextThreads.filter((t) => !t.archived);
+      if (nonArchived.length === 0) {
         const created = await createThread("Chat");
-        nextThreads = [created];
+        nextThreads = [created, ...nextThreads];
       }
       setThreads(nextThreads);
-      const selected = nextThreads[0]?.id ?? null;
+      const savedId = localStorage.getItem(keyForProject(projectPath));
+      const restoredId = savedId ? nextThreads.find((t) => t.id === savedId && !t.archived)?.id : undefined;
+      const selected = restoredId ?? nextThreads.find((t) => !t.archived)?.id ?? null;
       setActiveThreadId(selected);
       if (selected) localStorage.setItem(keyForProject(projectPath), selected);
       return selected;
@@ -577,6 +692,68 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
     }
   }, []);
 
+  const deleteThread = useCallback(async (threadId: string) => {
+    if (!projectPath) return;
+    try {
+      await fetchJson<Record<string, never>>(`/api/chat/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
+      const nextThreads = threads.filter((t) => t.id !== threadId);
+      if (nextThreads.length === 0) {
+        const created = await createThread("Chat");
+        setThreads([created]);
+        setActiveThreadId(created.id);
+        setMessages([]);
+      } else {
+        setThreads(nextThreads);
+        if (activeThreadId === threadId) {
+          setActiveThreadId(nextThreads[0].id);
+        }
+      }
+    } catch (err) {
+      setError(parseErrorMessage(err));
+    }
+  }, [activeThreadId, createThread, projectPath, threads]);
+
+  const renameThread = useCallback(async (threadId: string, title: string) => {
+    try {
+      const data = await fetchJson<{ thread: ChatThread }>(`/api/chat/threads/${encodeURIComponent(threadId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      setThreads((prev) => prev.map((t) => t.id === threadId ? data.thread : t));
+    } catch (err) {
+      setError(parseErrorMessage(err));
+    }
+  }, []);
+
+  const archiveThread = useCallback(async (threadId: string, archive: boolean) => {
+    try {
+      const data = await fetchJson<{ thread: ChatThread }>(`/api/chat/threads/${encodeURIComponent(threadId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived: archive }),
+      });
+      const updated = data.thread;
+      setThreads((prev) => {
+        const next = prev.map((t) => t.id === threadId ? updated : t);
+        return next;
+      });
+      // If we archived the active thread, switch to the next non-archived one
+      if (archive && activeThreadId === threadId) {
+        const nextActive = threads.find((t) => t.id !== threadId && !t.archived);
+        if (nextActive) {
+          setActiveThreadId(nextActive.id);
+        }
+      }
+    } catch (err) {
+      setError(parseErrorMessage(err));
+    }
+  }, [activeThreadId, threads]);
+
+  useEffect(() => {
+    setHiddenMessageIdsByThread(projectPath ? loadHidden(projectPath) : {});
+  }, [projectPath]);
+
   useEffect(() => { void loadThreads(); }, [loadThreads]);
   useEffect(() => {
     if (!projectPath || !activeThreadId) return;
@@ -590,9 +767,10 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
     void clearMessages();
   }, [clearMessages, clearToken]);
 
-  // Auto-scroll to bottom when messages change or while streaming.
+  // Instant scroll while streaming (avoid janky smooth-scroll on every token chunk);
+  // switch to smooth only when a send completes.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: sending ? "instant" : "smooth" });
   }, [messages, sending]);
 
   // ---------------------------------------------------------------------------
@@ -812,6 +990,9 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
             onSelect={(id) => setActiveThreadId(id)}
             onNew={() => { void createNewThreadRef.current(); setPickerOpen(false); }}
             onClose={() => setPickerOpen(false)}
+            onDelete={(id) => void deleteThread(id)}
+            onRename={(id, title) => void renameThread(id, title)}
+            onArchiveToggle={(id, archive) => void archiveThread(id, archive)}
           />
         )}
       </div>
@@ -844,7 +1025,8 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
           }
 
           const text = messageToText(message);
-          if (!text) return null;
+          const toolParts = message.parts.filter(isToolUIPart) as (ToolUIPart<UITools> | DynamicToolUIPart)[];
+          if (!text && toolParts.length === 0) return null;
           return (
             <div
               key={message.id}
@@ -854,9 +1036,18 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
                   : "mr-auto"
               }`}
             >
-              <pre className={`whitespace-pre-wrap text-xs leading-relaxed font-sans ${
-                message.role === "user" ? "text-zinc-500" : "text-zinc-100"
-              }`}>{text}</pre>
+              {text && (
+                <pre className={`whitespace-pre-wrap text-xs leading-relaxed font-sans ${
+                  message.role === "user" ? "text-zinc-500" : "text-zinc-100"
+                }`}>{text}</pre>
+              )}
+              {toolParts.length > 0 && (
+                <div className="mt-1 space-y-0.5">
+                  {toolParts.map((part, i) => (
+                    <ToolCallRow key={i} part={part} />
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
@@ -871,19 +1062,19 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
 
       {/* Input area */}
       <div className="px-3 pt-1.5 pb-2 border-t border-zinc-800 shrink-0 space-y-1.5">
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && <p className="text-xs text-bender-danger">{error}</p>}
 
         {/* Quick-approve bar — shown when last message is from assistant and draft is empty */}
         {canQuickApprove && (
           <div className="flex items-center gap-2 px-1">
             <button
               onClick={() => void sendText("Looks good. Please proceed.")}
-              className="flex items-center gap-1 text-[10px] text-emerald-500 hover:text-emerald-400 border border-emerald-900/60 hover:border-emerald-700 rounded px-2 py-0.5 transition-colors"
+              className="flex items-center gap-1 text-[10px] text-bender-success hover:text-bender-success/80 border border-bender-success/20 hover:border-bender-success/40 rounded px-2 py-0.5 transition-colors"
               title="Approve (⌘↩)"
             >
               <Check className="h-2.5 w-2.5" />
               Approve
-              <kbd className="ml-1 text-[9px] text-emerald-700">⌘↩</kbd>
+              <kbd className="ml-1 text-[9px] text-bender-success/50">⌘↩</kbd>
             </button>
             <button
               onClick={() => { setDraft("Let me revise this: "); textareaRef.current?.focus(); }}
