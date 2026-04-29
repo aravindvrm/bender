@@ -145,15 +145,16 @@ export function App() {
     op.setDrawerOpen(true);
   }
 
-  function handleGlobalAction(action: "new-project" | "analyze") {
+  function handleGlobalAction(action: "new-project") {
     if (action === "new-project") {
       op.setModal({ kind: "init" });
       op.setDrawerOpen(true);
-    } else {
-      // Open drawer → chat tab, inject trigger notification, and start the operation.
-      fireChatTrigger("analyze");
-      op.startOperation("/api/run/analyze", {}, { onSuccess: () => setActiveView("architecture") });
     }
+  }
+
+  function handleAnalyze() {
+    fireChatTrigger("analyze");
+    op.startOperation("/api/run/analyze", {}, { onSuccess: () => setActiveView("architecture") });
   }
 
   function handleSubmitInit(submission: InitModalSubmission) {
@@ -227,7 +228,7 @@ export function App() {
         <div className="flex-1 min-h-0 flex overflow-hidden">
           <section className="flex-1 min-w-0 flex flex-col overflow-hidden">
             {/* Scrollable content */}
-            <div className="flex-1 overflow-y-auto text-[13px]">
+            <div className="text-[13px] flex-1 overflow-y-auto">
               {needsProject ? (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-center max-w-xs space-y-3">
@@ -256,7 +257,7 @@ export function App() {
                     </p>
                     <div className="flex items-center justify-center gap-2 pt-1">
                       <button
-                        onClick={() => handleGlobalAction("analyze")}
+                        onClick={handleAnalyze}
                         className="px-4 py-2 bg-zinc-100 hover:bg-white border border-zinc-200 rounded-lg text-xs font-medium text-zinc-900 transition-colors"
                       >
                         Analyze Project
@@ -278,7 +279,7 @@ export function App() {
                 }>
                   <div className="p-5">
                     {activeView === "brief" && state && (
-                      <BriefView state={state} />
+                      <BriefView state={state} onAnalyze={handleAnalyze} />
                     )}
                     {activeView === "evals" && state && (
                       <EvalsView

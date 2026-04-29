@@ -11,7 +11,6 @@ import {
   MonitorCog,
   PanelLeftClose,
   PanelLeftOpen,
-  ScanEye,
   Settings,
   Bot,
   Zap,
@@ -21,7 +20,7 @@ import {
 
 export type View = "plan" | "workflows" | "architecture" | "brief" | "evals" | "agents" | "settings";
 
-function formatTokenCount(n: number): string {
+export function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
   return String(n);
@@ -43,7 +42,7 @@ function displayProviderName(provider?: string): string {
  *  e.g. "devstral-small-2-24b-instruct-2512" → "devstral-small-2-24b"
  *  e.g. "claude-sonnet-4-5-20250930" → "claude-sonnet-4-5"
  */
-function shortenModelName(name: string): string {
+export function shortenModelName(name: string): string {
   if (!name || name === "—") return name;
   // Strip trailing date-like or build suffixes (e.g. -20250930, -2512, -instruct-2512)
   const stripped = name
@@ -97,7 +96,7 @@ interface SidebarProps {
   onViewChange: (view: View) => void;
   state: ProjectState | null;
   onProjectChange: () => Promise<void> | void;
-  onGlobalAction: (action: "new-project" | "analyze") => void;
+  onGlobalAction: (action: "new-project") => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   operationStatus?: OperationStatus;
@@ -201,15 +200,6 @@ export function Sidebar({
           <CirclePlus className="h-4 w-4" />
         </button>
 
-        {/* Analyze project */}
-        <button
-          onClick={() => onGlobalAction("analyze")}
-          disabled={!hasProject}
-          title="Analyze Project"
-          className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          <ScanEye className="h-4 w-4" />
-        </button>
 
         {collapsed && (
           <div className="w-full flex flex-col items-center gap-1 pt-1">
@@ -359,7 +349,7 @@ export function Sidebar({
 
           {state?.git && (
             <div className="flex items-center gap-1.5 pt-1 border-t border-zinc-800/60">
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.git.clean ? "bg-emerald-500" : "bg-amber-400"}`} />
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${state.git.clean ? "bg-bender-success" : "bg-bender-warning"}`} />
               <span className="text-[11px] text-zinc-600 truncate">{state.git.branch || "main"}</span>
             </div>
           )}

@@ -203,12 +203,12 @@ export function OperationDrawer({
       )}
 
       <div
-        className={`shrink-0 border-t border-zinc-800 bg-zinc-950 flex flex-col ${
+        className={`shrink-0 bg-zinc-950 flex flex-col ${
           isResizingH || isResizingV ? "" : "transition-[height] duration-150"
         } ${collapsed ? "h-10" : ""}`}
         style={!collapsed ? { height: `${drawerHeight}px` } : undefined}
       >
-        {/* Horizontal resize handle */}
+        {/* Horizontal resize handle — invisible hit zone, pill fades in on hover */}
         {!collapsed && (
           <div
             onMouseDown={startResizeH}
