@@ -182,8 +182,8 @@ export function OperationDrawer({
 
   const statusColor =
     status === "running" ? "text-zinc-400" :
-    status === "done" ? "text-emerald-400" :
-    status === "error" ? "text-red-400" : "";
+    status === "done" ? "text-bender-success" :
+    status === "error" ? "text-bender-danger" : "";
 
   if (!drawerOpen) return null;
 
@@ -212,11 +212,12 @@ export function OperationDrawer({
         {!collapsed && (
           <div
             onMouseDown={startResizeH}
-            className={`h-1.5 shrink-0 cursor-ns-resize transition-colors ${
-              isResizingH ? "bg-zinc-700/80" : "bg-zinc-900 hover:bg-zinc-800"
-            }`}
-            title="Drag to resize"
-          />
+            className="h-2 shrink-0 cursor-ns-resize flex items-center justify-center group"
+          >
+            <div className={`w-8 h-0.5 rounded-full transition-all duration-200 ${
+              isResizingH ? "bg-zinc-500" : "bg-transparent group-hover:bg-zinc-600/70"
+            }`} />
+          </div>
         )}
 
         {/* Header */}
@@ -265,7 +266,7 @@ export function OperationDrawer({
           {isRunning && (
             <button
               onClick={onAbort}
-              className="text-[11px] text-red-400/70 hover:text-red-400 transition-colors px-2 py-0.5 rounded border border-red-900/50 hover:border-red-700"
+              className="text-[11px] text-bender-danger/70 hover:text-bender-danger transition-colors px-2 py-0.5 rounded border border-bender-danger/20 hover:border-bender-danger/40"
             >
               Stop
             </button>
@@ -305,11 +306,12 @@ export function OperationDrawer({
             {showRight && (
               <div
                 onMouseDown={startResizeV}
-                className={`w-1.5 shrink-0 cursor-ew-resize transition-colors ${
-                  isResizingV ? "bg-zinc-700/80" : "bg-zinc-900 hover:bg-zinc-800"
-                }`}
-                title="Drag to resize"
-              />
+                className="w-2 shrink-0 cursor-ew-resize flex items-center justify-center group"
+              >
+                <div className={`h-8 w-0.5 rounded-full transition-all duration-200 ${
+                  isResizingV ? "bg-zinc-500" : "bg-transparent group-hover:bg-zinc-600/70"
+                }`} />
+              </div>
             )}
 
             {/* Right panel: console or terminal */}
