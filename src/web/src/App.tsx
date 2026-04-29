@@ -111,23 +111,29 @@ export function App() {
 
   if (loading && !state) {
     return (
-      <div className="h-screen flex items-center justify-center bg-zinc-950">
-        <div className="text-center">
-          <LoadingDots className="justify-center" size={34} label="Connecting…" textClassName="text-sm text-zinc-500" />
-        </div>
+      <div className="h-screen flex flex-col items-center justify-center gap-6">
+        <p className="font-bender-brand text-[18px] leading-none tracking-[0.08em] select-none">
+          <span className="text-[var(--bender-text-primary)]">Bender</span>
+          <span className="text-[var(--bender-text-muted)]">.desktop</span>
+        </p>
+        <LoadingDots className="justify-center" size={6} label="Connecting…" textClassName="text-xs text-[var(--bender-text-muted)]" />
       </div>
     );
   }
 
   if (error && !state) {
     return (
-      <div className="h-screen flex items-center justify-center bg-zinc-950">
-        <div className="text-center max-w-md">
-          <p className="text-zinc-400">Could not connect to bender</p>
-          <p className="text-sm text-zinc-500 mt-2">
-            Make sure <code className="bg-zinc-800 px-2 py-0.5 rounded text-zinc-300">bender bend</code> is running.
+      <div className="h-screen flex flex-col items-center justify-center gap-6">
+        <p className="font-bender-brand text-[18px] leading-none tracking-[0.08em] select-none">
+          <span className="text-[var(--bender-text-primary)]">Bender</span>
+          <span className="text-[var(--bender-text-muted)]">.desktop</span>
+        </p>
+        <div className="text-center max-w-sm space-y-2">
+          <p className="text-sm text-[var(--bender-text-secondary)]">Could not connect to bender</p>
+          <p className="text-xs text-[var(--bender-text-muted)]">
+            Make sure <code className="bg-[var(--bender-code-inline-bg)] px-1.5 py-0.5 rounded text-[var(--bender-code-inline-fg)]">bender bend</code> is running.
           </p>
-          <p className="text-xs text-red-400/60 mt-4 font-mono">{error}</p>
+          <p className="text-xs text-[var(--bender-danger)] opacity-60 mt-3 font-mono">{error}</p>
         </div>
       </div>
     );
@@ -162,7 +168,7 @@ export function App() {
   }
 
   return (
-    <div className="h-screen flex overflow-hidden bg-zinc-950">
+    <div className="h-screen flex overflow-hidden bg-[var(--bender-app-bg)]">
       <Sidebar
         activeView={activeView}
         onViewChange={setActiveView}
