@@ -172,7 +172,7 @@ export function Sidebar({
   }, [hasProject, operationStatus]); // re-fetch after operations
 
   return (
-    <aside className={`shrink-0 border-r border-zinc-800 bg-zinc-950 flex overflow-visible ${collapsed ? "w-[52px]" : "w-[280px]"}`}>
+    <aside className={`shrink-0 border-r border-zinc-800 bg-zinc-950 flex overflow-visible ${collapsed ? "w-[52px]" : "w-[220px]"}`}>
 
       {/* Narrow icon rail — global controls */}
       <div className="w-[52px] shrink-0 border-r border-zinc-800/60 flex flex-col items-center py-3 gap-1">
@@ -245,7 +245,7 @@ export function Sidebar({
         <div className="flex-1 flex flex-col min-w-0">
 
         {/* Project header */}
-        <div className="px-4 h-10 border-b border-zinc-800/60 flex items-center">
+        <div className="px-3 h-8 border-b border-zinc-800/60 flex items-center">
           <p className="font-bender-brand text-[16px] leading-none tracking-[0.08em] select-none">
             <span className="text-zinc-100">Bender</span>
             <span className="text-zinc-500">.desktop</span>
@@ -253,7 +253,7 @@ export function Sidebar({
         </div>
 
         {/* Project nav */}
-        <nav className="flex-1 py-3">
+        <nav className="flex-1 py-1.5">
           {projectNav.map((item) => {
             const Icon = item.icon;
             const isActive = activeView === item.id;
@@ -268,7 +268,7 @@ export function Sidebar({
               <button
                 key={item.id}
                 onClick={() => onViewChange(item.id)}
-                className={`w-full flex items-center gap-2.5 px-4 py-[7px] text-sm transition-colors relative ${
+                className={`w-full flex items-center gap-2 px-3 py-1 text-sm transition-colors relative ${
                   isActive
                     ? "bg-zinc-800/70 text-zinc-100"
                     : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/30"
@@ -311,12 +311,12 @@ export function Sidebar({
         )}
 
         {/* Footer info */}
-        <div className="px-4 py-3 border-t border-zinc-800/60 space-y-1.5">
+        <div className="px-3 py-2 border-t border-zinc-800/60 space-y-1">
           {state?.config ? (
             <>
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-zinc-600">LLM Provider</span>
-                <span className="text-[11px] text-zinc-400">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] text-zinc-600 shrink-0">Provider</span>
+                <span className="text-[10px] text-zinc-400 truncate text-right">
                   {llmProvider}
                 </span>
               </div>

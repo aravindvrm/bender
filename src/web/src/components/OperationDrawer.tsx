@@ -221,12 +221,12 @@ export function OperationDrawer({
         )}
 
         {/* Header */}
-        <div className="flex items-center gap-2 px-3 h-9 shrink-0 border-b border-zinc-800/60">
+        <div className="flex items-center gap-1.5 px-2 h-7 shrink-0 border-b border-zinc-800/60">
           {/* Status */}
-          <div className="flex items-center gap-1.5 min-w-0">
-            {isRunning && <LoadingDots size={11} />}
+          <div className="flex items-center gap-1 min-w-0">
+            {isRunning && <LoadingDots size={10} />}
             {statusLabel && (
-              <span className={`text-[11px] font-medium shrink-0 ${statusColor}`}>
+              <span className={`text-[10px] font-medium shrink-0 ${statusColor}`}>
                 {statusLabel}
               </span>
             )}
@@ -239,25 +239,25 @@ export function OperationDrawer({
             <button
               onClick={() => toggleRight("console")}
               title="Toggle run console (⌘J)"
-              className={`flex items-center gap-1 px-2 h-6 rounded text-[11px] transition-colors ${
+              className={`flex items-center gap-1 px-1.5 h-5 rounded text-[10px] transition-colors ${
                 rightPanel === "console"
                   ? "bg-zinc-800 text-zinc-200 border border-zinc-700"
                   : "text-zinc-600 hover:text-zinc-400 hover:bg-zinc-900"
               }`}
             >
-              <History className="h-3 w-3" />
+              <History className="h-2.5 w-2.5" />
               <span className="hidden sm:inline">Console</span>
             </button>
             <button
               onClick={() => toggleRight("terminal")}
               title="Toggle terminal (⌘`)"
-              className={`flex items-center gap-1 px-2 h-6 rounded text-[11px] transition-colors ${
+              className={`flex items-center gap-1 px-1.5 h-5 rounded text-[10px] transition-colors ${
                 rightPanel === "terminal"
                   ? "bg-zinc-800 text-zinc-200 border border-zinc-700"
                   : "text-zinc-600 hover:text-zinc-400 hover:bg-zinc-900"
               }`}
             >
-              <TerminalIcon className="h-3 w-3" />
+              <TerminalIcon className="h-2.5 w-2.5" />
               <span className="hidden sm:inline">Terminal</span>
             </button>
           </div>
@@ -266,7 +266,7 @@ export function OperationDrawer({
           {isRunning && (
             <button
               onClick={onAbort}
-              className="text-[11px] text-bender-danger/70 hover:text-bender-danger transition-colors px-2 py-0.5 rounded border border-bender-danger/20 hover:border-bender-danger/40"
+              className="text-[10px] text-bender-danger/70 hover:text-bender-danger transition-colors px-1.5 rounded border border-bender-danger/20 hover:border-bender-danger/40"
             >
               Stop
             </button>
@@ -274,7 +274,7 @@ export function OperationDrawer({
           {(status === "done" || status === "error") && (
             <button
               onClick={() => { onClear(); setCollapsed(true); }}
-              className="text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors px-2 py-0.5 rounded"
+              className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors px-1.5 rounded"
             >
               Dismiss
             </button>
@@ -283,10 +283,10 @@ export function OperationDrawer({
           {/* Collapse toggle */}
           <button
             onClick={() => setCollapsed((v) => !v)}
-            className="text-zinc-600 hover:text-zinc-400 transition-colors ml-0.5"
+            className="text-zinc-600 hover:text-zinc-400 transition-colors"
             title={collapsed ? "Expand (⌘↑)" : "Collapse (⌘↓)"}
           >
-            {collapsed ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {collapsed ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
           </button>
         </div>
 
