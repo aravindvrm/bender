@@ -8,6 +8,7 @@ import { LoadingDots } from "./components/LoadingDots";
 import { GitDiffSidebar } from "./components/GitDiffSidebar";
 import type { ChatTrigger } from "./components/ChatPanel";
 import { applyBenderTheme, type BenderThemePayload } from "./theme";
+import { HomeView } from "./pages/HomeView";
 
 interface GitDiffSummaryResponse {
   additions?: number;
@@ -44,9 +45,11 @@ export function App() {
   const [activeView, setActiveView] = useState<View>("brief");
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState<boolean>(() => {
     try {
-      return localStorage.getItem("bender.ui.leftSidebarCollapsed") === "1";
+      const stored = localStorage.getItem("bender.ui.leftSidebarCollapsed");
+      // Default to collapsed if the user has never set a preference
+      return stored === null ? true : stored === "1";
     } catch {
-      return false;
+      return true;
     }
   });
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -108,6 +111,37 @@ export function App() {
       .catch(() => { if (!cancelled) setDiffSummary(null); });
     return () => { cancelled = true; };
   }, [state?.projectRoot, op.status]);
+
+  // Refresh project state immediately after any chat stream finishes (e.g. after
+  // a global-mode tool opens/clones a project).
+  useEffect(() => {
+    const handleChatFinished = () => void refresh();
+    window.addEventListener("bender:chat-stream-finished", handleChatFinished);
+    return () => window.removeEventListener("bender:chat-stream-finished", handleChatFinished);
+  }, [refresh]);
+
+  // HomeView tile actions
+  useEffect(() => {
+    const handleNewProject = () => {
+      op.setModal({ kind: "init" });
+      op.setDrawerOpen(true);
+    };
+    window.addEventListener("bender:new-project", handleNewProject);
+    return () => window.removeEventListener("bender:new-project", handleNewProject);
+  }, [op]);
+
+  useEffect(() => {
+    const handleFocusChat = (e: Event) => {
+      const text = (e as CustomEvent<string>).detail ?? "";
+      op.setDrawerOpen(true);
+      // Small delay to let the drawer open before firing the trigger
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("bender:prefill-chat", { detail: text }));
+      }, 50);
+    };
+    window.addEventListener("bender:focus-chat", handleFocusChat);
+    return () => window.removeEventListener("bender:focus-chat", handleFocusChat);
+  }, [op]);
 
   if (loading && !state) {
     return (
@@ -182,13 +216,15 @@ export function App() {
       />
 
       <main className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar */}
-        <header className="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-800 px-4 h-10 shrink-0">
+        {/* Top bar — hidden when no project is open */}
+        <header className={`sticky top-0 z-10 bg-[var(--bender-app-bg)] px-4 h-10 shrink-0 ${needsProject ? "hidden" : ""}`}>
           <div className="relative flex items-center gap-3 h-full">
-            <h2 className="text-xs font-semibold text-zinc-300 tracking-wide shrink-0">{VIEW_LABELS[activeView]}</h2>
-            <div className="absolute left-1/2 -translate-x-1/2 max-w-[40vw] truncate text-xs text-zinc-500 text-center pointer-events-none">
-              {projectTitle}
-            </div>
+            <h2 className="text-xs font-semibold text-zinc-300 tracking-wide shrink-0">{needsProject ? "Home" : VIEW_LABELS[activeView]}</h2>
+            {hasProject && (
+              <div className="absolute left-1/2 -translate-x-1/2 max-w-[40vw] truncate text-xs text-zinc-500 text-center pointer-events-none">
+                {projectTitle}
+              </div>
+            )}
             <div className="flex-1" />
             {state?.git?.recentCommits[0] && (() => {
               const commit = state.git.recentCommits[0];
@@ -232,23 +268,11 @@ export function App() {
         </header>
 
         <div className="flex-1 min-h-0 flex overflow-hidden">
-          <section className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          <section className="flex-1 min-w-0 flex flex-col overflow-hidden relative">
             {/* Scrollable content */}
             <div className="text-[13px] flex-1 overflow-y-auto">
               {needsProject ? (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center max-w-xs space-y-3">
-                    <div className="mx-auto w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-4">
-                      <svg className="w-5 h-5 text-zinc-600" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v8.25A2.25 2.25 0 0 0 4.5 16.5h10.5a2.25 2.25 0 0 0 2.25-2.25v-5.25" />
-                      </svg>
-                    </div>
-                    <p className="text-[13px] font-medium text-zinc-300">No project open</p>
-                    <p className="text-xs text-zinc-500 leading-relaxed">
-                      Use the folder icon in the left rail to open an existing project, or create a new one.
-                    </p>
-                  </div>
-                </div>
+                <HomeView onProjectOpened={refresh} />
               ) : needsInit ? (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-center max-w-sm space-y-4">
@@ -332,6 +356,14 @@ export function App() {
               onSubmitInit={handleSubmitInit}
               onRunOperation={(url, body) => op.startOperation(url, body ?? {})}
               chatTrigger={chatTrigger}
+              operation={{
+                lines: op.lines,
+                status: op.status,
+                runId: op.runId,
+                currentUrl: op.currentUrl,
+                handleConfirm: op.handleConfirm,
+                handlePromptSubmit: op.handlePromptSubmit,
+              }}
             />
           </section>
 

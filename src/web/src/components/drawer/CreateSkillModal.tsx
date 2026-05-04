@@ -237,7 +237,7 @@ export function CreateSkillModal({ onClose, onCreated }: CreateSkillModalProps) 
             />
           </div>
 
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs text-bender-danger">{error}</p>}
           <p className="text-xs text-zinc-600">⌘ Enter to create</p>
         </div>
 

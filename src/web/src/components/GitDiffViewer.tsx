@@ -61,8 +61,8 @@ function FileDiff({ file, lines }: { file: string; lines: DiffLine[] }) {
         className="w-full flex items-center gap-3 px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800/80 transition-colors text-left"
       >
         <span className="font-mono text-xs text-zinc-300 flex-1 truncate">{file}</span>
-        {addCount > 0 && <span className="text-xs text-emerald-500">+{addCount}</span>}
-        {removeCount > 0 && <span className="text-xs text-red-400">-{removeCount}</span>}
+        {addCount > 0 && <span className="text-xs text-bender-success">+{addCount}</span>}
+        {removeCount > 0 && <span className="text-xs text-bender-danger">-{removeCount}</span>}
         <span className="text-zinc-600 text-xs ml-1">{collapsed ? "▶" : "▼"}</span>
       </button>
 
@@ -77,9 +77,9 @@ function FileDiff({ file, lines }: { file: string; lines: DiffLine[] }) {
                     key={i}
                     className={
                       line.type === "add"
-                        ? "bg-emerald-950/30"
+                        ? "bg-bender-diff-add-bg/30"
                         : line.type === "remove"
-                          ? "bg-red-950/30"
+                          ? "bg-bender-diff-rm-bg/30"
                           : line.type === "hunk"
                             ? "bg-zinc-800/60"
                             : ""
@@ -91,9 +91,9 @@ function FileDiff({ file, lines }: { file: string; lines: DiffLine[] }) {
                     <td
                       className={`pr-4 py-0.5 whitespace-pre-wrap break-all ${
                         line.type === "add"
-                          ? "text-emerald-300"
+                          ? "text-bender-success"
                           : line.type === "remove"
-                            ? "text-red-300"
+                            ? "text-bender-danger"
                             : line.type === "hunk"
                               ? "text-zinc-500"
                               : "text-zinc-400"

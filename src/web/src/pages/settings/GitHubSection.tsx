@@ -173,7 +173,7 @@ export function GitHubSection() {
 
       <Field label="Connection">
         <div className="space-y-2">
-          <p className={`text-xs ${githubConnected ? "text-emerald-400" : "text-zinc-500"}`}>
+          <p className={`text-xs ${githubConnected ? "text-bender-success" : "text-zinc-500"}`}>
             {githubConnected ? `Connected${githubStatus?.login ? ` as @${githubStatus.login}` : ""}` : "Not connected"}
           </p>
           {!githubConfigured && (
@@ -247,7 +247,7 @@ export function GitHubSection() {
       </Field>
 
       {(githubError || githubNotice) && (
-        <p className={`text-xs mt-3 ${githubError ? "text-red-400" : "text-zinc-500"}`}>
+        <p className={`text-xs mt-3 ${githubError ? "text-bender-danger" : "text-zinc-500"}`}>
           {githubError ?? githubNotice}
         </p>
       )}

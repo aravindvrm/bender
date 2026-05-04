@@ -93,7 +93,7 @@ function ThemeCard({
           {isDark
             ? <Moon className="h-2.5 w-2.5 text-zinc-600" />
             : <Sun className="h-2.5 w-2.5 text-zinc-500" />}
-          {isActive && <Check className="h-3 w-3 text-emerald-400 ml-0.5" />}
+          {isActive && <Check className="h-3 w-3 text-bender-success ml-0.5" />}
         </div>
       </div>
 

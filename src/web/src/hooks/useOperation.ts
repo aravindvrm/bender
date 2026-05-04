@@ -95,6 +95,10 @@ export function useOperation(onStateChange?: () => void) {
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [modal, setModal] = useState<OperationModal>(null);
   const [inputText, setInputText] = useState("");
+  // runId increments each time a new operation starts — lets consumers
+  // (ChatPanel) detect new ops vs. updates to the current one.
+  const [runId, setRunId] = useState(0);
+  const [currentUrl, setCurrentUrl] = useState<string | undefined>(undefined);
   const abortRef = useRef<AbortController | null>(null);
 
   const addLine = useCallback((line: OutputLine) => {
@@ -184,6 +188,8 @@ export function useOperation(onStateChange?: () => void) {
     setLines([]);
     setStatus("running");
     setDrawerOpen(true);
+    setRunId((id) => id + 1);
+    setCurrentUrl(url);
     let succeeded = false;
     const wrappedHandleEvent = (event: SSEEvent) => {
       if (event.type === "done" && event.success) succeeded = true;
@@ -236,6 +242,8 @@ export function useOperation(onStateChange?: () => void) {
   return {
     lines,
     status,
+    runId,
+    currentUrl,
     drawerOpen,
     setDrawerOpen,
     modal,

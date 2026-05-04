@@ -55,6 +55,17 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   };
 }
 
+/** Approximate relative lightness [0..1] from a hex color (using sRGB luminance). */
+function hexToRelativeLightness(hex: string): number {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return 0;
+  const toLinear = (c: number) => {
+    const s = c / 255;
+    return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * toLinear(rgb.r) + 0.7152 * toLinear(rgb.g) + 0.0722 * toLinear(rgb.b);
+}
+
 export function blend(base: string, target: string, amount: number): string {
   const a = hexToRgb(base);
   const b = hexToRgb(target);
@@ -135,7 +146,9 @@ export function importVsCodeTheme(params: ImportVsCodeThemeParams): ImportVsCode
   const panelBg = pick("sideBar.background", "editorGroupHeader.tabsBackground", "panel.background")
     ?? (appearance === "dark" ? "#18181b" : "#f4f4f5");
   const panelAltBg = pick("editor.background", "editorGroup.background", "tab.inactiveBackground") ?? appBg;
-  const elevatedBg = pick("editorWidget.background", "dropdown.background", "menu.background") ?? panelBg;
+  // surfaceOverlay comes from VS Code's widget/dropdown surface — clearly elevated above panel
+  const rawOverlay = pick("editorWidget.background", "dropdown.background", "menu.background");
+  const elevatedBg = rawOverlay ?? panelBg;
   const textPrimary = pick("editor.foreground", "foreground")
     ?? (appearance === "dark" ? "#fafafa" : "#18181b");
   const textSecondary = pick("sideBar.foreground", "descriptionForeground", "editorLineNumber.foreground")
@@ -156,6 +169,30 @@ export function importVsCodeTheme(params: ImportVsCodeThemeParams): ImportVsCode
   const diffAdded = pick("diffEditor.insertedLineBackground", "gitDecoration.addedResourceForeground") ?? success;
   const diffRemoved = pick("diffEditor.removedLineBackground", "gitDecoration.deletedResourceForeground") ?? danger;
   const zinc = makeZincScale(appBg, textPrimary, appearance);
+
+  // ── Elevation tier ────────────────────────────────────────────────────────
+  // surfaceFloat: one visible step above panelBg — for floating cards
+  const surfaceFloat = blend(panelBg, textPrimary, appearance === "dark" ? 0.07 : 0.04);
+  // surfaceOverlay: clearly elevated for popups/menus — prefer VS Code widget bg if distinct
+  const surfaceOverlay = (() => {
+    if (rawOverlay) {
+      // Only use VS Code's value if it's actually above panelBg in lightness
+      const panelL = hexToRelativeLightness(panelBg);
+      const overlayL = hexToRelativeLightness(rawOverlay);
+      const diff = appearance === "dark" ? overlayL - panelL : panelL - overlayL;
+      if (diff >= 0.04) return rawOverlay;
+    }
+    // Derive: ~14% blend — ensures visible step on any theme
+    return blend(panelBg, textPrimary, appearance === "dark" ? 0.14 : 0.07);
+  })();
+  // overlayBorder: visible ring around popup — blend toward text at 25%
+  const overlayBorder = pick("editorWidget.border", "menu.border")
+    ?? blend(surfaceOverlay, textPrimary, appearance === "dark" ? 0.28 : 0.18);
+  // Row states inside overlays
+  const overlayHover  = pick("list.hoverBackground")
+    ?? blend(surfaceOverlay, textPrimary, appearance === "dark" ? 0.09 : 0.07);
+  const overlayActive = pick("list.activeSelectionBackground", "list.focusBackground")
+    ?? blend(surfaceOverlay, textPrimary, appearance === "dark" ? 0.17 : 0.12);
 
   const theme: BenderTheme = {
     schemaVersion: 1,
@@ -205,6 +242,12 @@ export function importVsCodeTheme(params: ImportVsCodeThemeParams): ImportVsCode
         codeInlineFg: textSecondary,
         codeBlockBg: panelBg,
         codeBlockBorder: borderDefault,
+        // Elevation tier
+        surfaceFloat,
+        surfaceOverlay,
+        overlayBorder,
+        overlayHover,
+        overlayActive,
       },
       radius: { sm: "4px", md: "6px", lg: "8px", xl: "12px" },
       legacy: { zinc },

@@ -22,9 +22,9 @@ export function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, inter
     case "output": {
       const colors: Record<string, string> = {
         info: "text-zinc-400",
-        success: "text-emerald-400",
-        warn: "text-amber-400",
-        error: "text-red-400",
+        success: "text-bender-success",
+        warn: "text-bender-warning",
+        error: "text-bender-danger",
       };
       return <div className={colors[line.level] ?? "text-zinc-400"}>{line.text}</div>;
     }
@@ -36,7 +36,7 @@ export function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, inter
       if (!line.done) return null;
       return (
         <div className="flex items-center gap-2 text-zinc-400">
-          <span className={line.success ? "text-emerald-400" : "text-red-400"}>{line.success ? "✓" : "✗"}</span>
+          <span className={line.success ? "text-bender-success" : "text-bender-danger"}>{line.success ? "✓" : "✗"}</span>
           <span>{line.text}</span>
         </div>
       );
@@ -60,7 +60,7 @@ export function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, inter
         <div className="my-2 p-3 bg-zinc-800/60 rounded-lg border border-zinc-700 space-y-2">
           <p className="text-zinc-200 font-sans">{line.question}</p>
           {line.answered ? (
-            <p className={`text-xs font-sans ${line.answer ? "text-emerald-400" : "text-red-400"}`}>
+            <p className={`text-xs font-sans ${line.answer ? "text-bender-success" : "text-bender-danger"}`}>
               → {line.answer ? "Approved" : "Declined"}
             </p>
           ) : !interactivePrompts ? (
@@ -69,7 +69,7 @@ export function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, inter
             <div className="flex gap-2">
               <button
                 onClick={() => onConfirm(line.id, lineIdx, true)}
-                className="px-3 py-1 text-xs rounded bg-emerald-900/50 border border-emerald-700 text-emerald-300 hover:bg-emerald-900 transition-colors font-sans"
+                className="px-3 py-1 text-xs rounded bg-bender-success/10 border border-bender-success/30 text-bender-success hover:bg-bender-success/20 transition-colors font-sans"
               >
                 Approve
               </button>
@@ -116,13 +116,13 @@ export function OutputLineView({ line, lineIdx, onConfirm, onPromptSubmit, inter
 
     case "done":
       return (
-        <div className={`pt-2 font-semibold font-sans ${line.success ? "text-emerald-400" : "text-red-400"}`}>
+        <div className={`pt-2 font-semibold font-sans ${line.success ? "text-bender-success" : "text-bender-danger"}`}>
           {line.success ? "✓ Operation completed successfully." : "✗ Operation finished with errors."}
         </div>
       );
 
     case "error":
-      return <div className="text-red-400 pt-1 font-sans">Error: {line.message}</div>;
+      return <div className="text-bender-danger pt-1 font-sans">Error: {line.message}</div>;
 
     default:
       return null;

@@ -57,6 +57,12 @@ export const benderThemeSchema = z.object({
       codeInlineFg: colorValueSchema,
       codeBlockBg: colorValueSchema,
       codeBlockBorder: colorValueSchema,
+      // Elevation tier — optional so old themes fall back to CSS defaults
+      surfaceFloat: colorValueSchema.optional(),    // floating cards (drawer)
+      surfaceOverlay: colorValueSchema.optional(),  // popups, menus, pickers
+      overlayBorder: colorValueSchema.optional(),   // popup border
+      overlayHover: colorValueSchema.optional(),    // popup row hover
+      overlayActive: colorValueSchema.optional(),   // popup row active/selected
     }),
     radius: z.object({
       sm: radiusValueSchema,

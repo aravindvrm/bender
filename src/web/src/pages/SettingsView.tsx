@@ -440,7 +440,7 @@ export function SettingsView() {
       <PreferencesSection config={config} setConfig={setConfig} />
 
       {/* Error */}
-      {error && <p className="text-sm text-red-400/80">{error}</p>}
+      {error && <p className="text-sm text-bender-danger/80">{error}</p>}
 
       {/* Save */}
       <div className="flex items-center gap-3 pb-8">
@@ -451,7 +451,7 @@ export function SettingsView() {
         >
           {saving ? "Saving..." : "Save settings"}
         </button>
-        {saved && <span className="text-sm text-emerald-400">Saved</span>}
+        {saved && <span className="text-sm text-bender-success">Saved</span>}
       </div>
     </div>
   );

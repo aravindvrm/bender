@@ -100,7 +100,7 @@ export function LLMSection({
         <SectionHeader title="LLM Provider & Models" />
         <div className="space-y-4">
           {modelRefreshError && (
-            <p className="text-xs text-red-400">{modelRefreshError}</p>
+            <p className="text-xs text-bender-danger">{modelRefreshError}</p>
           )}
           {MODEL_TIERS.map((tier) => (
             <Field key={tier} label={tier} hint={tier === "fast" ? "clarify" : tier === "default" ? "plan/review" : "architect/code"}>

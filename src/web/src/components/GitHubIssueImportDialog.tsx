@@ -252,7 +252,7 @@ export function GitHubIssueImportDialog({ onClose, onImported }: GitHubIssueImpo
 
         {error && (
           <div className="px-4 py-2 border-b border-zinc-800">
-            <p className="text-xs text-red-400">{error}</p>
+            <p className="text-xs text-bender-danger">{error}</p>
           </div>
         )}
 

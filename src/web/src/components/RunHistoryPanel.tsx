@@ -73,13 +73,13 @@ function RunEventLine({ event }: { event: RunEvent }) {
       return <div className="text-zinc-400 text-[11px]">{text}</div>;
 
     case "success":
-      return <div className="text-emerald-400 text-[11px]">{text}</div>;
+      return <div className="text-bender-success text-[11px]">{text}</div>;
 
     case "warn":
       return <div className="text-amber-400 text-[11px]">{text}</div>;
 
     case "error":
-      return <div className="text-red-400 text-[11px]">{text}</div>;
+      return <div className="text-bender-danger text-[11px]">{text}</div>;
 
     case "stream":
       return <div className="text-zinc-300 whitespace-pre-wrap text-[11px]">{text}</div>;
@@ -100,13 +100,13 @@ function RunEventLine({ event }: { event: RunEvent }) {
       return (
         <div className="flex items-center gap-1.5 text-[11px]">
           {success === true ? (
-            <span className="text-emerald-400 w-3">✓</span>
+            <span className="text-bender-success w-3">✓</span>
           ) : success === false ? (
-            <span className="text-red-400 w-3">✗</span>
+            <span className="text-bender-danger w-3">✗</span>
           ) : (
             <span className="text-zinc-500 w-3">·</span>
           )}
-          <span className={success === true ? "text-zinc-300" : success === false ? "text-red-300/70" : "text-zinc-500"}>
+          <span className={success === true ? "text-zinc-300" : success === false ? "text-bender-danger/70" : "text-zinc-500"}>
             {text}
           </span>
         </div>
@@ -156,7 +156,7 @@ function RunEventLine({ event }: { event: RunEvent }) {
     case "done": {
       const success = payload.success;
       return (
-        <div className={`pt-1.5 font-semibold text-[11px] ${success ? "text-emerald-400" : "text-red-400"}`}>
+        <div className={`pt-1.5 font-semibold text-[11px] ${success ? "text-bender-success" : "text-bender-danger"}`}>
           {success ? "✓ Completed." : "✗ Finished with errors."}
         </div>
       );
@@ -182,8 +182,8 @@ function RunListItem({
 }) {
   const statusDot = {
     running: "bg-blue-400 animate-pulse",
-    done: "bg-emerald-400",
-    error: "bg-red-400",
+    done: "bg-bender-success",
+    error: "bg-bender-danger",
     aborted: "bg-zinc-500",
   }[run.status];
 

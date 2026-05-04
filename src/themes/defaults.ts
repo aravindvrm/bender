@@ -81,6 +81,12 @@ export const BENDER_DEFAULT_DARK_THEME: BenderTheme = {
       codeInlineFg: DEFAULT_ZINC_DARK["200"],
       codeBlockBg: DEFAULT_ZINC_DARK["900"],
       codeBlockBorder: DEFAULT_ZINC_DARK["800"],
+      // Elevation tier — clear perceptual steps above panelBg (#111113)
+      surfaceFloat:   "#181820",  // floating cards: +6% L* above panel, subtle violet tint
+      surfaceOverlay: "#252530",  // popups/menus: +14% L*, clearly distinct
+      overlayBorder:  "#3e3e4e",  // popup border: +25% L*, visible against overlay
+      overlayHover:   "#2e2e3c",  // row hover: midpoint between overlay and active
+      overlayActive:  "#363645",  // row selected: highest inside overlay
     },
     radius: {
       sm: "4px",
@@ -141,6 +147,12 @@ export const BENDER_DEFAULT_LIGHT_THEME: BenderTheme = {
       codeInlineFg: "#18181b",
       codeBlockBg: "#f4f4f5",
       codeBlockBorder: "#d4d4d8",
+      // Elevation tier — light themes use white cards elevated by shadow
+      surfaceFloat:   "#ffffff",  // white floating card
+      surfaceOverlay: "#ffffff",  // white popup (shadow creates elevation)
+      overlayBorder:  "#d1d5db",  // clear gray border
+      overlayHover:   "#f3f4f6",  // subtle hover
+      overlayActive:  "#e5e7eb",  // selected row
     },
     radius: {
       sm: "4px",

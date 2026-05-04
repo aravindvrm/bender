@@ -2,19 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
-  History,
+  MessageSquarePlus,
   Terminal as TerminalIcon,
+  X,
 } from "lucide-react";
-import type { OperationStatus, OperationModal } from "../hooks/useOperation";
-import { LoadingDots } from "./LoadingDots";
+import type { OperationStatus, OperationModal, OutputLine } from "../hooks/useOperation";
 import { ChatPanel, type ChatTrigger } from "./ChatPanel";
 import { TerminalPanel } from "./drawer/TerminalPanel";
-import { RunHistoryPanel } from "./RunHistoryPanel";
 import { NewProjectModal } from "./drawer/NewProjectModal";
 
 export type { InitModalSubmission } from "./drawer/NewProjectModal";
 
-type RightPanel = "none" | "console" | "terminal";
+type RightPanel = "none" | "terminal";
 
 interface OperationDrawerProps {
   status: OperationStatus;
@@ -29,11 +28,21 @@ interface OperationDrawerProps {
   onRunOperation?: (url: string, body?: Record<string, unknown>) => void;
   /** Trigger fired by sidebar / onNewTask buttons — auto-switches to chat tab. */
   chatTrigger?: ChatTrigger | null;
+  /** Live operation feed — passed through to ChatPanel for inline rendering. */
+  operation?: {
+    lines: OutputLine[];
+    status: OperationStatus;
+    runId: number;
+    currentUrl?: string;
+    handleConfirm: (id: string, idx: number, answer: boolean) => void;
+    handlePromptSubmit: (id: string, idx: number, text: string) => void;
+  } | null;
 }
 
 const MIN_DRAWER_HEIGHT = 160;
-const MIN_RIGHT_PANEL_WIDTH = 220;
-const DEFAULT_RIGHT_PANEL_WIDTH = 360;
+const MIN_RIGHT_PANEL_WIDTH = 240;
+const DEFAULT_RIGHT_PANEL_WIDTH = 380;
+const COLLAPSED_HEIGHT = 44;
 
 export function OperationDrawer({
   status,
@@ -47,6 +56,7 @@ export function OperationDrawer({
   onSubmitInit,
   onRunOperation,
   chatTrigger,
+  operation,
 }: OperationDrawerProps) {
   const initialDrawerHeight = (() => {
     if (typeof window === "undefined") return 320;
@@ -59,7 +69,6 @@ export function OperationDrawer({
   const resizeStartYRef = useRef(0);
   const resizeStartHeightRef = useRef(220);
 
-  // Right panel (console / terminal) — slides in from the right.
   const [rightPanel, setRightPanel] = useState<RightPanel>("none");
   const [rightPanelWidth, setRightPanelWidth] = useState(DEFAULT_RIGHT_PANEL_WIDTH);
   const [isResizingV, setIsResizingV] = useState(false);
@@ -74,7 +83,7 @@ export function OperationDrawer({
 
   function clampDrawerHeight(height: number): number {
     const maxHeight = typeof window !== "undefined"
-      ? Math.floor(window.innerHeight * 0.78)
+      ? Math.floor(window.innerHeight * 0.75)
       : 640;
     return Math.max(MIN_DRAWER_HEIGHT, Math.min(height, maxHeight));
   }
@@ -114,7 +123,7 @@ export function OperationDrawer({
 
   function clampRightWidth(width: number): number {
     const maxWidth = typeof window !== "undefined"
-      ? Math.floor(window.innerWidth * 0.6)
+      ? Math.floor(window.innerWidth * 0.55)
       : 800;
     return Math.max(MIN_RIGHT_PANEL_WIDTH, Math.min(width, maxWidth));
   }
@@ -148,16 +157,12 @@ export function OperationDrawer({
   }, [isResizingV]);
 
   // -------------------------------------------------------------------------
-  // Expand on running
+  // Auto-expand on running / trigger
   // -------------------------------------------------------------------------
 
   useEffect(() => {
     if (status === "running") setCollapsed(false);
   }, [status]);
-
-  // -------------------------------------------------------------------------
-  // Trigger: auto-uncollapse and focus chat
-  // -------------------------------------------------------------------------
 
   const prevTriggerTokenRef = useRef<number | undefined>(undefined);
   useEffect(() => {
@@ -171,19 +176,18 @@ export function OperationDrawer({
   // Helpers
   // -------------------------------------------------------------------------
 
-  function toggleRight(panel: "console" | "terminal") {
+  function toggleRight(panel: "terminal") {
     setRightPanel((prev) => (prev === panel ? "none" : panel));
   }
 
   const statusLabel =
-    status === "running" ? "Running…" :
     status === "done" ? "Done" :
     status === "error" ? "Error" : "";
 
   const statusColor =
     status === "running" ? "text-zinc-400" :
-    status === "done" ? "text-bender-success" :
-    status === "error" ? "text-bender-danger" : "";
+    status === "done" ? "text-emerald-400" :
+    status === "error" ? "text-red-400" : "";
 
   if (!drawerOpen) return null;
 
@@ -202,137 +206,161 @@ export function OperationDrawer({
         />
       )}
 
-      <div
-        className={`shrink-0 bg-zinc-950 flex flex-col ${
-          isResizingH || isResizingV ? "" : "transition-[height] duration-150"
-        } ${collapsed ? "h-10" : ""}`}
-        style={!collapsed ? { height: `${drawerHeight}px` } : undefined}
-      >
-        {/* Horizontal resize handle — invisible hit zone, pill fades in on hover */}
-        {!collapsed && (
-          <div
-            onMouseDown={startResizeH}
-            className="h-2 shrink-0 cursor-ns-resize flex items-center justify-center group"
-          >
-            <div className={`w-8 h-0.5 rounded-full transition-all duration-200 ${
-              isResizingH ? "bg-zinc-500" : "bg-transparent group-hover:bg-zinc-600/70"
-            }`} />
-          </div>
-        )}
-
-        {/* Header */}
-        <div className="flex items-center gap-1.5 px-2 h-7 shrink-0 border-b border-zinc-800/60">
-          {/* Status */}
-          <div className="flex items-center gap-1 min-w-0">
-            {isRunning && <LoadingDots size={10} />}
-            {statusLabel && (
-              <span className={`text-[10px] font-medium shrink-0 ${statusColor}`}>
-                {statusLabel}
-              </span>
-            )}
-          </div>
-
-          <div className="flex-1" />
-
-          {/* Right-panel toggles */}
-          <div className="flex items-center gap-0.5">
-            <button
-              onClick={() => toggleRight("console")}
-              title="Toggle run console (⌘J)"
-              className={`flex items-center gap-1 px-1.5 h-5 rounded text-[10px] transition-colors ${
-                rightPanel === "console"
-                  ? "bg-zinc-800 text-zinc-200 border border-zinc-700"
-                  : "text-zinc-600 hover:text-zinc-400 hover:bg-zinc-900"
-              }`}
-            >
-              <History className="h-2.5 w-2.5" />
-              <span className="hidden sm:inline">Console</span>
-            </button>
-            <button
-              onClick={() => toggleRight("terminal")}
-              title="Toggle terminal (⌘`)"
-              className={`flex items-center gap-1 px-1.5 h-5 rounded text-[10px] transition-colors ${
-                rightPanel === "terminal"
-                  ? "bg-zinc-800 text-zinc-200 border border-zinc-700"
-                  : "text-zinc-600 hover:text-zinc-400 hover:bg-zinc-900"
-              }`}
-            >
-              <TerminalIcon className="h-2.5 w-2.5" />
-              <span className="hidden sm:inline">Terminal</span>
-            </button>
-          </div>
-
-          {/* Stop / clear */}
-          {isRunning && (
-            <button
-              onClick={onAbort}
-              className="text-[10px] text-bender-danger/70 hover:text-bender-danger transition-colors px-1.5 rounded border border-bender-danger/20 hover:border-bender-danger/40"
-            >
-              Stop
-            </button>
-          )}
-          {(status === "done" || status === "error") && (
-            <button
-              onClick={() => { onClear(); setCollapsed(true); }}
-              className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors px-1.5 rounded"
-            >
-              Dismiss
-            </button>
-          )}
-
-          {/* Collapse toggle */}
-          <button
-            onClick={() => setCollapsed((v) => !v)}
-            className="text-zinc-600 hover:text-zinc-400 transition-colors"
-            title={collapsed ? "Expand (⌘↑)" : "Collapse (⌘↓)"}
-          >
-            {collapsed ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-          </button>
-        </div>
-
-        {/* Body — chat + optional right panel */}
-        {!collapsed && (
-          <div className="flex-1 min-h-0 flex">
-            {/* Chat — always the primary panel */}
-            <div className="flex-1 min-w-0">
-              <ChatPanel
-                projectPath={currentProjectPath}
-                onRunOperation={onRunOperation}
-                trigger={chatTrigger}
-              />
+      {/* Floating card wrapper */}
+      <div className="shrink-0 px-4 pb-4 pt-0">
+        <div
+          className={`
+            relative flex flex-col overflow-hidden
+            rounded-2xl
+            ring-1 ring-white/[0.06]
+            ${isResizingH || isResizingV ? "" : "transition-[height] duration-150"}
+          `}
+          style={{
+            background: "var(--bender-surface-float)",
+            boxShadow: "var(--bender-shadow-float)",
+            height: !collapsed ? `${drawerHeight}px` : `${COLLAPSED_HEIGHT}px`,
+          }}
+        >
+          {/* Collapsed bar */}
+          {collapsed && (
+            <div className="h-full flex items-center gap-1 px-3">
+              {statusLabel && (
+                <span className={`text-[10px] font-medium ${statusColor}`}>{statusLabel}</span>
+              )}
+              <div className="flex-1" />
+              {isRunning && (
+                <button onClick={onAbort} className="p-1 px-1.5 rounded-md text-[10px] font-medium text-red-400/70 hover:text-red-400 hover:bg-zinc-800/60 transition-colors">
+                  Stop
+                </button>
+              )}
+              <button
+                onClick={() => setCollapsed(false)}
+                title="Expand"
+                className="p-1 rounded-md text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors"
+              >
+                <ChevronUp className="h-3.5 w-3.5" />
+              </button>
             </div>
+          )}
 
-            {/* Vertical resize handle */}
-            {showRight && (
-              <div
-                onMouseDown={startResizeV}
-                className="w-2 shrink-0 cursor-ew-resize flex items-center justify-center group"
-              >
-                <div className={`h-8 w-0.5 rounded-full transition-all duration-200 ${
-                  isResizingV ? "bg-zinc-500" : "bg-transparent group-hover:bg-zinc-600/70"
-                }`} />
-              </div>
-            )}
+          {/* Resize handle — pill at top of card */}
+          {!collapsed && (
+            <div
+              onMouseDown={startResizeH}
+              className="h-3 shrink-0 cursor-ns-resize flex items-center justify-center group"
+            >
+              <div className={`w-8 h-0.5 rounded-full transition-all duration-200 ${
+                isResizingH ? "bg-zinc-500" : "bg-transparent group-hover:bg-zinc-600/80"
+              }`} />
+            </div>
+          )}
 
-            {/* Right panel: console or terminal */}
-            {showRight && (
-              <div
-                className="shrink-0 border-l border-zinc-800/60 flex flex-col overflow-hidden"
-                style={{ width: `${rightPanelWidth}px` }}
-              >
-                {rightPanel === "console" && (
-                  <RunHistoryPanel
-                    projectPath={currentProjectPath}
-                    operationStatus={status}
-                  />
-                )}
-                {rightPanel === "terminal" && (
-                  <TerminalPanel projectPath={currentProjectPath} />
-                )}
+          {/* Body — chat + optional right panel. ChatPanel owns the single header bar. */}
+          {!collapsed && (
+            <div className="flex-1 min-h-0 flex overflow-hidden">
+              {/* Chat */}
+              <div className="flex-1 min-w-0 overflow-hidden">
+                <ChatPanel
+                  projectPath={currentProjectPath}
+                  onRunOperation={onRunOperation}
+                  trigger={chatTrigger}
+                  operation={operation
+                    ? {
+                        lines: operation.lines,
+                        status: operation.status,
+                        runId: operation.runId,
+                        url: operation.currentUrl,
+                        handleConfirm: operation.handleConfirm,
+                        handlePromptSubmit: operation.handlePromptSubmit,
+                      }
+                    : null}
+                  headerActions={
+                    <div className="flex items-center gap-0.5">
+                      {/* Status */}
+                      {statusLabel && (
+                        <span className={`text-[10px] font-medium mr-1 ${statusColor}`}>
+                          {statusLabel}
+                        </span>
+                      )}
+                      {/* New thread */}
+                      <button
+                        onClick={() => window.dispatchEvent(new CustomEvent("bender:new-thread"))}
+                        title="New conversation (⌘K)"
+                        className="p-1 rounded-md text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors"
+                      >
+                        <MessageSquarePlus className="h-3.5 w-3.5" />
+                      </button>
+                      {/* Terminal */}
+                      <button
+                        onClick={() => toggleRight("terminal")}
+                        title="Terminal"
+                        className={`p-1 rounded-md transition-colors ${
+                          rightPanel === "terminal"
+                            ? "text-zinc-200 bg-zinc-700/60"
+                            : "text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800/60"
+                        }`}
+                      >
+                        <TerminalIcon className="h-3.5 w-3.5" />
+                      </button>
+                      {/* Stop */}
+                      {isRunning && (
+                        <button
+                          onClick={onAbort}
+                          title="Stop"
+                          className="p-1 px-1.5 rounded-md text-[10px] font-medium text-red-400/70 hover:text-red-400 hover:bg-zinc-800/60 transition-colors"
+                        >
+                          Stop
+                        </button>
+                      )}
+                      {/* Dismiss */}
+                      {(status === "done" || status === "error") && (
+                        <button
+                          onClick={() => { onClear(); setCollapsed(true); }}
+                          title="Dismiss"
+                          className="p-1 rounded-md text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {/* Collapse */}
+                      <button
+                        onClick={() => setCollapsed((v) => !v)}
+                        title="Collapse"
+                        className="p-1 rounded-md text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors"
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  }
+                />
               </div>
-            )}
-          </div>
-        )}
+
+              {/* Vertical resize handle */}
+              {showRight && (
+                <div
+                  onMouseDown={startResizeV}
+                  className="w-2 shrink-0 cursor-ew-resize flex items-center justify-center group"
+                >
+                  <div className={`h-8 w-0.5 rounded-full transition-all duration-200 ${
+                    isResizingV ? "bg-zinc-500" : "bg-transparent group-hover:bg-zinc-600/70"
+                  }`} />
+                </div>
+              )}
+
+              {/* Right panel */}
+              {showRight && (
+                <div
+                  className="shrink-0 border-l border-white/[0.05] flex flex-col overflow-hidden"
+                  style={{ width: `${rightPanelWidth}px` }}
+                >
+                  {rightPanel === "terminal" && (
+                    <TerminalPanel projectPath={currentProjectPath} />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </>
   );

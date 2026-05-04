@@ -375,7 +375,7 @@ export function CreateEvalConfigModal({
                 {refreshingModels ? "…" : "Refresh"}
               </button>
             </div>
-            {modelError && <p className="text-[11px] text-red-400">{modelError}</p>}
+            {modelError && <p className="text-[11px] text-bender-danger">{modelError}</p>}
           </div>
 
           {/* Skills */}
@@ -493,7 +493,7 @@ export function CreateEvalConfigModal({
             </div>
           )}
 
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs text-bender-danger">{error}</p>}
         </div>
 
         {/* Footer */}

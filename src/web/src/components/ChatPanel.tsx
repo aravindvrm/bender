@@ -11,9 +11,12 @@ import {
   type UITools,
   type ToolUIPart,
 } from "ai";
-import { Archive, ArchiveRestore, Check, ChevronDown, MessageSquarePlus, Pencil, Send, Square, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, Check, ChevronDown, ChevronRight, MessageSquarePlus, Pencil, Send, Square, Trash2, X } from "lucide-react";
 // MessageSquarePlus, Trash2 used in ConversationPicker
 import { LoadingDots } from "./LoadingDots";
+import { OperationBlock, type OperationSummary } from "./OperationBlock";
+import { buildOperationMessage, getOperationSummary, isOperationMessage, persistOperationMessage } from "../lib/operation-message";
+import type { OutputLine, OperationStatus as OpStatus } from "../hooks/useOperation";
 
 // ---------------------------------------------------------------------------
 // Slash commands
@@ -36,7 +39,17 @@ function buildCommands(opts: {
   onClear: () => void;
   onNewThread: () => void;
   onRunOperation?: (url: string, body?: Record<string, unknown>) => void;
+  isGlobal?: boolean;
 }): SlashCommand[] {
+  if (opts.isGlobal) {
+    return [
+      { name: "open",   description: "Open a local project directory", kind: "prompt", prompt: "Open project at path: " },
+      { name: "clone",  description: "Clone a GitHub repo and open it", kind: "prompt", prompt: "Clone this repo: " },
+      { name: "recent", description: "List recently opened projects", kind: "prompt", prompt: "Show my recent projects" },
+      { name: "new",    description: "Start a new conversation (⌘K)", kind: "action", onAction: opts.onNewThread },
+      { name: "clear",  description: "Hide messages in this conversation", kind: "action", onAction: opts.onClear },
+    ];
+  }
   return [
     // Task management — handled by the deterministic operator parser
     { name: "task list",   description: "List all tasks and their status", kind: "prompt", prompt: "/task list" },
@@ -46,8 +59,9 @@ function buildCommands(opts: {
     { name: "task delete", description: "Delete a task — /task delete <id>", kind: "prompt", prompt: "/task delete " },
 
     // Run operations — direct API, no LLM
-    { name: "run analyze",   description: "Re-analyze codebase and refresh architecture", kind: "action", onAction: () => opts.onRunOperation?.("/api/run/analyze") },
-    { name: "run implement", description: "Execute the current task plan", kind: "action", onAction: () => opts.onRunOperation?.("/api/run/implement") },
+    { name: "analyze",        description: "Re-analyze codebase and refresh architecture", kind: "action", onAction: () => opts.onRunOperation?.("/api/run/analyze") },
+    { name: "run analyze",    description: "Re-analyze codebase and refresh architecture", kind: "action", onAction: () => opts.onRunOperation?.("/api/run/analyze") },
+    { name: "run implement",  description: "Execute the current task plan", kind: "action", onAction: () => opts.onRunOperation?.("/api/run/implement") },
 
     // Audit — deterministic operator parser
     { name: "audit security", description: "Run a security audit on the codebase", kind: "prompt", prompt: "/audit security" },
@@ -84,15 +98,44 @@ interface ChatThread {
   updatedAt: number;
 }
 
-function keyForProject(projectPath: string): string {
-  return `bender.chat.activeThread.${projectPath}`;
+function scopeKey(projectPath: string | null): string {
+  return projectPath ?? "__global__";
 }
 
-function hiddenKey(projectPath: string): string {
-  return `bender.chat.hiddenMessages.${projectPath}`;
+function keyForProject(projectPath: string | null): string {
+  return `bender.chat.activeThread.${scopeKey(projectPath)}`;
 }
 
-function loadHidden(projectPath: string): Record<string, Record<string, true>> {
+export function pickUsableThread(
+  threads: ChatThread[],
+  options: {
+    preferredThreadId?: string | null;
+    savedThreadId?: string | null;
+  },
+): ChatThread | null {
+  const activeThreads = threads.filter((thread) => !thread.archived);
+  if (activeThreads.length === 0) return null;
+
+  const preferred = options.preferredThreadId?.trim();
+  if (preferred) {
+    const match = activeThreads.find((thread) => thread.id === preferred);
+    if (match) return match;
+  }
+
+  const saved = options.savedThreadId?.trim();
+  if (saved) {
+    const match = activeThreads.find((thread) => thread.id === saved);
+    if (match) return match;
+  }
+
+  return activeThreads[0] ?? null;
+}
+
+function hiddenKey(projectPath: string | null): string {
+  return `bender.chat.hiddenMessages.${scopeKey(projectPath)}`;
+}
+
+function loadHidden(projectPath: string | null): Record<string, Record<string, true>> {
   try {
     const raw = localStorage.getItem(hiddenKey(projectPath));
     if (!raw) return {};
@@ -102,7 +145,7 @@ function loadHidden(projectPath: string): Record<string, Record<string, true>> {
   }
 }
 
-function saveHidden(projectPath: string, hidden: Record<string, Record<string, true>>): void {
+function saveHidden(projectPath: string | null, hidden: Record<string, Record<string, true>>): void {
   try {
     localStorage.setItem(hiddenKey(projectPath), JSON.stringify(hidden));
   } catch {
@@ -177,6 +220,15 @@ export function toolDisplayName(toolName: string): string {
   return toolName.replace(/^bender_/, "").replace(/_/g, " ");
 }
 
+/** Best-effort label from a /api/run/* URL. */
+function labelFromUrl(url?: string): string {
+  if (!url) return "Operation";
+  const m = url.match(/\/api\/(?:run|audit|evals)\/([^?#]+)/);
+  if (!m) return "Operation";
+  const tail = m[1].replace(/\//g, " ").replace(/-/g, " ");
+  return tail.charAt(0).toUpperCase() + tail.slice(1);
+}
+
 function ToolCallRow({ part }: { part: ToolUIPart<UITools> | DynamicToolUIPart }) {
   const name = getToolName(part);
   const state = part.state;
@@ -195,6 +247,52 @@ function ToolCallRow({ part }: { part: ToolUIPart<UITools> | DynamicToolUIPart }
       {!isDone && <span className="text-zinc-700">…</span>}
       {isDone && !isError && <span className="text-zinc-700">✓</span>}
       {isError && <span>failed</span>}
+    </div>
+  );
+}
+
+/**
+ * Collapsible group of tool calls — Claude-Code-style "Ran 8 tools" summary.
+ * Auto-expanded if the last tool is still running OR if any tool errored.
+ */
+function ToolPartsGroup({ parts }: { parts: (ToolUIPart<UITools> | DynamicToolUIPart)[] }) {
+  const lastState = parts[parts.length - 1]?.state;
+  const isRunning = lastState !== "output-available" && lastState !== "output-error" && lastState !== "output-denied";
+  const hasError = parts.some((p) => p.state === "output-error");
+  const [expanded, setExpanded] = useState<boolean>(isRunning || hasError);
+
+  const succeeded = parts.filter((p) => p.state === "output-available").length;
+  const errored = parts.filter((p) => p.state === "output-error").length;
+  const running = parts.filter((p) => {
+    const s = p.state;
+    return s !== "output-available" && s !== "output-error" && s !== "output-denied";
+  }).length;
+
+  const summary: string[] = [];
+  if (succeeded) summary.push(`${succeeded} ok`);
+  if (running)   summary.push(`${running} running`);
+  if (errored)   summary.push(`${errored} failed`);
+
+  return (
+    <div className="mt-1 select-none">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
+      >
+        {expanded ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
+        <span>
+          {parts.length === 1 ? "Used 1 tool" : `Ran ${parts.length} tools`}
+          {summary.length > 0 && <span className="text-zinc-600"> · {summary.join(" · ")}</span>}
+        </span>
+      </button>
+      {expanded && (
+        <div className="mt-0.5 ml-3.5 space-y-0.5">
+          {parts.map((part, i) => (
+            <ToolCallRow key={i} part={part} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -287,9 +385,12 @@ function ConversationPicker({
             </button>
           </div>
         ) : (
-          <div className={`flex items-center gap-2 px-3 py-2 transition-colors ${
-            isActive ? "bg-zinc-800/60 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
-          }`}>
+          <div
+            className={`flex items-center gap-2 px-3 py-2 transition-colors ${isActive ? "text-zinc-100" : "text-zinc-400 hover:text-zinc-200"}`}
+            style={isActive ? { background: "var(--bender-overlay-active)" } : undefined}
+            onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "var(--bender-overlay-hover)"; }}
+            onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLElement).style.background = ""; }}
+          >
             <button
               onClick={() => { onSelect(thread.id); onClose(); }}
               className="flex-1 min-w-0 flex items-center gap-2 text-left"
@@ -338,8 +439,11 @@ function ConversationPicker({
       {/* Backdrop */}
       <div className="absolute inset-0 z-40" onClick={onClose} />
       {/* Panel */}
-      <div className="absolute top-full left-0 right-0 z-50 mt-px bg-zinc-900 border border-zinc-700/80 rounded-b-lg shadow-2xl overflow-hidden">
-        <div className="px-3 py-2 border-b border-zinc-800/60 flex items-center justify-between">
+      <div
+        className="absolute top-full left-0 right-0 z-50 mt-px rounded-b-xl overflow-hidden"
+        style={{ background: "var(--bender-surface-overlay)", border: "1px solid var(--bender-overlay-border)", boxShadow: "var(--bender-shadow-overlay)" }}
+      >
+        <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: "1px solid var(--bender-overlay-border)" }}>
           <span className="text-[10px] text-zinc-600 uppercase tracking-wide">Conversations</span>
           <button
             onClick={onNew}
@@ -360,7 +464,8 @@ function ConversationPicker({
               <li>
                 <button
                   onClick={() => setShowArchived((v) => !v)}
-                  className="w-full flex items-center gap-1.5 px-3 py-1.5 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors border-t border-zinc-800/60"
+                  className="w-full flex items-center gap-1.5 px-3 py-1.5 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+                  style={{ borderTop: "1px solid var(--bender-overlay-border)" }}
                 >
                   <Archive className="h-2.5 w-2.5" />
                   <span>Archived ({archived.length})</span>
@@ -395,6 +500,24 @@ interface ChatPanelProps {
   onRunOperation?: (url: string, body?: Record<string, unknown>) => void;
   /** Imperative trigger fired by parent (sidebar buttons, onNewTask, etc.) */
   trigger?: ChatTrigger | null;
+  /** Extra icon buttons rendered at the right end of the conversation bar */
+  headerActions?: React.ReactNode;
+  /**
+   * Live operation feed — when present, renders an inline OperationBlock
+   * with collapsible event log + approval gates. Persists to the active
+   * thread once the operation finishes.
+   */
+  operation?: {
+    lines: OutputLine[];
+    status: OpStatus;
+    /** Increments each time a new operation is started */
+    runId: number;
+    /** Optional label override; defaults to URL-derived */
+    label?: string;
+    url?: string;
+    handleConfirm: (id: string, idx: number, answer: boolean) => void;
+    handlePromptSubmit: (id: string, idx: number, text: string) => void;
+  } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -430,9 +553,12 @@ function SlashMenu({
   if (filtered.length === 0) return null;
 
   return (
-    <div className="absolute bottom-full left-0 right-0 mb-1.5 bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl overflow-hidden z-50">
-      <div className="px-3 py-1.5 border-b border-zinc-800/60">
-        <span className="text-[10px] text-zinc-600 uppercase tracking-wide">Commands</span>
+    <div
+      className="absolute bottom-full left-0 right-0 mb-1.5 rounded-xl overflow-hidden z-50"
+      style={{ background: "var(--bender-surface-overlay)", border: "1px solid var(--bender-overlay-border)", boxShadow: "var(--bender-shadow-overlay)" }}
+    >
+      <div className="px-3 py-1.5" style={{ borderBottom: "1px solid var(--bender-overlay-border)" }}>
+        <span className="text-[10px] text-zinc-500 uppercase tracking-wide">Commands</span>
       </div>
       <ul ref={listRef} className="max-h-56 overflow-y-auto py-1">
         {filtered.map((cmd, i) => {
@@ -443,26 +569,25 @@ function SlashMenu({
                 type="button"
                 onMouseDown={(e) => { e.preventDefault(); onSelect(cmd); }}
                 onMouseEnter={() => onHover(i)}
-                className={`w-full flex items-start gap-3 px-3 py-2 text-left transition-colors ${
-                  isActive ? "bg-zinc-800" : "hover:bg-zinc-800/60"
-                }`}
+                className="w-full flex items-start gap-3 px-3 py-2 text-left transition-colors"
+                style={{ background: isActive ? "var(--bender-overlay-active)" : undefined }}
               >
                 <span className={`font-mono text-xs shrink-0 pt-px ${isActive ? "text-zinc-100" : "text-zinc-300"}`}>
                   /{cmd.name}
                 </span>
                 <span className="text-[11px] text-zinc-500 leading-relaxed">{cmd.description}</span>
                 {cmd.kind === "action" && (
-                  <span className="ml-auto shrink-0 text-[10px] text-zinc-700 border border-zinc-800 rounded px-1 py-px">run</span>
+                  <span className="ml-auto shrink-0 text-[10px] text-zinc-600 border rounded px-1 py-px" style={{ borderColor: "var(--bender-overlay-border)" }}>run</span>
                 )}
               </button>
             </li>
           );
         })}
       </ul>
-      <div className="px-3 py-1.5 border-t border-zinc-800/60 flex items-center gap-3">
-        <span className="text-[10px] text-zinc-700">↑↓ navigate</span>
-        <span className="text-[10px] text-zinc-700">↵ select</span>
-        <span className="text-[10px] text-zinc-700">esc dismiss</span>
+      <div className="px-3 py-1.5 flex items-center gap-3" style={{ borderTop: "1px solid var(--bender-overlay-border)" }}>
+        <span className="text-[10px] text-zinc-600">↑↓ navigate</span>
+        <span className="text-[10px] text-zinc-600">↵ select</span>
+        <span className="text-[10px] text-zinc-600">esc dismiss</span>
       </div>
     </div>
   );
@@ -472,7 +597,7 @@ function SlashMenu({
 // Main component
 // ---------------------------------------------------------------------------
 
-export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger }: ChatPanelProps) {
+export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger, headerActions, operation }: ChatPanelProps) {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
@@ -494,8 +619,14 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const userCancelledRef = useRef(false);
+  const scopeRef = useRef(scopeKey(projectPath));
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Operation message persistence: track which runIds we've already persisted
+  const persistedRunIdsRef = useRef<Set<number>>(new Set());
+  // Track operation start time per runId
+  const operationStartTimesRef = useRef<Map<number, number>>(new Map());
 
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === activeThreadId) ?? null,
@@ -515,7 +646,7 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
   // ---------------------------------------------------------------------------
 
   const clearMessages = useCallback(() => {
-    if (!activeThread || !projectPath || sending || messages.length === 0) return;
+    if (!activeThread || sending || messages.length === 0) return;
     setHiddenMessageIdsByThread((prev) => {
       const existing = prev[activeThread.id] ?? {};
       const nextHidden = { ...existing };
@@ -536,8 +667,9 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
       onClear: () => void clearMessages(),
       onNewThread: () => void createNewThreadRef.current(),
       onRunOperation,
+      isGlobal: projectPath === null,
     }),
-    [clearMessages, onRunOperation],
+    [clearMessages, onRunOperation, projectPath],
   );
 
   // Derive slash filter from draft — menu opens when entire draft is /word
@@ -579,6 +711,66 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
       });
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Global prefill / new-thread events (from HomeView, drawer header)
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const text = (e as CustomEvent<string>).detail ?? "";
+      if (!text) return;
+      setDraft(text);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      });
+    };
+    window.addEventListener("bender:prefill-chat", handler);
+    return () => window.removeEventListener("bender:prefill-chat", handler);
+  }, []);
+
+  useEffect(() => {
+    const handler = () => { void createNewThreadRef.current(); };
+    window.addEventListener("bender:new-thread", handler);
+    return () => window.removeEventListener("bender:new-thread", handler);
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Operation message persistence — when an op completes, append a synthetic
+  // assistant message carrying the full event log to the active thread.
+  // Survives reload, shows up in scrollback, LLM sees the summary on next turn.
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!operation) return;
+    if (operation.status !== "done" && operation.status !== "error") return;
+    if (!activeThreadId) return;
+    if (operation.lines.length === 0) return;
+    if (persistedRunIdsRef.current.has(operation.runId)) return;
+
+    persistedRunIdsRef.current.add(operation.runId);
+
+    const startedAt = operationStartTimesRef.current.get(operation.runId) ?? Date.now();
+    const finishedAt = Date.now();
+    operationStartTimesRef.current.delete(operation.runId);
+
+    const opMessage = buildOperationMessage({
+      id: `op-${operation.runId}-${Date.now()}`,
+      label: operation.label ?? labelFromUrl(operation.url),
+      url: operation.url,
+      status: operation.status === "done" ? "done" : "error",
+      startedAt,
+      finishedAt,
+      events: operation.lines,
+    });
+
+    // Optimistic local insert + persist
+    setMessages((prev) => [...prev, opMessage]);
+    void persistOperationMessage(activeThreadId, opMessage);
+  }, [operation, activeThreadId]);
 
   // ---------------------------------------------------------------------------
   // Trigger handling (sidebar buttons / onNewTask)
@@ -637,7 +829,6 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
 
   // Create a fresh thread and switch to it (⌘K).
   const createNewThread = useCallback(async () => {
-    if (!projectPath) return;
     try {
       const thread = await createThread("Chat");
       setThreads((prev) => [thread, ...prev]);
@@ -654,7 +845,6 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
   useEffect(() => { createNewThreadRef.current = createNewThread; }, [createNewThread]);
 
   const loadThreads = useCallback(async (): Promise<string | null> => {
-    if (!projectPath) { setThreads([]); setActiveThreadId(null); return null; }
     setLoadingThreads(true);
     try {
       const data = await fetchJson<{ threads: ChatThread[] }>("/api/chat/threads?includeArchived=true");
@@ -693,7 +883,6 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
   }, []);
 
   const deleteThread = useCallback(async (threadId: string) => {
-    if (!projectPath) return;
     try {
       await fetchJson<Record<string, never>>(`/api/chat/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
       const nextThreads = threads.filter((t) => t.id !== threadId);
@@ -754,9 +943,26 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
     setHiddenMessageIdsByThread(projectPath ? loadHidden(projectPath) : {});
   }, [projectPath]);
 
+  useEffect(() => {
+    const nextScope = scopeKey(projectPath);
+    if (scopeRef.current === nextScope) return;
+    scopeRef.current = nextScope;
+
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    userCancelledRef.current = false;
+    setSending(false);
+    setThreads([]);
+    setActiveThreadId(null);
+    setMessages([]);
+    setError(null);
+    setMenuOpen(false);
+    setPickerOpen(false);
+  }, [projectPath]);
+
   useEffect(() => { void loadThreads(); }, [loadThreads]);
   useEffect(() => {
-    if (!projectPath || !activeThreadId) return;
+    if (!activeThreadId) return;
     localStorage.setItem(keyForProject(projectPath), activeThreadId);
     void loadMessages(activeThreadId);
   }, [activeThreadId, loadMessages, projectPath]);
@@ -773,27 +979,66 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
     messagesEndRef.current?.scrollIntoView({ behavior: sending ? "instant" : "smooth" });
   }, [messages, sending]);
 
+  const resolveSendThreadContext = useCallback(async (): Promise<{ thread: ChatThread; baseMessages: UIMessage[] }> => {
+    const data = await fetchJson<{ threads: ChatThread[] }>("/api/chat/threads?includeArchived=true");
+    let nextThreads = data.threads ?? [];
+
+    const savedThreadId = localStorage.getItem(keyForProject(projectPath));
+    let selected = pickUsableThread(nextThreads, {
+      preferredThreadId: activeThreadId,
+      savedThreadId,
+    });
+
+    if (!selected) {
+      selected = await createThread("Chat");
+      nextThreads = [selected, ...nextThreads];
+    }
+
+    setThreads(nextThreads);
+    setActiveThreadId(selected.id);
+    localStorage.setItem(keyForProject(projectPath), selected.id);
+
+    if (selected.id !== activeThreadId) {
+      const loaded = await fetchJson<{ messages: UIMessage[] }>(`/api/chat/threads/${encodeURIComponent(selected.id)}/messages`);
+      const baseMessages = loaded.messages ?? [];
+      setMessages(baseMessages);
+      return { thread: selected, baseMessages };
+    }
+
+    return { thread: selected, baseMessages: messages };
+  }, [activeThreadId, createThread, messages, projectPath]);
+
   // ---------------------------------------------------------------------------
   // Send
   // ---------------------------------------------------------------------------
 
   const sendText = useCallback(async (text: string) => {
-    if (!activeThread || sending) return;
+    if (sending) return;
     if (!text.trim()) return;
+
+    let sendContext: { thread: ChatThread; baseMessages: UIMessage[] };
+    try {
+      sendContext = await resolveSendThreadContext();
+    } catch (err) {
+      setError(parseErrorMessage(err));
+      return;
+    }
+
+    const { thread: sendThread, baseMessages } = sendContext;
 
     const userMessage: UIMessage = {
       id: safeNowId(),
       role: "user",
       parts: [{ type: "text", text: text.trim() }],
       metadata: {
-        provider: activeThread.provider,
-        model: activeThread.model,
+        provider: sendThread.provider,
+        model: sendThread.model,
         toolsEnabled: true,
         createdAt: Date.now(),
       },
     };
 
-    const outgoingMessages = [...messages.filter((m) => msgMeta(m).kind !== "trigger"), userMessage];
+    const outgoingMessages = [...baseMessages.filter((m) => msgMeta(m).kind !== "trigger"), userMessage];
     setMessages(outgoingMessages);
     setDraft("");
     setSending(true);
@@ -803,17 +1048,17 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
     abortControllerRef.current = controller;
     const requestId = safeNowId();
     postClientLog("info", "chat-panel", "Chat request started", {
-      requestId, threadId: activeThread.id, messageId: userMessage.id,
+      requestId, threadId: sendThread.id, messageId: userMessage.id,
       messageLength: text.length, outgoingMessageCount: outgoingMessages.length,
     });
 
     try {
       const transport = new DefaultChatTransport<UIMessage>({
-        api: `/api/chat/threads/${encodeURIComponent(activeThread.id)}/respond`,
+        api: `/api/chat/threads/${encodeURIComponent(sendThread.id)}/respond`,
       });
       const stream = await transport.sendMessages({
         trigger: "submit-message",
-        chatId: activeThread.id,
+        chatId: sendThread.id,
         messageId: userMessage.id,
         messages: outgoingMessages,
         abortSignal: controller.signal,
@@ -835,11 +1080,11 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
 
       if (assistantPartialCount === 0) {
         postClientLog("warn", "chat-panel", "Chat stream ended without assistant output", {
-          requestId, threadId: activeThread.id, partialCount,
+          requestId, threadId: sendThread.id, partialCount,
           outgoingMessageCount: outgoingMessages.length,
         });
         const refreshed = await fetchJson<{ messages: UIMessage[] }>(
-          `/api/chat/threads/${encodeURIComponent(activeThread.id)}/messages`,
+          `/api/chat/threads/${encodeURIComponent(sendThread.id)}/messages`,
         );
         const refreshedMessages = refreshed.messages ?? [];
         const hasAssistantReply = refreshedMessages.some((m) => m.role === "assistant");
@@ -847,25 +1092,27 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
         if (!hasAssistantReply) throw new Error("No assistant response was produced. Check /api/logs for details.");
       } else {
         postClientLog("info", "chat-panel", "Chat stream completed", {
-          requestId, threadId: activeThread.id, partialCount, assistantPartialCount,
+          requestId, threadId: sendThread.id, partialCount, assistantPartialCount,
         });
       }
 
       await loadThreads();
+      // Signal App.tsx to refresh project state (e.g. after global-mode open/clone)
+      window.dispatchEvent(new CustomEvent("bender:chat-stream-finished"));
     } catch (err) {
       if (userCancelledRef.current || isAbortLikeError(err)) {
-        postClientLog("info", "chat-panel", "Chat request cancelled", { requestId, threadId: activeThread.id });
+        postClientLog("info", "chat-panel", "Chat request cancelled", { requestId, threadId: sendThread.id });
         return;
       }
       const errorText = parseErrorMessage(err);
       setError(errorText);
-      postClientLog("error", "chat-panel", "Chat request failed", { requestId, threadId: activeThread.id, error: errorText });
+      postClientLog("error", "chat-panel", "Chat request failed", { requestId, threadId: sendThread.id, error: errorText });
     } finally {
       abortControllerRef.current = null;
       userCancelledRef.current = false;
       setSending(false);
     }
-  }, [activeThread, loadThreads, messages, sending]);
+  }, [loadThreads, resolveSendThreadContext, sending]);
 
   /** Send the current draft text. */
   const sendMessage = useCallback(async () => {
@@ -953,15 +1200,11 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
   // Render
   // ---------------------------------------------------------------------------
 
-  if (!projectPath) {
-    return <div className="h-full p-4 text-sm text-zinc-500">No project selected.</div>;
-  }
-
   return (
-    <div className="h-full min-h-0 flex flex-col bg-zinc-950 text-zinc-200">
-      {/* Conversation bar */}
+    <div className="h-full min-h-0 flex flex-col text-zinc-200">
+      {/* Conversation bar — thread picker left, injected controls right */}
       <div className="relative shrink-0">
-        <div className="flex items-center gap-1 px-3 h-8 border-b border-zinc-800/50">
+        <div className="relative z-50 flex items-center gap-1 px-3 h-8" style={{ borderBottom: "1px solid var(--bender-overlay-border)" }}>
           <button
             onClick={() => setPickerOpen((v) => !v)}
             className="flex items-center gap-1 min-w-0 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -973,15 +1216,7 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
             <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${pickerOpen ? "rotate-180" : ""}`} />
           </button>
           <div className="flex-1" />
-          <button
-            onClick={() => void createNewThreadRef.current()}
-            disabled={sending || loadingThreads}
-            title="New conversation (⌘K)"
-            className="flex items-center gap-1 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-30 px-1 py-0.5 rounded"
-          >
-            <Pencil className="h-3 w-3" />
-            <span className="hidden sm:inline">New</span>
-          </button>
+          {headerActions}
         </div>
         {pickerOpen && (
           <ConversationPicker
@@ -1003,7 +1238,9 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
         {!loadingMessages && visibleMessages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full min-h-[80px] gap-2 select-none">
             <p className="text-[11px] text-zinc-600 italic">
-              Ask anything about your project, or type <span className="font-mono text-zinc-500">/</span> for commands
+              {projectPath
+                ? <>Ask anything about your project, or type <span className="font-mono text-zinc-500">/</span> for commands</>
+                : <>Open a project, clone a repo, or just ask — type <span className="font-mono text-zinc-500">/</span> for commands</>}
             </p>
           </div>
         )}
@@ -1020,6 +1257,17 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
                 <div className="flex-1 h-px bg-zinc-800/60" />
                 <span className="text-[10px] text-zinc-600 shrink-0">{label}</span>
                 <div className="flex-1 h-px bg-zinc-800/60" />
+              </div>
+            );
+          }
+
+          // Operation messages — persisted /analyze, /audit, etc.
+          if (isOperationMessage(message)) {
+            const summary = getOperationSummary(message);
+            if (!summary) return null;
+            return (
+              <div key={message.id} className="mr-auto w-full">
+                <OperationBlock op={summary} interactiveApprovals={false} />
               </div>
             );
           }
@@ -1041,19 +1289,38 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
                   message.role === "user" ? "text-zinc-500" : "text-zinc-100"
                 }`}>{text}</pre>
               )}
-              {toolParts.length > 0 && (
-                <div className="mt-1 space-y-0.5">
-                  {toolParts.map((part, i) => (
-                    <ToolCallRow key={i} part={part} />
-                  ))}
-                </div>
-              )}
+              {toolParts.length > 0 && <ToolPartsGroup parts={toolParts} />}
             </div>
           );
         })}
+        {/* Live operation block — rendered while operation is running */}
+        {operation && operation.status === "running" && operation.lines.length > 0 && (() => {
+          if (!operationStartTimesRef.current.has(operation.runId)) {
+            operationStartTimesRef.current.set(operation.runId, Date.now());
+          }
+          const startedAt = operationStartTimesRef.current.get(operation.runId) ?? Date.now();
+          const liveSummary: OperationSummary = {
+            label: operation.label ?? labelFromUrl(operation.url),
+            url: operation.url,
+            status: "running",
+            startedAt,
+            events: operation.lines,
+          };
+          return (
+            <div className="mr-auto w-full">
+              <OperationBlock
+                op={liveSummary}
+                defaultExpanded
+                interactiveApprovals
+                onConfirm={operation.handleConfirm}
+                onPromptSubmit={operation.handlePromptSubmit}
+              />
+            </div>
+          );
+        })()}
         {sending && (
-          <div className="mr-auto px-3 py-2 text-zinc-400">
-            <LoadingDots size={14} label="Thinking…" textClassName="text-xs text-zinc-500" />
+          <div className="mr-auto py-2 px-1">
+            <LoadingDots size={16} />
           </div>
         )}
         {/* Scroll anchor */}
@@ -1061,7 +1328,7 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
       </div>
 
       {/* Input area */}
-      <div className="px-3 pt-1.5 pb-2 border-t border-zinc-800 shrink-0 space-y-1.5">
+      <div className="px-3 pt-1.5 pb-2 shrink-0 space-y-1.5" style={{ borderTop: "1px solid var(--bender-overlay-border)" }}>
         {error && <p className="text-xs text-bender-danger">{error}</p>}
 
         {/* Quick-approve bar — shown when last message is from assistant and draft is empty */}
@@ -1105,17 +1372,21 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={activeThread ? "Message… (/ for commands)" : "Loading…"}
+            placeholder={activeThread ? (projectPath ? "Message… (/ for commands)" : "Open a project or ask for help… (/ for commands)") : "Loading…"}
             disabled={!activeThread || sending}
             rows={2}
-            className="w-full resize-none bg-zinc-900 border border-zinc-700 rounded-md pl-3 pr-12 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
+            className="w-full resize-none rounded-lg pl-3 pr-12 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none transition-colors"
+            style={{ background: "var(--bender-input-bg)", border: "1px solid var(--bender-input-border)" }}
+            onFocus={(e) => { (e.target as HTMLTextAreaElement).style.borderColor = "var(--bender-input-border-focus)"; }}
+            onBlur={(e) => { (e.target as HTMLTextAreaElement).style.borderColor = "var(--bender-input-border)"; }}
           />
           <button
             onClick={() => { if (sending) { stopMessage(); return; } void sendMessage(); }}
             disabled={!sending && (!activeThread || !draft.trim())}
             aria-label={sending ? "Stop response" : "Send message"}
             title={sending ? "Stop (Esc)" : "Send (Enter)"}
-            className="absolute right-1.5 bottom-1.5 inline-flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="absolute right-1.5 bottom-1.5 inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors hover:bg-bender-overlay-hover"
+            style={{ border: "1px solid var(--bender-input-border)" }}
           >
             {sending ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
           </button>

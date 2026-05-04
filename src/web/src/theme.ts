@@ -31,6 +31,8 @@ const COLOR_VAR_MAP: Record<string, string> = {
   danger: "--bender-danger",
   diffAdded: "--bender-diff-added",
   diffRemoved: "--bender-diff-removed",
+  diffAddedBg: "--bender-diff-added-bg",
+  diffRemovedBg: "--bender-diff-removed-bg",
   inputBg: "--bender-input-bg",
   inputBorder: "--bender-input-border",
   inputBorderHover: "--bender-input-border-hover",
@@ -49,6 +51,12 @@ const COLOR_VAR_MAP: Record<string, string> = {
   codeInlineFg: "--bender-code-inline-fg",
   codeBlockBg: "--bender-code-block-bg",
   codeBlockBorder: "--bender-code-block-border",
+  // Elevation tier
+  surfaceFloat:   "--bender-surface-float",
+  surfaceOverlay: "--bender-surface-overlay",
+  overlayBorder:  "--bender-overlay-border",
+  overlayHover:   "--bender-overlay-hover",
+  overlayActive:  "--bender-overlay-active",
 };
 
 const RADIUS_VAR_MAP: Record<string, string> = {
@@ -81,6 +89,15 @@ export function applyBenderTheme(theme: BenderThemePayload): void {
     if (!/^\d{2,3}$/.test(scale)) continue;
     if (typeof value !== "string" || !value.trim()) continue;
     root.style.setProperty(`--color-zinc-${scale}`, value.trim());
+  }
+
+  // Shadow scale — not hex colors, generated from appearance
+  if (theme.appearance === "light") {
+    root.style.setProperty("--bender-shadow-float",   "0 4px 20px rgba(0,0,0,0.09), 0 1px 4px rgba(0,0,0,0.05)");
+    root.style.setProperty("--bender-shadow-overlay", "0 8px 32px rgba(0,0,0,0.13), 0 2px 8px rgba(0,0,0,0.07)");
+  } else {
+    root.style.setProperty("--bender-shadow-float",   "0 8px 32px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.35)");
+    root.style.setProperty("--bender-shadow-overlay", "0 4px 24px rgba(0,0,0,0.65), 0 1px 6px rgba(0,0,0,0.40)");
   }
 
   root.style.setProperty("color-scheme", theme.appearance);

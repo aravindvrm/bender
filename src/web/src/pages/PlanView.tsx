@@ -382,7 +382,7 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
       <div className="flex items-center gap-3">
         <div className="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
           <div
-            className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+            className="h-full bg-bender-success rounded-full transition-all duration-500"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -404,10 +404,10 @@ export function PlanView({ state, onImplement, onNewTask, onRunTask, onTasksChan
           />
         </div>
       </div>
-      {assignError && <p className="text-xs text-red-400">{assignError}</p>}
-      {editError && <p className="text-xs text-red-400">{editError}</p>}
-      {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
-      {githubError && <p className="text-xs text-red-400">{githubError}</p>}
+      {assignError && <p className="text-xs text-bender-danger">{assignError}</p>}
+      {editError && <p className="text-xs text-bender-danger">{editError}</p>}
+      {deleteError && <p className="text-xs text-bender-danger">{deleteError}</p>}
+      {githubError && <p className="text-xs text-bender-danger">{githubError}</p>}
 
       <div className="border border-zinc-800 rounded-xl overflow-hidden">
         <div className="grid grid-cols-[1fr_120px_120px_140px] gap-3 px-4 py-2.5 bg-zinc-900/60 border-b border-zinc-800">
@@ -513,7 +513,7 @@ function TaskRow({
   onCreatePR,
 }: TaskRowProps) {
   const progress = task.completed ? 100 : task.status === "in_progress" ? 50 : 0;
-  const barColor = task.completed ? "bg-emerald-500" : task.status === "in_progress" ? "bg-amber-500" : "bg-zinc-700";
+  const barColor = task.completed ? "bg-bender-success" : task.status === "in_progress" ? "bg-bender-warning" : "bg-zinc-700";
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draftTitle, setDraftTitle] = useState(task.title);
@@ -529,7 +529,7 @@ function TaskRow({
 
   const statusLabel = task.status === "done" ? "Done" : task.status === "in_progress" ? "In Progress" : "Todo";
   const statusColors: Record<string, string> = {
-    Done: "text-emerald-400 bg-emerald-500/10",
+    Done: "text-bender-success bg-bender-success/10",
     "In Progress": "text-amber-300 bg-amber-500/10",
     Todo: "text-zinc-500 bg-zinc-800",
   };
@@ -809,7 +809,7 @@ function TaskRow({
                     </button>
                     <button
                       onClick={onDelete}
-                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-red-900/60 rounded-md text-red-300 hover:bg-red-950/30"
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border border-bender-danger/30 rounded-md text-bender-danger hover:bg-bender-danger/10"
                     >
                       <Trash2 className="h-3 w-3" />
                       Delete
@@ -895,7 +895,7 @@ function DeleteTaskDialog({
           <button
             onClick={onConfirm}
             disabled={deleting}
-            className="px-3 py-1.5 text-xs border border-red-900/60 rounded-md text-red-200 hover:bg-red-950/30 disabled:opacity-50"
+            className="px-3 py-1.5 text-xs border border-bender-danger/30 rounded-md text-bender-danger hover:bg-bender-danger/10 disabled:opacity-50"
           >
             {deleting ? "Deleting..." : "Delete"}
           </button>

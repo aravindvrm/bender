@@ -3,6 +3,7 @@ import { MarkdownView } from "../components/MarkdownView";
 
 interface BriefViewProps {
   state: ProjectState;
+  onAnalyze?: () => void;
 }
 
 /** Strip leading/trailing markdown code fences (LLMs sometimes wrap output in ```markdown). */
@@ -49,7 +50,7 @@ const DEFERRED_PATTERNS = [
   /##\s*Planned Features.*?\n([\s\S]*?)(?=\n##)/,
 ];
 
-export function BriefView({ state }: BriefViewProps) {
+export function BriefView({ state, onAnalyze }: BriefViewProps) {
   if (!state.brief) {
     return (
       <div className="flex items-center justify-center min-h-[320px]">
@@ -61,8 +62,16 @@ export function BriefView({ state }: BriefViewProps) {
           </div>
           <p className="text-[13px] font-medium text-zinc-300">No project brief yet</p>
           <p className="text-xs text-zinc-500 leading-relaxed">
-            Run <code className="bg-zinc-800/80 px-1.5 py-0.5 rounded text-zinc-300 text-[11px]">bender analyze</code> or use the scan icon in the left rail to generate your project brief and architecture.
+            Analyze the codebase to generate a project brief, architecture overview, and initial task plan.
           </p>
+          {onAnalyze && (
+            <button
+              onClick={onAnalyze}
+              className="mt-1 px-4 py-2 bg-zinc-100 hover:bg-white border border-zinc-200 rounded-lg text-xs font-medium text-zinc-900 transition-colors"
+            >
+              Analyze Project
+            </button>
+          )}
         </div>
       </div>
     );

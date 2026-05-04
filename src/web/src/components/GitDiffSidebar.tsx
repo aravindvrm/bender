@@ -118,9 +118,9 @@ function FileList({
   onSecondaryAction?: (path: string) => void;
 }) {
   const dotColor =
-    tone === "added" ? "bg-emerald-500" :
-    tone === "deleted" ? "bg-red-500" :
-    tone === "modified" ? "bg-amber-400" :
+    tone === "added" ? "bg-bender-success" :
+    tone === "deleted" ? "bg-bender-danger" :
+    tone === "modified" ? "bg-bender-warning" :
     "bg-zinc-500";
 
   if (files.length === 0) return null;
@@ -140,7 +140,7 @@ function FileList({
             {onSecondaryAction && secondaryActionLabel && (
               <button
                 onClick={() => onSecondaryAction(file)}
-                className="px-1.5 py-0.5 text-[10px] rounded border border-transparent text-zinc-600 hover:text-red-300 hover:border-red-900/70 opacity-0 group-hover:opacity-100 transition-opacity"
+                className="px-1.5 py-0.5 text-[10px] rounded border border-transparent text-zinc-600 hover:text-bender-danger hover:border-bender-danger/30 opacity-0 group-hover:opacity-100 transition-opacity"
               >
                 {secondaryActionLabel}
               </button>
@@ -605,7 +605,7 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
             >
               <GitBranch className="h-3 w-3 text-zinc-500" />
               <span className="font-mono">{repo.branch ?? "unknown"}</span>
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${repo.clean ? "bg-emerald-500" : "bg-amber-400"}`} />
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${repo.clean ? "bg-bender-success" : "bg-bender-warning"}`} />
               <ChevronDown className="h-3 w-3 text-zinc-600" />
             </button>
 
@@ -739,7 +739,7 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
               {projectPath && diffLoading && (
                 <LoadingDots size={18} label="Loading diff…" textClassName="text-xs text-zinc-500" />
               )}
-              {projectPath && diffError && <p className="text-xs text-red-400/80">{diffError}</p>}
+              {projectPath && diffError && <p className="text-xs text-bender-danger/80">{diffError}</p>}
               {projectPath && !diffLoading && !diffError && !diffRaw && (
                 <p className="text-xs text-zinc-600">No diff available.</p>
               )}
@@ -755,7 +755,7 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
             {projectPath && repoLoading && (
               <LoadingDots size={18} label="Loading…" textClassName="text-xs text-zinc-500" />
             )}
-            {projectPath && repoError && <p className="text-xs text-red-400/80">{repoError}</p>}
+            {projectPath && repoError && <p className="text-xs text-bender-danger/80">{repoError}</p>}
 
             {projectPath && repo?.isRepo && (
               <>
@@ -805,8 +805,8 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
               </>
             )}
 
-            {actionError && <p className="text-xs text-red-400">{actionError}</p>}
-            {actionNotice && <p className="text-xs text-emerald-400">{actionNotice}</p>}
+            {actionError && <p className="text-xs text-bender-danger">{actionError}</p>}
+            {actionNotice && <p className="text-xs text-bender-success">{actionNotice}</p>}
           </div>
         )}
 
@@ -821,8 +821,8 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
                 <button onClick={() => void loadGitHubStatus()} className="text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors">Refresh</button>
               </div>
               {githubLoading && <LoadingDots size={16} label="Checking…" textClassName="text-xs text-zinc-500" />}
-              {githubError && <p className="text-xs text-red-400/80">{githubError}</p>}
-              {deviceFlowNotice && <p className="text-xs text-emerald-400">{deviceFlowNotice}</p>}
+              {githubError && <p className="text-xs text-bender-danger/80">{githubError}</p>}
+              {deviceFlowNotice && <p className="text-xs text-bender-success">{deviceFlowNotice}</p>}
               {githubStatus && !githubStatus.configured && (
                 <p className="text-xs text-amber-400">{githubStatus.message ?? "GitHub auth not configured."}</p>
               )}
@@ -859,7 +859,7 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
             <section className="space-y-3 border-t border-zinc-800/60 pt-4">
               <h4 className="text-xs font-medium text-zinc-300">Identity</h4>
               {identityLoading && <LoadingDots size={16} label="Loading…" textClassName="text-xs text-zinc-500" />}
-              {identityError && <p className="text-xs text-red-400/80">{identityError}</p>}
+              {identityError && <p className="text-xs text-bender-danger/80">{identityError}</p>}
               <div className="space-y-2">
                 <div className="flex gap-2">
                   <input value={identityName} onChange={(e) => setIdentityName(e.target.value)} placeholder="Git author name"
@@ -932,8 +932,8 @@ export function GitDiffSidebar({ open, projectPath, operationStatus, onClose }: 
               )}
             </section>
 
-            {actionError && <p className="text-xs text-red-400">{actionError}</p>}
-            {actionNotice && <p className="text-xs text-emerald-400">{actionNotice}</p>}
+            {actionError && <p className="text-xs text-bender-danger">{actionError}</p>}
+            {actionNotice && <p className="text-xs text-bender-success">{actionNotice}</p>}
           </div>
         )}
 
