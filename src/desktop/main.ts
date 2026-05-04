@@ -214,10 +214,39 @@ function backendScriptPath(): string {
   return join(import.meta.dirname, "backend.js");
 }
 
+/**
+ * Resolve the executable used to run the backend script.
+ *
+ * In a packaged Electron app the user's PATH (especially when launched from
+ * Finder) generally does not contain `node`, and end users may not even have
+ * Node installed. Electron itself embeds Node and exposes it via the
+ * `ELECTRON_RUN_AS_NODE=1` environment variable, which makes `process.execPath`
+ * (the Electron binary) run as plain Node. That's our preferred path.
+ *
+ * Order of preference:
+ *   1. Explicit override via BENDER_NODE_BIN (advanced users / dev workflows)
+ *   2. Packaged app: process.execPath with ELECTRON_RUN_AS_NODE=1
+ *   3. Dev workflow: fall back to "node" on PATH
+ */
 function resolveNodeCommand(): string {
   const configured = (process.env.BENDER_NODE_BIN ?? "").trim();
   if (configured.length > 0) return configured;
+  if (app.isPackaged) return process.execPath;
   return "node";
+}
+
+function backendSpawnEnv(port: number): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = {
+    ...process.env,
+    BENDER_PORT: String(port),
+    BENDER_DESKTOP_MODE: "1",
+  };
+  // When using Electron's binary as Node, this env var must be set on the
+  // child so it boots in Node mode rather than trying to launch a new app.
+  if (!process.env.BENDER_NODE_BIN && app.isPackaged) {
+    base.ELECTRON_RUN_AS_NODE = "1";
+  }
+  return base;
 }
 
 function appendBackendLog(chunk: Buffer): void {
@@ -280,11 +309,7 @@ async function waitForHealth(baseUrl: string): Promise<void> {
 async function startBackend(port: number): Promise<void> {
   backendSpawnError = null;
   const child = spawn(resolveNodeCommand(), [backendScriptPath()], {
-    env: {
-      ...process.env,
-      BENDER_PORT: String(port),
-      BENDER_DESKTOP_MODE: "1",
-    },
+    env: backendSpawnEnv(port),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
