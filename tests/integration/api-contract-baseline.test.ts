@@ -223,6 +223,45 @@ describe("api contract baseline", () => {
     expect(runBody.exitCode).toBe(0);
   });
 
+  it("preserves /api/chat/threads shape (empty list before project open)", async () => {
+    // No project open in this server instance — returns 500 or 400 (project required),
+    // OR returns an empty list. Either is a valid contract; what matters is the shape.
+    const res = await fetch(`${baseUrl}/api/chat/threads`);
+    // Shape contract: must be JSON, either { threads: [] } on success or { error: string } on failure
+    const body = await res.json() as { threads?: unknown[]; error?: string };
+    if (res.ok) {
+      expect(Array.isArray(body.threads)).toBe(true);
+    } else {
+      expect(typeof body.error).toBe("string");
+    }
+  });
+
+  it("preserves /api/themes shape", async () => {
+    const res = await fetch(`${baseUrl}/api/themes`);
+    expect(res.ok).toBe(true);
+    const body = await res.json() as { themes?: unknown[]; activeThemeId?: string | null };
+    expect(Array.isArray(body.themes)).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(body, "activeThemeId")).toBe(true);
+    // Built-in themes must always be present regardless of project state
+    expect((body.themes as Array<{ source?: string }>).some((t) => t.source === "builtin")).toBe(true);
+  });
+
+  it("preserves /api/themes/active shape", async () => {
+    const res = await fetch(`${baseUrl}/api/themes/active`);
+    expect(res.ok).toBe(true);
+    const body = await res.json() as {
+      themeId?: string;
+      source?: string;
+      theme?: { id?: string; appearance?: string; ui?: { colors?: unknown; radius?: unknown } };
+    };
+    expect(typeof body.themeId).toBe("string");
+    expect(typeof body.source).toBe("string");
+    expect(typeof body.theme?.id).toBe("string");
+    expect(body.theme?.appearance === "dark" || body.theme?.appearance === "light").toBe(true);
+    expect(typeof body.theme?.ui?.colors).toBe("object");
+    expect(typeof body.theme?.ui?.radius).toBe("object");
+  });
+
   it("requires confirmation for dangerous terminal commands and supports security disable", async () => {
     await fetch(`${baseUrl}/api/config`, {
       method: "PUT",

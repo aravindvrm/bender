@@ -23,7 +23,7 @@ afterEach(async () => {
 describe("ChatStore", () => {
   it("creates, updates, and lists threads/messages in order", async () => {
     const projectRoot = await makeProjectRoot();
-    const store = new ChatStore(projectRoot);
+    const store = ChatStore.forProject(projectRoot);
     await store.init();
 
     const thread = await store.createThread({
