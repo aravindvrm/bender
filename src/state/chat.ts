@@ -52,8 +52,20 @@ function messageRecordDbId(threadId: string, messageId: string): string {
 export class ChatStore {
   private readonly db: LocalProjectDb;
 
-  constructor(projectRoot: string) {
-    this.db = LocalProjectDb.forProject(projectRoot);
+  private constructor(db: LocalProjectDb) {
+    this.db = db;
+  }
+
+  static forProject(projectRoot: string): ChatStore {
+    return new ChatStore(LocalProjectDb.forProject(projectRoot));
+  }
+
+  static forGlobal(): ChatStore {
+    return new ChatStore(LocalProjectDb.forGlobal());
+  }
+
+  static forScope(projectRoot: string | null): ChatStore {
+    return projectRoot ? ChatStore.forProject(projectRoot) : ChatStore.forGlobal();
   }
 
   async init(): Promise<void> {
@@ -158,5 +170,13 @@ export class ChatStore {
       ...thread,
       updatedAt: nowTs(),
     });
+  }
+
+  async deleteThread(threadId: string): Promise<void> {
+    this.db.deleteRecord(NS_THREAD, threadId);
+    const messages = await this.listMessages(threadId);
+    for (const record of messages) {
+      this.db.deleteRecord(NS_MESSAGE, messageRecordDbId(threadId, record.id));
+    }
   }
 }

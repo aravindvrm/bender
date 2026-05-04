@@ -189,8 +189,8 @@ export async function startServer(initialProject?: string, port?: number): Promi
   });
 
   registerChatRoutes(app, {
-    getProject,
     getCurrentProject: () => currentProject,
+    setCurrentProject: (path) => { currentProject = path; },
   });
 
   registerConfigRoutes(app, {

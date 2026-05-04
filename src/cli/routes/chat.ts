@@ -4,6 +4,7 @@ import {
   appendChatMessage,
   ChatServiceError,
   createChatThread,
+  deleteChatThread,
   listChatMessages,
   listChatThreads,
   streamChatThreadResponse,
@@ -11,8 +12,8 @@ import {
 } from "../services/chat.js";
 
 interface ChatRouteDeps {
-  getProject: () => string;
-  getCurrentProject?: () => string | null;
+  getCurrentProject: () => string | null;
+  setCurrentProject?: (path: string) => void;
 }
 
 function toHttpError(err: unknown): { status: number; message: string } {
@@ -28,7 +29,7 @@ function logChatRouteError(
   err: unknown,
   requestId: string | undefined,
 ): void {
-  const projectRoot = deps.getCurrentProject?.() ?? null;
+  const projectRoot = deps.getCurrentProject() ?? null;
   const logger = createLogger("api:chat", resolveExistingProjectLogRoot(projectRoot));
   logError(logger, `Chat route failed: ${route}`, err, {
     ...(requestId ? { requestId } : {}),
@@ -36,9 +37,10 @@ function logChatRouteError(
 }
 
 export function registerChatRoutes(app: Express, deps: ChatRouteDeps): void {
-  app.get("/api/chat/threads", async (_req, res) => {
+  app.get("/api/chat/threads", async (req, res) => {
     try {
-      const threads = await listChatThreads(deps.getProject());
+      const includeArchived = req.query.includeArchived === "true";
+      const threads = await listChatThreads(deps.getCurrentProject() ?? null, { includeArchived });
       res.json({ threads });
     } catch (err) {
       logChatRouteError("GET /api/chat/threads", deps, err, res.locals.requestId as string | undefined);
@@ -49,7 +51,7 @@ export function registerChatRoutes(app: Express, deps: ChatRouteDeps): void {
 
   app.post("/api/chat/threads", async (req, res) => {
     try {
-      const thread = await createChatThread(deps.getProject(), req.body ?? {});
+      const thread = await createChatThread(deps.getCurrentProject() ?? null, req.body ?? {});
       res.json({ thread });
     } catch (err) {
       logChatRouteError("POST /api/chat/threads", deps, err, res.locals.requestId as string | undefined);
@@ -60,7 +62,7 @@ export function registerChatRoutes(app: Express, deps: ChatRouteDeps): void {
 
   app.patch("/api/chat/threads/:threadId", async (req, res) => {
     try {
-      const thread = await updateChatThread(deps.getProject(), req.params.threadId, req.body ?? {});
+      const thread = await updateChatThread(deps.getCurrentProject() ?? null, req.params.threadId, req.body ?? {});
       res.json({ thread });
     } catch (err) {
       logChatRouteError("PATCH /api/chat/threads/:threadId", deps, err, res.locals.requestId as string | undefined);
@@ -69,9 +71,20 @@ export function registerChatRoutes(app: Express, deps: ChatRouteDeps): void {
     }
   });
 
+  app.delete("/api/chat/threads/:threadId", async (req, res) => {
+    try {
+      await deleteChatThread(deps.getCurrentProject() ?? null, req.params.threadId);
+      res.status(204).end();
+    } catch (err) {
+      logChatRouteError("DELETE /api/chat/threads/:threadId", deps, err, res.locals.requestId as string | undefined);
+      const mapped = toHttpError(err);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
   app.get("/api/chat/threads/:threadId/messages", async (req, res) => {
     try {
-      const messages = await listChatMessages(deps.getProject(), req.params.threadId);
+      const messages = await listChatMessages(deps.getCurrentProject() ?? null, req.params.threadId);
       res.json({ messages });
     } catch (err) {
       logChatRouteError("GET /api/chat/threads/:threadId/messages", deps, err, res.locals.requestId as string | undefined);
@@ -82,7 +95,7 @@ export function registerChatRoutes(app: Express, deps: ChatRouteDeps): void {
 
   app.post("/api/chat/threads/:threadId/messages", async (req, res) => {
     try {
-      const message = await appendChatMessage(deps.getProject(), req.params.threadId, req.body ?? {});
+      const message = await appendChatMessage(deps.getCurrentProject() ?? null, req.params.threadId, req.body ?? {});
       res.json({ message });
     } catch (err) {
       logChatRouteError("POST /api/chat/threads/:threadId/messages", deps, err, res.locals.requestId as string | undefined);
@@ -100,11 +113,14 @@ export function registerChatRoutes(app: Express, deps: ChatRouteDeps): void {
     res.on("close", abortRequest);
     try {
       await streamChatThreadResponse(
-        deps.getProject(),
+        deps.getCurrentProject() ?? null,
         req.params.threadId,
         req.body ?? {},
         res,
-        { signal: controller.signal },
+        {
+          signal: controller.signal,
+          onProjectOpened: deps.setCurrentProject,
+        },
       );
     } catch (err) {
       if (controller.signal.aborted) return;

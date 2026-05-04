@@ -26,6 +26,7 @@ import { getAllAgents } from "../../state/agents.js";
 import type { SpinnerAdapter, UIAdapter } from "../adapter.js";
 import { runAnalyzeOperation, runAuditOperation, runImplementOperation } from "./run-operations.js";
 import { RunHistoryStore, wrapAdapterWithHistory } from "./run-history.js";
+import { GLOBAL_SYSTEM_PROMPT, createGlobalTools } from "./global-tools.js";
 
 const MAX_THREAD_TITLE_CHARS = 120;
 const MAX_MESSAGE_TEXT_CHARS = 40_000;
@@ -1083,8 +1084,8 @@ function streamAssistantTextResponse(
   });
 }
 
-async function requireThread(projectRoot: string, threadId: string): Promise<{ store: ChatStore; thread: ChatThread }> {
-  const store = new ChatStore(projectRoot);
+async function requireThread(projectRoot: string | null, threadId: string): Promise<{ store: ChatStore; thread: ChatThread }> {
+  const store = ChatStore.forScope(projectRoot);
   await store.init();
   const thread = await store.getThread(threadId);
   if (!thread) throw new ChatServiceError(404, "Thread not found");
@@ -1092,24 +1093,24 @@ async function requireThread(projectRoot: string, threadId: string): Promise<{ s
 }
 
 export async function listChatThreads(
-  projectRoot: string,
+  projectRoot: string | null,
   options?: { includeArchived?: boolean },
 ): Promise<ChatThread[]> {
-  const store = new ChatStore(projectRoot);
+  const store = ChatStore.forScope(projectRoot);
   await store.init();
   return await store.listThreads({ includeArchived: options?.includeArchived === true });
 }
 
 export async function createChatThread(
-  projectRoot: string,
+  projectRoot: string | null,
   input: {
     title?: string;
     toolsEnabled?: boolean;
   },
 ): Promise<ChatThread> {
-  const store = new ChatStore(projectRoot);
+  const store = ChatStore.forScope(projectRoot);
   await store.init();
-  const config = await readEffectiveConfig(projectRoot);
+  const config = await readEffectiveConfig(projectRoot ?? undefined);
   const fallback = resolveStrongProviderAndModel(config);
   return await store.createThread({
     title: normalizeTitle(input.title),
@@ -1120,7 +1121,7 @@ export async function createChatThread(
 }
 
 export async function updateChatThread(
-  projectRoot: string,
+  projectRoot: string | null,
   rawThreadId: string | undefined,
   input: {
     title?: string;
@@ -1145,7 +1146,7 @@ export async function updateChatThread(
 }
 
 export async function deleteChatThread(
-  projectRoot: string,
+  projectRoot: string | null,
   rawThreadId: string | undefined,
 ): Promise<void> {
   const threadId = normalizeThreadId(rawThreadId);
@@ -1157,7 +1158,7 @@ export async function deleteChatThread(
 }
 
 export async function listChatMessages(
-  projectRoot: string,
+  projectRoot: string | null,
   rawThreadId: string | undefined,
 ): Promise<UIMessage[]> {
   const threadId = normalizeThreadId(rawThreadId);
@@ -1167,13 +1168,13 @@ export async function listChatMessages(
 }
 
 export async function appendChatMessage(
-  projectRoot: string,
+  projectRoot: string | null,
   rawThreadId: string | undefined,
   input: { text?: string; message?: UIMessage },
 ): Promise<UIMessage> {
   const threadId = normalizeThreadId(rawThreadId);
   const { store, thread } = await requireThread(projectRoot, threadId);
-  const config = await readEffectiveConfig(projectRoot);
+  const config = await readEffectiveConfig(projectRoot ?? undefined);
   const selection = resolveStrongProviderAndModel(config);
   const activeThread: ChatThread = (
     thread.provider !== selection.provider || thread.model !== selection.model || thread.toolsEnabled !== true
@@ -1213,16 +1214,16 @@ export async function appendChatMessage(
 }
 
 export async function streamChatThreadResponse(
-  projectRoot: string,
+  projectRoot: string | null,
   rawThreadId: string | undefined,
   body: unknown,
   res: Response,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; onProjectOpened?: (path: string) => void },
 ): Promise<void> {
   const signal = options?.signal;
   throwIfAborted(signal);
   const threadId = normalizeThreadId(rawThreadId);
-  const inFlightKey = `${projectRoot}::${threadId}`;
+  const inFlightKey = `${projectRoot ?? "__global__"}::${threadId}`;
   if (inFlightChatResponses.has(inFlightKey)) {
     throw new ChatServiceError(409, "A chat action is already running for this thread. Stop it before sending another request.");
   }
@@ -1235,7 +1236,7 @@ export async function streamChatThreadResponse(
   };
   res.once("close", releaseInFlight);
   const { store, thread } = await requireThread(projectRoot, threadId);
-  const config = await readEffectiveConfig(projectRoot);
+  const config = await readEffectiveConfig(projectRoot ?? undefined);
   const selection = resolveStrongProviderAndModel(config);
   const activeThread: ChatThread = (
     thread.provider !== selection.provider || thread.model !== selection.model || thread.toolsEnabled !== true
@@ -1258,7 +1259,7 @@ export async function streamChatThreadResponse(
   }
   const logger = createLogger(
     "chat",
-    projectRoot,
+    projectRoot ?? "__global__",
     null,
     toLoggerOptions(config.logging),
   );
@@ -1308,8 +1309,9 @@ export async function streamChatThreadResponse(
     throw new ChatServiceError(400, "Last message must be a user message before requesting a response.");
   }
   const lastUserText = extractUserMessageText(last);
-  const operatorCommand = parseOperatorCommandFromText(lastUserText);
-  if (operatorCommand) {
+  // Operator commands only apply in project mode; global mode goes straight to LLM.
+  const operatorCommand = projectRoot !== null ? parseOperatorCommandFromText(lastUserText) : null;
+  if (operatorCommand && projectRoot !== null) {
     let responseText: string;
     logger.info("Executing deterministic operator command", {
       threadId,
@@ -1373,6 +1375,89 @@ export async function streamChatThreadResponse(
     );
     return;
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Global (no-project) mode: skip StateManager / RoleRuntime / MCP.
+  // The LLM uses global tools to open/clone projects.
+  // ─────────────────────────────────────────────────────────────────────────
+  if (projectRoot === null) {
+    const globalTools = createGlobalTools(
+      (path) => { options?.onProjectOpened?.(path); },
+      signal,
+    );
+    const model = createModelForSelection(config, {
+      provider: activeThread.provider,
+      model: activeThread.model,
+    });
+    const capabilities = getProviderCapabilities(config, activeThread.provider, activeThread.model);
+    const availableTools: ToolSet | undefined = capabilities.supportsTools !== false ? globalTools : undefined;
+    logger.info("Starting global chat model stream", {
+      threadId,
+      provider: activeThread.provider,
+      model: activeThread.model,
+      toolCount: availableTools ? Object.keys(availableTools).length : 0,
+    });
+    const modelMessages = await convertToModelMessages(
+      uiMessages.map(({ id, ...rest }) => rest),
+    );
+    let globalResult;
+    try {
+      globalResult = streamText({
+        model,
+        system: GLOBAL_SYSTEM_PROMPT,
+        messages: modelMessages,
+        tools: availableTools,
+        stopWhen: stepCountIs(5),
+        maxOutputTokens: 2400,
+        abortSignal: signal,
+      });
+    } catch (err) {
+      if (isAbortLikeError(err) || signal?.aborted) {
+        releaseInFlight();
+        return;
+      }
+      logError(logger, "Failed to create global chat stream", err, { threadId });
+      throw err;
+    }
+    const globalStream = globalResult.toUIMessageStream<UIMessage>({
+      originalMessages: uiMessages,
+      onError: (err) => {
+        if (isAbortLikeError(err) || signal?.aborted) return "";
+        logError(logger, "Global chat stream emitted error", err, { threadId });
+        return `Chat failed: ${parseErrorMessage(err)}`;
+      },
+      onFinish: async ({ responseMessage }) => {
+        try {
+          if (signal?.aborted || res.destroyed || res.writableEnded) return;
+          const withMeta = attachMetadata(responseMessage, {
+            provider: activeThread.provider,
+            model: activeThread.model,
+            toolsEnabled: activeThread.toolsEnabled,
+            createdAt: Date.now(),
+          });
+          await store.appendMessage({
+            threadId,
+            provider: activeThread.provider,
+            model: activeThread.model,
+            toolsEnabled: activeThread.toolsEnabled,
+            message: withMeta,
+          });
+          await store.touchThread(threadId);
+        } catch (err) {
+          if (isAbortLikeError(err) || signal?.aborted) return;
+          logError(logger, "Failed to persist global chat response", err, { threadId });
+        } finally {
+          releaseInFlight();
+        }
+      },
+    });
+    pipeUIMessageStreamToResponse({ response: res, stream: globalStream });
+    return;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Project mode: full StateManager + RoleRuntime + MCP + operator tools.
+  // ─────────────────────────────────────────────────────────────────────────
   const state = new StateManager(projectRoot);
   const projectContext = await state.gatherContext();
   throwIfAborted(signal);

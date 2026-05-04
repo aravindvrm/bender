@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getBenderDir } from "./config.js";
+import { getBenderHomePath } from "./paths.js";
 
 type SqliteDb = InstanceType<typeof Database>;
 
@@ -28,15 +29,17 @@ function clampLimit(limit?: number, fallback = 200, max = 10_000): number {
   return Math.max(1, Math.min(max, Math.floor(limit ?? fallback)));
 }
 
+const GLOBAL_CACHE_KEY = "__bender_global__";
+
 export class LocalProjectDb {
   readonly projectRoot: string;
   readonly dbPath: string;
   private db: SqliteDb | null = null;
   private initialized = false;
 
-  constructor(projectRoot: string) {
+  constructor(projectRoot: string, overrideDbPath?: string) {
     this.projectRoot = projectRoot;
-    this.dbPath = join(getBenderDir(projectRoot), "bender.db");
+    this.dbPath = overrideDbPath ?? join(getBenderDir(projectRoot), "bender.db");
   }
 
   static forProject(projectRoot: string): LocalProjectDb {
@@ -44,6 +47,15 @@ export class LocalProjectDb {
     if (existing) return existing;
     const created = new LocalProjectDb(projectRoot);
     DB_CACHE.set(projectRoot, created);
+    return created;
+  }
+
+  /** Global (no-project) database stored at ~/.bender/global-chat.db */
+  static forGlobal(): LocalProjectDb {
+    const existing = DB_CACHE.get(GLOBAL_CACHE_KEY);
+    if (existing) return existing;
+    const created = new LocalProjectDb(GLOBAL_CACHE_KEY, getBenderHomePath("global-chat.db"));
+    DB_CACHE.set(GLOBAL_CACHE_KEY, created);
     return created;
   }
 
