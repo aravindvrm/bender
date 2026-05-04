@@ -1,245 +1,160 @@
 # Bender
 
-Bender is a local AI software execution workspace for planning, implementation, review, and evaluation across real codebases.
+Bender is a local-first AI software workspace for planning, execution, and review across real codebases.
 
-Bender supports three first-class interfaces:
+It ships as one shared backend with multiple interfaces:
+- CLI (`bender ...`)
+- Web dashboard (`bender bend`)
+- Electron desktop app (`npm run desktop:start`)
 
-- CLI
-- Browser WebUI
-- Electron desktop app (thin shell over the same backend + WebUI)
+## Current Product Shape (Audited April 30, 2026)
 
-## What Bender Includes
+- No-project home mode is first-class.
+- Project state is optional at app boot (`/api/state` can return `projectRoot: null`).
+- Chat now runs in the bottom **Operation Drawer** (not a standalone sidebar view).
+- Chat threads are **scope-bound**:
+  - Global scope (no project): persisted in `~/.bender/global-chat.db`
+  - Project scope: persisted in `<project>/.bender/bender.db`
+- Switching project scope invalidates thread IDs from the previous scope; stale IDs correctly return `404 Thread not found`.
 
-- Project workflows: `init`, `analyze`, `plan`, `implement`, `status`
-- Role-based agents: analyzer, architect, planner, implementer, reviewer
-- Custom agent overrides and role skill curation
-- Skills system with curated catalog plus project/user extensions
-- MCP connector configuration with capability-aware runtime behavior
-- Git and GitHub integration, including project-scoped issue ingestion and task linking
-- Promptfoo-backed eval compare/suite execution with CI gating
-- Project chat panel with a fixed `Bender Operator` role, tool-backed actions, and deterministic command fallbacks
-- Local-first embedded SQLite persistence (no Docker/Postgres requirement)
-
-## Interfaces
-
-- CLI: `bender ...`
-- Browser dashboard: `bender bend` (aliases: `bender open`, `bender review`)
-- Desktop: `npm run desktop:start`
-
-## Architecture
-
-### Backend
-
-- Express server: [server.ts](/Volumes/SD3.2_256/Repos/bender/src/cli/server.ts)
-- Health endpoint: `GET /api/health` returns `{ ok: true }`
-- Port resolution order: `BENDER_PORT` → `PORT` → `3142` (default)
-
-### Desktop wrapper
-
-- Starts backend as a child process
-- Waits for `/api/health` before loading UI
-- Surfaces startup/crash errors in-app
-- Handles default-port conflicts pragmatically
-- Shuts down backend on app exit to avoid orphan processes
-- Uses cross-platform process APIs (macOS/Windows/Linux)
-
-## Persistence
-
-Bender stores state locally in SQLite:
-
-- Project DB: `.bender/bender.db`
-- Home/global DB: `~/.bender/bender-home.db`
-
-Project files under `.bender/` still include artifacts like `brief.md`, `architecture.md`, task files, and logs for reviewability/compatibility.
-
-## Quick Start
-
-### Requirements
+## Requirements
 
 - Node.js `>=20`
 - npm
 
-### Install
+## Quick Start
 
 ```bash
 npm install
-```
-
-### Build
-
-```bash
 npm run build
-```
-
-### Run in browser
-
-```bash
 npm run bend
 ```
 
-### Run desktop app
+Then open `http://localhost:3142` (or your configured port).
+
+Desktop app:
 
 ```bash
 npm run desktop:start
 ```
 
-### Build desktop DMG (macOS)
+## CLI Commands
 
-```bash
-npm run desktop:pack:dmg
-```
+- `bender init -d <dir>`: Initialize a new project (clarification -> architecture -> task plan)
+- `bender analyze -d <dir>`: Analyze an existing codebase into `.bender/` state
+- `bender plan "<description>" -d <dir>`: Plan a feature/change
+- `bender implement -d <dir>`: Execute the current task plan
+- `bender status -d <dir>`: Show project state/status
+- `bender bend [-d <dir>]`: Start local dashboard server (aliases: `open`, `review`)
+- `bender stop`: Stop dashboard server
+- `bender eval-ci --suite <id> -d <dir>`: Run saved eval suite as CI gate
 
-### Install CLI globally (optional)
+## Web Dashboard
 
-```bash
-npm link
-bender bend
-```
+Primary views in current UI:
+- `Overview`
+- `Agents`
+- `Tasks`
+- `Workflows`
+- `Architecture`
+- `Evals`
+- `Settings`
 
-## Core CLI Commands
+When no project is selected:
+- Home tiles show recent projects, new project, and clone entrypoint.
+- Settings and Agents remain accessible.
 
-- `bender bend` starts local backend/dashboard
-- `bender stop` stops local dashboard server
-- `bender init -d <dir>` initializes project state
-- `bender analyze -d <dir>` analyzes existing repository state
-- `bender plan "<description>" -d <dir>` generates/updates task plan
-- `bender implement -d <dir>` executes active plan
-- `bender status -d <dir>` prints project/task status
-- `bender eval-ci --suite <suite-id> -d <dir>` runs saved eval suite as CI gate
+### Chat UX
 
-## WebUI Areas
+- Chat lives inside the Operation Drawer.
+- New conversation shortcut: `Cmd/Ctrl+K`.
+- Thread picker supports rename, archive/restore, delete.
+- Slash commands differ by scope:
+  - Global scope: open/clone/recent project helpers
+  - Project scope: task/audit/analyze/plan-oriented commands
 
-- Overview / Plan
-- Architecture
-- Changes (Git/GitHub helpers)
-- Evals
-- Agents
-- Settings
-- Console
-- Chat (Bender Operator)
+## Backend Architecture
 
-## Chat Operator
+Core server:
+- Express API + static web host in `src/cli/server.ts`
+- Health check: `GET /api/health` -> `{ ok: true }`
+- Port resolution: `BENDER_PORT` -> `PORT` -> `3142`
 
-The chat panel is project-scoped and uses a fixed operator role. It supports:
+Route domains (high-level):
+- Project/session: `/api/state`, `/api/project`, `/api/projects`
+- Chat: `/api/chat/*`
+- Run pipeline + SSE: `/api/run/*`
+- Tasks + task GitHub links: `/api/tasks/*`
+- Workflows + workflow runs: `/api/workflows*`, `/api/workflow-runs*`
+- Git + GitHub integration: `/api/git/*`, `/api/github/*`, `/api/github/work-items/*`
+- LLM/config/connectors/themes/logs/evals/skills/agents
 
-- Normal conversational guidance
-- Tool-backed actions (task list/add/update/delete/run, audits, analyze)
-- Deterministic fallback commands when tool-calling is unavailable
+## Data Model and Persistence
 
-Examples:
+Per-project data:
+- `<project>/.bender/` artifacts (brief, architecture, tasks, logs, etc.)
+- `<project>/.bender/bender.db` for structured local records
 
-- `/task list`
-- `/task add title: ...; description: ...`
-- `/task update 3 title: ...`
-- `/task run 3`
-- `/audit security`
-- `/analyze`
+Global (machine/user) data:
+- `~/.bender/bender-home.db` (home-level registry/settings)
+- `~/.bender/global-chat.db` (chat threads/messages in no-project mode)
+
+`BENDER_HOME_DIR` can override `~/.bender` (useful for tests/isolation).
 
 ## LLM Providers
 
-Bender is provider-agnostic and supports:
-
+Configured providers currently include:
 - `anthropic`
 - `openai`
 - `google`
 - `groq`
 - `ollama`
-- `openai-compatible` (experimental)
+- `local`
+- `openai-compatible`
 
-Provider/model tiers (`fast`, `default`, `strong`) are configured in Settings and persisted per project/global scope.
+Model tiers are configured as `fast`, `default`, `strong`.
 
-### OpenAI-compatible local provider (experimental)
+## Testing
 
-Use this for local/self-hosted OpenAI-shaped servers (for example LM Studio-compatible endpoints).
+Commands:
 
-Settings fields:
+```bash
+npm run test:unit
+npm run test:integration
+npm run test:e2e:smoke
+npm run test:e2e:playwright
+npm run test:harness
+npm run test:harness:full
+```
 
-- `provider`: `openai-compatible`
-- `baseUrl`: required, e.g. `http://localhost:1234/v1`
-- `model`: optional default model hint
-- `apiKey`: optional bearer token
-- `supportsTools`: optional capability override
-- `supportsJson`: optional capability override
-- `supportsStreaming`: optional capability override
-
-Behavior notes:
-
-- Bender normalizes host-only URLs (for example `100.102.218.63:7070` to `http://100.102.218.63:7070`)
-- For compatibility, Bender can fall back between `/chat/completions` and `/responses` paths when server behavior is inconsistent
-- Local capabilities are conservatively gated; unsupported features fail soft
-
-## GitHub Integration
-
-GitHub flows are project-scoped. Bender uses the currently open project and its linked repo.
-
-Current capabilities include:
-
-- Auth/linkage setup in Settings
-- Issue listing/filtering for linked repo
-- Role-based extraction (analyzer/architect/planner) into candidate tasks
-- Review-and-import into task plan
-- Task-to-issue linkage persistence
-
-## Evals
-
-Evals are backed by Promptfoo while preserving Bender-native entities and UI.
-
-Supported now:
-
-- Single task compare across multiple configs
-- Saved suite execution/reports
-- CI gating via `bender eval-ci`
+Audit snapshot from April 30, 2026:
+- `test:integration`: passing
+- `test:e2e:smoke`: passing
+- `test:unit`: failing in `tests/unit/chat-store.test.ts` (stale constructor usage vs current `ChatStore` API)
+- `test:e2e:playwright`: partially failing due UI contract drift (notably chat/drawer interactions and outdated heading/selector assumptions)
 
 ## Environment Variables
 
 - `BENDER_PORT`: preferred backend port
-- `PORT`: secondary port fallback
-- `BENDER_PROJECT_DIR`: optional initial project path for desktop backend entrypoint
-- `BENDER_NODE_BIN`: optional Node executable path for Electron backend spawn
-- `BENDER_LOG_LEVEL`: override minimum structured log level (`debug|info|warn|error`)
+- `PORT`: fallback backend port
+- `BENDER_HOME_DIR`: override global Bender home directory
+- `BENDER_PROJECT_DIR`: initial project path for desktop backend entrypoint
+- `BENDER_NODE_BIN`: Node binary path for Electron backend spawn
+- `BENDER_LOG_LEVEL`: log level override (`debug|info|warn|error`)
 
-## Scripts
+## Build and Packaging Scripts
 
-- `npm run build` build CLI + web
-- `npm run build:cli` build CLI only
-- `npm run build:web` build web only
-- `npm run bend` build CLI + run dashboard
-- `npm run desktop:start` build + launch desktop app
-- `npm run desktop:backend` run desktop backend entrypoint only
-- `npm run desktop:pack:dmg` build versioned macOS `.dmg` into `dist-desktop/`
-- `npm run desktop:pack:dir` build unpacked macOS app into `dist-desktop/`
-- `npm run version:patch|version:minor|version:major` bump semantic version + create git tag
-- `npm run test` run harness tests
-- `npm run test:unit` run unit tests
-- `npm run test:integration` run integration tests
-- `npm run test:harness` build CLI + unit + integration
-- `npm run test:harness:full` harness + dashboard smoke
-- `npm run test:e2e:smoke` dashboard smoke
-- `npm run test:e2e:playwright` Playwright E2E
-- `npm run test:e2e:playwright:headed` headed Playwright
-- `npm run test:e2e:llm-smoke` LLM smoke
+- `npm run build`: CLI + web build
+- `npm run build:cli`: CLI build only
+- `npm run build:web`: web build only
+- `npm run desktop:start`: launch Electron app
+- `npm run desktop:backend`: run desktop backend entrypoint directly
+- `npm run desktop:pack:dmg`: macOS DMG package
+- `npm run desktop:pack:dir`: unpacked macOS app directory
 
-## Troubleshooting
+## Notes for Contributors
 
-- `Missing API key for provider ...`: verify provider keys in Settings for the active tier/provider
-- Local provider URL errors (`Invalid URL`): include protocol or use host:port and let Bender normalize it
-- Desktop native module mismatch (`better-sqlite3`): run `npm rebuild` after Node/Electron version changes
-- GitHub MCP `401 Unauthorized`: refresh token/config in Settings
-- For deep debugging, inspect `.bender/bender.log` and `GET /api/logs` (supports `limit`, `level`, `component`, `contains`, `sinceMs` query filters)
-- Mermaid/UI render failures are reported into structured logs via `POST /api/logs/client`
-
-## Desktop Release Pipeline
-
-- Workflow: [desktop-dmg.yml](/Volumes/SD3.2_256/Repos/bender/.github/workflows/desktop-dmg.yml)
-- Triggers:
-  - manual (`workflow_dispatch`)
-  - git tags matching `v*` (for example `v0.2.0`)
-- Output:
-  - versioned `.dmg` artifact uploaded from `dist-desktop/*.dmg`
-  - on tag builds, `.dmg` is also attached to the GitHub Release
-
-Versioning convention:
-
-1. Run `npm run version:patch` (or `version:minor` / `version:major`).
-2. Push commit + tag (`git push && git push --tags`).
-3. GitHub Actions builds and publishes the versioned desktop package.
+- Do not assume an open project at startup.
+- Treat chat thread IDs as scope-local (global vs project).
+- If you switch project context in the UI, refresh or re-resolve active thread before send.
+- Prefer updating tests alongside UI contract changes (especially Playwright selectors and drawer interactions).

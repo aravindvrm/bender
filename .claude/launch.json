@@ -3,10 +3,9 @@
   "configurations": [
     {
       "name": "swapaday-web",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 3000,
-      "cwd": "/Users/avrm/Documents/Repos/Codex/swapaday/apps/web"
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd /Users/avrm/Documents/Repos/Codex/swapaday/apps/web && npm run dev"],
+      "port": 3000
     },
     {
       "name": "bender-web",
