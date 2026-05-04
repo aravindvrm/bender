@@ -63,15 +63,13 @@ async function bundleAll() {
       sourcemap: false,
       minify: false,
       external,
-      // Node 20+ requires explicit __dirname/__filename injection for ESM bundles.
+      // Provide `require` for any CJS deps that need it. Don't declare
+      // __dirname/__filename here — esbuild auto-shims those when it sees
+      // them, and a second declaration triggers a SyntaxError at runtime.
       banner: {
         js: [
           "import { createRequire as __benderCreateRequire } from 'node:module';",
-          "import { fileURLToPath as __benderFileURLToPath } from 'node:url';",
-          "import { dirname as __benderDirname } from 'node:path';",
           "const require = __benderCreateRequire(import.meta.url);",
-          "const __filename = __benderFileURLToPath(import.meta.url);",
-          "const __dirname = __benderDirname(__filename);",
         ].join("\n"),
       },
       logLevel: "warning",
