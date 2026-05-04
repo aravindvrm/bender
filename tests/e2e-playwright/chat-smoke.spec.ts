@@ -59,7 +59,7 @@ test.describe("chat view smoke", () => {
     await expect(page.getByText("Conversations")).toBeVisible({ timeout: 4000 });
   });
 
-  test("conversation picker closes when backdrop is clicked", async ({ page }) => {
+  test("conversation picker closes on Escape", async ({ page }) => {
     await page.goto("/");
 
     const newBtn = page.getByTitle("New conversation (⌘K)");
@@ -71,8 +71,8 @@ test.describe("chat view smoke", () => {
     await switcher.click();
     await expect(page.getByText("Conversations")).toBeVisible({ timeout: 4000 });
 
-    // Click the backdrop (messages area, below the header)
-    await page.getByRole("textbox").click();
+    // Escape should close the picker
+    await page.keyboard.press("Escape");
     await expect(page.getByText("Conversations")).not.toBeVisible({ timeout: 2000 });
   });
 

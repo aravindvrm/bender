@@ -617,6 +617,16 @@ export function ChatPanel({ projectPath, clearToken = 0, onRunOperation, trigger
   // Conversation picker
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  // Close the conversation picker on Escape
+  useEffect(() => {
+    if (!pickerOpen) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") { e.stopPropagation(); setPickerOpen(false); }
+    }
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [pickerOpen]);
+
   const abortControllerRef = useRef<AbortController | null>(null);
   const userCancelledRef = useRef(false);
   const scopeRef = useRef(scopeKey(projectPath));
