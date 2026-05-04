@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "description": "AI-powered software factory — turns messy product ideas into maintainable codebases",
   "type": "module",
-  "main": "dist/desktop/main.js",
+  "main": "dist-bundle/desktop/main.js",
   "bin": {
-    "bender": "./dist/cli/index.js"
+    "bender": "./dist-bundle/cli/index.js"
   },
   "scripts": {
     "build": "tsc && rm -rf dist/llm/prompts && mkdir -p dist/llm/prompts && cp -R src/llm/prompts/. dist/llm/prompts && npm run build:web",
@@ -15,11 +15,12 @@
     "dev": "tsc --watch",
     "dev:web": "vite --config src/web/vite.config.ts",
     "bend": "npm run build:cli && node dist/cli/index.js bend",
-    "desktop:start": "npm run build && electron dist/desktop/main.js",
+    "desktop:start": "npm run desktop:bundle && electron dist-bundle/desktop/main.js",
     "desktop:dev": "npm run desktop:start",
-    "desktop:backend": "npm run build:cli && node dist/desktop/backend.js",
-    "desktop:pack:dmg": "npm run build && npx electron-builder@26.0.12 --mac dmg --publish never",
-    "desktop:pack:dir": "npm run build && npx electron-builder@26.0.12 --mac dir --publish never",
+    "desktop:backend": "npm run desktop:bundle && node dist-bundle/desktop/backend.js",
+    "desktop:bundle": "npm run build:web && node scripts/bundle-desktop.mjs",
+    "desktop:pack:dmg": "npm run desktop:bundle && electron-builder --mac dmg --publish never",
+    "desktop:pack:dir": "npm run desktop:bundle && electron-builder --mac dir --publish never",
     "open": "npm run bend",
     "start": "node dist/cli/index.js",
     "version:patch": "npm version patch -m \"chore(release): %s\"",
@@ -56,12 +57,11 @@
       "**/*.node"
     ],
     "files": [
-      "dist/**/*",
-      "package.json",
-      "node_modules/**/*"
+      "dist-bundle/**/*",
+      "package.json"
     ],
     "directories": {
-      "output": "dist-desktop"
+      "output": "${env.HOME}/.bender-dist-desktop"
     },
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -69,7 +69,11 @@
         "dmg"
       ],
       "icon": "build/icons/icon.icns"
-    }
+    },
+    "electronLanguages": [
+      "en",
+      "en-GB"
+    ]
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.69",
@@ -84,7 +88,6 @@
     "lucide-react": "^1.8.0",
     "mermaid": "^11.14.0",
     "ora": "^9.3.0",
-    "promptfoo": "^0.120.19",
     "simple-git": "^3.35.2",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
@@ -100,6 +103,9 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "electron": "^41.2.0",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.0",
+    "promptfoo": "^0.120.19",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "tailwindcss": "^4.2.2",

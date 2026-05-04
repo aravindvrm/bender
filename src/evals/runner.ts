@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { exec as execCb } from "node:child_process";
 import { promisify } from "node:util";
-import { evaluate as promptfooEvaluate } from "promptfoo";
 import type {
   Assertion,
   AssertionValueFunctionContext,
@@ -12,7 +11,27 @@ import type {
   EvaluateResult,
   GradingResult,
   TokenUsage as PromptfooTokenUsage,
+  evaluate as PromptfooEvaluate,
 } from "promptfoo";
+
+/**
+ * Lazy-load promptfoo. The desktop bundle marks `promptfoo` as external and
+ * does NOT ship it (it brings ~5GB of cloud SDKs as transitive deps). Eval
+ * functionality is therefore source-only; callers should catch the import
+ * failure and surface a clear error.
+ */
+async function loadPromptfoo(): Promise<typeof PromptfooEvaluate> {
+  try {
+    const mod = await import("promptfoo");
+    return mod.evaluate;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Eval support requires the 'promptfoo' package, which is not installed in this build. ` +
+      `Run from source or install it manually. Original error: ${detail}`,
+    );
+  }
+}
 import type { BaseRole } from "../state/agents.js";
 import { getAllAgents, getEffectiveAgentForRole } from "../state/agents.js";
 import type { CapabilityPolicy } from "../state/capabilities.js";
@@ -739,6 +758,7 @@ async function runPromptfooMatrix(params: {
     },
   }));
 
+  const promptfooEvaluate = await loadPromptfoo();
   const evaluated = await promptfooEvaluate(
     {
       prompts: ["{{taskPrompt}}"],
