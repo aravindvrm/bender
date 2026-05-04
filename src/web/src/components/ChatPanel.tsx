@@ -436,8 +436,8 @@ function ConversationPicker({
 
   return (
     <>
-      {/* Backdrop */}
-      <div className="absolute inset-0 z-40" onClick={onClose} />
+      {/* Backdrop — fixed so it covers the full viewport, not just the header bar */}
+      <div className="fixed inset-0 z-40" onClick={onClose} />
       {/* Panel */}
       <div
         className="absolute top-full left-0 right-0 z-50 mt-px rounded-b-xl overflow-hidden"
