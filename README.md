@@ -1,21 +1,32 @@
 # Bender
 
-Bender is a local-first AI software workspace for planning, execution, and review across real codebases.
+Bender is a local-first AI engineering workspace for planning, implementation, review, and evals across real repositories.
 
-It ships as one shared backend with multiple interfaces:
+It runs one shared backend across three interfaces:
 - CLI (`bender ...`)
 - Web dashboard (`bender bend`)
 - Electron desktop app (`npm run desktop:start`)
 
-## Current Product Shape (Audited April 30, 2026)
+## Core Capabilities
 
-- No-project home mode is first-class.
-- Project state is optional at app boot (`/api/state` can return `projectRoot: null`).
-- Chat now runs in the bottom **Operation Drawer** (not a standalone sidebar view).
-- Chat threads are **scope-bound**:
-  - Global scope (no project): persisted in `~/.bender/global-chat.db`
-  - Project scope: persisted in `<project>/.bender/bender.db`
-- Switching project scope invalidates thread IDs from the previous scope; stale IDs correctly return `404 Thread not found`.
+- Project lifecycle commands: `init`, `analyze`, `plan`, `implement`, `status`
+- Role-based runtimes: analyzer, architect, planner, implementer, reviewer
+- Task planning + execution with persisted state
+- Built-in workflows with run history and API execution
+- Promptfoo-backed eval compare and suite execution
+- Skills catalog/library (curated + user + project packages)
+- Git and GitHub integration (including issue extraction/import flows)
+- Project-scoped and global chat with tool-backed operator actions
+- Local SQLite persistence (no external database required)
+
+## Product Shape
+
+- No-project mode is first-class: the app can start with `projectRoot: null`.
+- Home view supports recent projects, opening existing paths, creating a new project, and clone entrypoints.
+- Chat runs in the bottom operation drawer (not a standalone sidebar page).
+- Chat scope is explicit:
+  - Global scope uses `~/.bender/global-chat.db`
+  - Project scope uses `<project>/.bender/bender.db`
 
 ## Requirements
 
@@ -32,78 +43,101 @@ npm run bend
 
 Then open `http://localhost:3142` (or your configured port).
 
-Desktop app:
+For desktop:
 
 ```bash
 npm run desktop:start
 ```
 
-## CLI Commands
+## CLI Reference
 
-- `bender init -d <dir>`: Initialize a new project (clarification -> architecture -> task plan)
-- `bender analyze -d <dir>`: Analyze an existing codebase into `.bender/` state
-- `bender plan "<description>" -d <dir>`: Plan a feature/change
-- `bender implement -d <dir>`: Execute the current task plan
-- `bender status -d <dir>`: Show project state/status
-- `bender bend [-d <dir>]`: Start local dashboard server (aliases: `open`, `review`)
-- `bender stop`: Stop dashboard server
-- `bender eval-ci --suite <id> -d <dir>`: Run saved eval suite as CI gate
+- `bender init -d <dir>`: initialize a project (`.bender/`, brief, architecture, task plan)
+- `bender analyze -d <dir>`: analyze an existing codebase into Bender state
+- `bender plan "<description>" -d <dir>`: plan a feature/change for an initialized project
+- `bender implement -d <dir>`: execute implementation pipeline for current plan/tasks
+- `bender status -d <dir>`: show state, tasks, and recent decisions
+- `bender bend [-d <dir>]`: run local dashboard server (aliases: `open`, `review`)
+- `bender stop`: stop dashboard server
+- `bender eval-ci --suite <suite-id> -d <dir>`: run eval suite as CI gate
 
-## Web Dashboard
+## Web/Desktop UI
 
-Primary views in current UI:
+Primary views:
 - `Overview`
-- `Agents`
 - `Tasks`
 - `Workflows`
 - `Architecture`
 - `Evals`
+- `Agents`
 - `Settings`
 
-When no project is selected:
-- Home tiles show recent projects, new project, and clone entrypoint.
-- Settings and Agents remain accessible.
+Behavior notes:
+- Settings and Agents are available without an open project.
+- Uninitialized projects show an explicit "Analyze Project" flow.
+- The top bar includes current project context and diff summary panel toggles.
 
-### Chat UX
+### Operation Drawer + Chat
 
-- Chat lives inside the Operation Drawer.
-- New conversation shortcut: `Cmd/Ctrl+K`.
-- Thread picker supports rename, archive/restore, delete.
-- Slash commands differ by scope:
-  - Global scope: open/clone/recent project helpers
-  - Project scope: task/audit/analyze/plan-oriented commands
+- Chat, operation output, and terminal panel live in the bottom drawer.
+- Thread lifecycle: create, rename, archive/restore, delete.
+- Keyboard shortcut for new thread: `Cmd/Ctrl+K`.
+- Chat supports deterministic command fallbacks and tool-backed actions.
 
-## Backend Architecture
+## Workflows
 
-Core server:
-- Express API + static web host in `src/cli/server.ts`
-- Health check: `GET /api/health` -> `{ ok: true }`
-- Port resolution: `BENDER_PORT` -> `PORT` -> `3142`
+Built-in workflow definitions are auto-seeded:
+- `issue-extract-candidates`
+- `task-to-implement`
+- `review-current-changes`
 
-Route domains (high-level):
-- Project/session: `/api/state`, `/api/project`, `/api/projects`
+API surface includes:
+- `GET/PUT/DELETE /api/workflows/:id`
+- `POST /api/workflows/:id/run`
+- `GET /api/workflow-runs`
+- `GET /api/workflow-runs/:runId`
+
+## Evals
+
+Evals are backed by Promptfoo and exposed through both API and UI:
+- Eval tasks, configs, and suites CRUD
+- Compare runs (`/api/run/evals/compare`)
+- Suite runs (`/api/run/evals/suites/:suiteId`)
+- Historical run inspection endpoints
+- CI gating via `bender eval-ci`
+
+## Backend and API
+
+Core server: `src/cli/server.ts`
+
+- Health endpoint: `GET /api/health` returns `{ ok: true }`
+- Port resolution order: `BENDER_PORT` -> `PORT` -> `3142`
+- Serves built web assets from `dist/web`
+- Structured per-request logging with request IDs
+
+High-level API domains:
+- Project and state: `/api/project*`, `/api/projects*`, `/api/state`
 - Chat: `/api/chat/*`
-- Run pipeline + SSE: `/api/run/*`
-- Tasks + task GitHub links: `/api/tasks/*`
-- Workflows + workflow runs: `/api/workflows*`, `/api/workflow-runs*`
-- Git + GitHub integration: `/api/git/*`, `/api/github/*`, `/api/github/work-items/*`
-- LLM/config/connectors/themes/logs/evals/skills/agents
+- Run operations and answer handling: `/api/run/*`
+- Tasks and task-GitHub linking: `/api/tasks/*`
+- Workflows and workflow runs: `/api/workflows*`, `/api/workflow-runs*`
+- Git/GitHub: `/api/git/*`, `/api/github/*`, `/api/github/work-items/*`
+- Skills, agents, connectors, LLM, config, logs, terminal, evals, themes
 
-## Data Model and Persistence
+## Persistence Model
 
-Per-project data:
-- `<project>/.bender/` artifacts (brief, architecture, tasks, logs, etc.)
-- `<project>/.bender/bender.db` for structured local records
+Per-project:
+- `<project>/.bender/` artifacts (brief, architecture, tasks, logs, skills, etc.)
+- `<project>/.bender/bender.db` (structured local records)
 
-Global (machine/user) data:
-- `~/.bender/bender-home.db` (home-level registry/settings)
-- `~/.bender/global-chat.db` (chat threads/messages in no-project mode)
+Global:
+- `~/.bender/bender-home.db` (home-level settings/registry)
+- `~/.bender/global-chat.db` (chat in no-project scope)
 
-`BENDER_HOME_DIR` can override `~/.bender` (useful for tests/isolation).
+Override global home path with `BENDER_HOME_DIR`.
 
 ## LLM Providers
 
-Configured providers currently include:
+Supported providers:
 - `anthropic`
 - `openai`
 - `google`
@@ -112,49 +146,50 @@ Configured providers currently include:
 - `local`
 - `openai-compatible`
 
-Model tiers are configured as `fast`, `default`, `strong`.
+Tiers:
+- `fast`
+- `default`
+- `strong`
+
+`openai-compatible` and `local` include capability probing and endpoint fallback logic for local/self-hosted servers.
 
 ## Testing
-
-Commands:
 
 ```bash
 npm run test:unit
 npm run test:integration
+npm run test:harness
 npm run test:e2e:smoke
 npm run test:e2e:playwright
-npm run test:harness
 npm run test:harness:full
 ```
 
-Audit snapshot from April 30, 2026:
-- `test:integration`: passing
-- `test:e2e:smoke`: passing
-- `test:unit`: failing in `tests/unit/chat-store.test.ts` (stale constructor usage vs current `ChatStore` API)
-- `test:e2e:playwright`: partially failing due UI contract drift (notably chat/drawer interactions and outdated heading/selector assumptions)
+## Build, Packaging, Release
+
+- `npm run build`: build CLI + web
+- `npm run build:cli`: build CLI only
+- `npm run build:web`: build web only
+- `npm run desktop:start`: launch Electron app
+- `npm run desktop:backend`: run desktop backend entrypoint
+- `npm run desktop:pack:dmg`: build macOS DMG into `dist-desktop/`
+- `npm run desktop:pack:dir`: build unpacked macOS app into `dist-desktop/`
+
+CI workflows:
+- `.github/workflows/playwright-smoke.yml`
+- `.github/workflows/desktop-dmg.yml`
 
 ## Environment Variables
 
 - `BENDER_PORT`: preferred backend port
 - `PORT`: fallback backend port
-- `BENDER_HOME_DIR`: override global Bender home directory
-- `BENDER_PROJECT_DIR`: initial project path for desktop backend entrypoint
-- `BENDER_NODE_BIN`: Node binary path for Electron backend spawn
-- `BENDER_LOG_LEVEL`: log level override (`debug|info|warn|error`)
+- `BENDER_HOME_DIR`: override default `~/.bender`
+- `BENDER_PROJECT_DIR`: optional initial project path for desktop backend
+- `BENDER_NODE_BIN`: explicit Node executable for desktop backend spawn
+- `BENDER_LOG_LEVEL`: log-level override (`debug|info|warn|error`)
 
-## Build and Packaging Scripts
+## Troubleshooting
 
-- `npm run build`: CLI + web build
-- `npm run build:cli`: CLI build only
-- `npm run build:web`: web build only
-- `npm run desktop:start`: launch Electron app
-- `npm run desktop:backend`: run desktop backend entrypoint directly
-- `npm run desktop:pack:dmg`: macOS DMG package
-- `npm run desktop:pack:dir`: unpacked macOS app directory
-
-## Notes for Contributors
-
-- Do not assume an open project at startup.
-- Treat chat thread IDs as scope-local (global vs project).
-- If you switch project context in the UI, refresh or re-resolve active thread before send.
-- Prefer updating tests alongside UI contract changes (especially Playwright selectors and drawer interactions).
+- Backend health: check `GET /api/health`
+- Logs: inspect `.bender/bender.log` and `/api/logs`
+- Desktop backend startup failures: confirm Node path or set `BENDER_NODE_BIN`
+- Local provider model detection issues: verify base URL/model and provider settings in `Settings`
