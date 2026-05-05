@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getBenderDir } from "./config.js";
+import { ensureBenderGitignored } from "./gitignore.js";
 import { LocalProjectDb } from "./local-db.js";
 import {
   normalizeCanonicalTaskPlan,
@@ -53,6 +54,7 @@ export class StateManager {
         await mkdir(dir, { recursive: true });
       }
     }
+    await ensureBenderGitignored(this.projectRoot);
   }
 
   isInitialized(): boolean {
