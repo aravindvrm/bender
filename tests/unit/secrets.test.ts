@@ -9,6 +9,7 @@ import {
   resolveSecret,
   setSecret,
   __resetKeychainAvailabilityCache,
+  __resetCredentialsCache,
 } from "../../src/state/secrets.js";
 
 // Tests run against the real OS keychain. They use a unique per-suite
@@ -66,6 +67,7 @@ describe("isSecretRef / buildSecretRef / parseSecretRef", () => {
 describe("get/set/deleteSecret (against real keychain)", () => {
   beforeEach(() => {
     __resetKeychainAvailabilityCache();
+    __resetCredentialsCache();
   });
 
   it.skipIf(!isKeychainAvailable())("round-trips a secret value", () => {
@@ -99,6 +101,7 @@ describe("resolveSecret", () => {
   beforeEach(() => {
     delete process.env[ENV_VAR];
     __resetKeychainAvailabilityCache();
+    __resetCredentialsCache();
   });
 
   it("returns null for empty / undefined / null", () => {
