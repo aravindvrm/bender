@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { exec as execCb } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type {
   Assertion,
@@ -14,22 +15,50 @@ import type {
   evaluate as PromptfooEvaluate,
 } from "promptfoo";
 
+import {
+  extensionNodeModulesPath,
+  getInstallStatus,
+} from "./runtime-deps.js";
+import { RUNTIME_EXTENSIONS } from "./runtime-deps-manifest.js";
+
 /**
- * Lazy-load promptfoo. The desktop bundle marks `promptfoo` as external and
- * does NOT ship it (it brings ~5GB of cloud SDKs as transitive deps). Eval
- * functionality is therefore source-only; callers should catch the import
- * failure and surface a clear error.
+ * Thrown when promptfoo can't be loaded because the runtime-deps bundle
+ * isn't installed. UI catches this and shows the install panel rather
+ * than a generic error.
+ */
+export class EvalSupportNotInstalledError extends Error {
+  constructor(public readonly cause?: unknown) {
+    super("Eval support is not installed. Install the promptfoo bundle to enable evals.");
+    this.name = "EvalSupportNotInstalledError";
+  }
+}
+
+/**
+ * Resolve promptfoo at runtime. Order:
+ *   1. Standard module resolution (works for `npm run` source builds).
+ *   2. The runtime-deps install dir (the path packaged DMG users take).
+ *
+ * If neither resolves, throw EvalSupportNotInstalledError so the UI can
+ * surface the install flow instead of a generic crash.
  */
 async function loadPromptfoo(): Promise<typeof PromptfooEvaluate> {
+  // 1. Source-build path: promptfoo is in the workspace's node_modules.
   try {
     const mod = await import("promptfoo");
     return mod.evaluate;
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Eval support requires the 'promptfoo' package, which is not installed in this build. ` +
-      `Run from source or install it manually. Original error: ${detail}`,
-    );
+  } catch (sourceErr) {
+    // 2. Runtime-deps install: load the matching bundle from disk.
+    const ext = RUNTIME_EXTENSIONS.promptfoo;
+    const status = await getInstallStatus("promptfoo");
+    if (status.state !== "installed") throw new EvalSupportNotInstalledError(sourceErr);
+    const pkgDir = extensionNodeModulesPath("promptfoo", ext.bundleVersion, "promptfoo");
+    const entry = pathToFileURL(`${pkgDir}/dist/src/index.js`).href;
+    try {
+      const mod = (await import(entry)) as { evaluate: typeof PromptfooEvaluate };
+      return mod.evaluate;
+    } catch (runtimeErr) {
+      throw new EvalSupportNotInstalledError(runtimeErr);
+    }
   }
 }
 import type { BaseRole } from "../state/agents.js";

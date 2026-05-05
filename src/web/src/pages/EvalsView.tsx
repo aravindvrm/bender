@@ -140,6 +140,25 @@ interface EvalsViewProps {
   ) => void;
 }
 
+interface RuntimeDepsState {
+  id: string;
+  label: string;
+  bundleVersion: number;
+  upstreamVersion: string;
+  sizeBytes: number;
+  installedSizeBytes: number | null;
+  status:
+    | { state: "installed"; bundleVersion: number; upstreamVersion: string; installedAt: string }
+    | { state: "missing" }
+    | { state: "stale"; installedBundleVersion: number; expectedBundleVersion: number };
+}
+
+function formatBytesShort(n: number): string {
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(0)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 // ---------------------------------------------------------------------------
 // Constants + helpers
 // ---------------------------------------------------------------------------
@@ -962,6 +981,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [connectors, setConnectors] = useState<McpConnector[]>([]);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
+  const [runtimeDeps, setRuntimeDeps] = useState<RuntimeDepsState | null>(null);
 
   // Run selections
   const [selectedConfigIds, setSelectedConfigIds] = useState<Set<string>>(new Set());
@@ -1039,7 +1059,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
     setLoading(true);
     setError(null);
     try {
-      const [configsRes, suitesRes, compareRunsRes, suiteRunsRes, skillsCatalog, connectorsRes, llmRes] =
+      const [configsRes, suitesRes, compareRunsRes, suiteRunsRes, skillsCatalog, connectorsRes, llmRes, runtimeDepsRes] =
         await Promise.all([
           fetch("/api/evals/configs"),
           fetch("/api/evals/suites"),
@@ -1048,6 +1068,7 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
           loadSkillsCatalog(),
           fetch("/api/mcp/connectors"),
           fetch("/api/llm/status"),
+          fetch("/api/evals/runtime-deps"),
         ]);
       if (!configsRes.ok || !suitesRes.ok || !compareRunsRes.ok || !suiteRunsRes.ok) {
         throw new Error("Failed to load eval state");
@@ -1069,6 +1090,9 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
       }
       if (llmRes.ok) {
         setLlmStatus((await llmRes.json()) as LlmStatus);
+      }
+      if (runtimeDepsRes.ok) {
+        setRuntimeDeps((await runtimeDepsRes.json()) as RuntimeDepsState);
       }
     } catch (err) {
       setError((err as Error).message);
@@ -1279,6 +1303,42 @@ export function EvalsView({ state, onNewTask, runOperation }: EvalsViewProps) {
         <p className="text-xs px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-900/40 text-zinc-400">
           {message}
         </p>
+      )}
+
+      {runtimeDeps && runtimeDeps.status.state !== "installed" && (
+        <div className="rounded-lg border border-amber-900/50 bg-amber-950/20 p-4 space-y-3">
+          <div className="space-y-1">
+            <h4 className="text-sm font-semibold text-amber-200">
+              {runtimeDeps.status.state === "stale"
+                ? "Eval support needs updating"
+                : "Eval support not installed"}
+            </h4>
+            <p className="text-xs text-amber-200/70 leading-relaxed">
+              Evals run on promptfoo, which is shipped as an optional download to keep the
+              app small. Click install to fetch the bundle (~{formatBytesShort(runtimeDeps.sizeBytes)}).
+              It's stored under <code className="text-amber-200/90">~/.bender/runtime-deps/</code>{" "}
+              and can be uninstalled at any time.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (!runOperation) return;
+                runOperation("/api/evals/runtime-deps/install", {}, {
+                  onSuccess: () => void loadData(),
+                });
+              }}
+              disabled={!runOperation}
+              className="px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-xs text-amber-100 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
+            >
+              {runtimeDeps.status.state === "stale" ? "Update eval support" : "Install eval support"}
+            </button>
+            <span className="text-[11px] text-zinc-500">
+              promptfoo {runtimeDeps.upstreamVersion}
+            </span>
+          </div>
+        </div>
       )}
 
       {/* ── Section 1: Configs ── */}

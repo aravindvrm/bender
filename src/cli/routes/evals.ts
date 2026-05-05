@@ -21,6 +21,14 @@ import {
   updateEvalSuite,
   updateEvalTask,
 } from "../services/evals.js";
+import {
+  ExtensionUnpublishedError,
+  getInstallStatus,
+  getInstalledSizeBytes,
+  installExtension,
+  uninstallExtension,
+} from "../../evals/runtime-deps.js";
+import { RUNTIME_EXTENSIONS } from "../../evals/runtime-deps-manifest.js";
 
 interface EvalsRouteDeps {
   getProject: () => string;
@@ -37,7 +45,76 @@ function toHttpError(err: unknown): { status: number; message: string } {
   return { status: 500, message: (err as Error).message };
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 export function registerEvalRoutes(app: Express, deps: EvalsRouteDeps): void {
+  // ---------------------------------------------------------------------
+  // Runtime-deps (eval support bundle)
+  // ---------------------------------------------------------------------
+  app.get("/api/evals/runtime-deps", async (_req, res) => {
+    try {
+      const ext = RUNTIME_EXTENSIONS.promptfoo;
+      const status = await getInstallStatus("promptfoo");
+      const installedSize = status.state === "installed" ? await getInstalledSizeBytes("promptfoo") : null;
+      res.json({
+        id: ext.id,
+        label: ext.label,
+        bundleVersion: ext.bundleVersion,
+        upstreamVersion: ext.upstreamVersion,
+        sizeBytes: ext.sizeBytes,
+        installedSizeBytes: installedSize,
+        status,
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post("/api/evals/runtime-deps/install", async (_req, res) => {
+    await deps.runOperation(res, async (adapter) => {
+      const spinner = adapter.spinner("Preparing eval support download…");
+      try {
+        await installExtension("promptfoo", (p) => {
+          if (p.phase === "downloading") {
+            const total = p.totalBytes ?? RUNTIME_EXTENSIONS.promptfoo.sizeBytes;
+            const pct = total > 0 ? Math.floor((100 * (p.bytesDownloaded ?? 0)) / total) : 0;
+            spinner.text = `Downloading eval support… ${pct}% (${formatBytes(p.bytesDownloaded ?? 0)} / ${formatBytes(total)})`;
+          } else if (p.phase === "verifying") {
+            spinner.text = "Verifying checksum…";
+          } else if (p.phase === "extracting") {
+            spinner.text = "Extracting bundle…";
+          } else if (p.phase === "finalizing") {
+            spinner.text = "Finalizing install…";
+          }
+        });
+        spinner.succeed("Eval support installed.");
+      } catch (err) {
+        spinner.fail("Eval support install failed.");
+        if (err instanceof ExtensionUnpublishedError) {
+          throw new Error(
+            "This bender build doesn't yet have a published eval bundle. " +
+            "If you're running a development build, install promptfoo with `npm install promptfoo` instead.",
+          );
+        }
+        throw err;
+      }
+    });
+  });
+
+  app.delete("/api/evals/runtime-deps", async (_req, res) => {
+    try {
+      await uninstallExtension("promptfoo");
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   app.get("/api/evals/tasks", async (_req, res) => {
     try {
       const tasks = await listEvalTasks(deps.getProject());
