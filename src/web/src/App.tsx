@@ -337,7 +337,11 @@ export function App() {
                       />
                     )}
                     {activeView === "agents" && <AgentsView />}
-                    {activeView === "settings" && <SettingsView />}
+                    {activeView === "settings" && (
+                      <SettingsView
+                        runOperation={(url, body, options) => op.startOperation(url, body, options)}
+                      />
+                    )}
                   </div>
                 </Suspense>
               )}

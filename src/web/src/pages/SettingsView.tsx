@@ -20,11 +20,20 @@ import { GitHubSection } from "./settings/GitHubSection";
 import { MCPSection } from "./settings/MCPSection";
 import { LLMSection } from "./settings/LLMSection";
 import { PreferencesSection } from "./settings/PreferencesSection";
+import { StorageSection } from "./settings/StorageSection";
 import { ThemeSection } from "./settings/ThemeSection";
 
 type ConfigScope = "global" | "project";
 
-export function SettingsView() {
+interface SettingsViewProps {
+  runOperation?: (
+    url: string,
+    body: Record<string, unknown>,
+    options?: { onSuccess?: () => void; onFinish?: (success: boolean) => void },
+  ) => void;
+}
+
+export function SettingsView({ runOperation }: SettingsViewProps = {}) {
   const DEFAULT_THEME_ID = "bender-default-dark";
   const [config, setConfig] = useState<FullConfig | null>(null);
   const [configScope, setConfigScope] = useState<ConfigScope>("global");
@@ -438,6 +447,10 @@ export function SettingsView() {
       />
 
       <PreferencesSection config={config} setConfig={setConfig} />
+
+      <div className="h-px bg-zinc-800" />
+
+      <StorageSection runOperation={runOperation} />
 
       {/* Error */}
       {error && <p className="text-sm text-bender-danger/80">{error}</p>}

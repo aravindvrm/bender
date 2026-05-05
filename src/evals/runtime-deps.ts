@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -61,6 +61,22 @@ export class ExtensionChecksumError extends Error {
     super(`Tarball SHA-256 mismatch: expected ${expected}, got ${actual}`);
     this.name = "ExtensionChecksumError";
   }
+}
+
+export class ExtensionDiskSpaceError extends Error {
+  constructor(public readonly requiredBytes: number, public readonly availableBytes: number) {
+    super(
+      `Insufficient disk space: need ${formatBytesShort(requiredBytes)}, ` +
+      `have ${formatBytesShort(availableBytes)} free in the install directory.`,
+    );
+    this.name = "ExtensionDiskSpaceError";
+  }
+}
+
+function formatBytesShort(n: number): string {
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(0)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,9 +168,15 @@ async function findInstalledBundleVersion(id: string): Promise<number | null> {
  * Download, verify, and unpack a runtime extension. Idempotent: if the
  * matching bundleVersion is already installed, this is a no-op.
  *
- * Atomic: the tarball is extracted into a sibling `.staging/` dir and
- * renamed into the final location only after success, so a partial
- * failure leaves no half-installed tree behind.
+ * The tarball lives at a stable path (`<root>/.partial-vN.tar.gz`) so a
+ * second attempt after a failed download can resume via HTTP Range
+ * instead of re-fetching the whole 40 MB. Extraction goes into a
+ * Date.now()-suffixed staging dir that's atomically renamed into the
+ * final location on success.
+ *
+ * Pre-checks free disk space (compressed + extracted + headroom). If
+ * the checksum fails after a full download, the partial is deleted so
+ * the next attempt restarts from scratch.
  */
 export async function installExtension(
   id: RuntimeExtensionId,
@@ -171,9 +193,12 @@ export async function installExtension(
 
   const finalDir = extensionInstallDir(id, ext.bundleVersion);
   const stagingDir = `${finalDir}.staging-${Date.now()}`;
-  const tarPath = `${stagingDir}.tar.gz`;
+  // Stable partial path so resume works across attempts. Versioned so a
+  // bumped bundleVersion doesn't try to resume against a stale tarball.
+  const tarPath = join(extensionRoot(id), `.partial-v${ext.bundleVersion}.tar.gz`);
 
   await mkdir(extensionRoot(id), { recursive: true });
+  await ensureDiskSpace(extensionRoot(id), ext.sizeBytes);
 
   try {
     onProgress?.({ phase: "downloading", bytesDownloaded: 0, totalBytes: ext.sizeBytes });
@@ -182,7 +207,15 @@ export async function installExtension(
     });
 
     onProgress?.({ phase: "verifying" });
-    await verifyChecksum(tarPath, ext.sha256);
+    try {
+      await verifyChecksum(tarPath, ext.sha256);
+    } catch (err) {
+      // Bad bytes (corruption, truncation, mid-stream proxy edits): drop
+      // the partial so the next attempt starts clean instead of resuming
+      // a poisoned file forever.
+      await rm(tarPath, { force: true }).catch(() => {});
+      throw err;
+    }
 
     onProgress?.({ phase: "extracting" });
     await mkdir(stagingDir, { recursive: true });
@@ -192,13 +225,31 @@ export async function installExtension(
     await writeManifest(stagingDir, ext);
     await rename(stagingDir, finalDir);
 
-    // Best-effort: prune older versions so disk doesn't accumulate.
+    // Success: drop the now-redundant tarball and any older bundle dirs.
+    await rm(tarPath, { force: true }).catch(() => {});
     await pruneOldVersions(id, ext.bundleVersion).catch(() => {});
   } catch (err) {
+    // Keep the partial tarball on download/network failures so the next
+    // attempt can resume — only the staging dir gets cleaned up.
     await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
     throw err;
-  } finally {
-    await rm(tarPath, { force: true }).catch(() => {});
+  }
+}
+
+async function ensureDiskSpace(rootDir: string, compressedBytes: number): Promise<void> {
+  // Heuristic: tarball + extracted tree (~7x for promptfoo) + headroom.
+  // Better to over-reserve than land mid-extract with ENOSPC.
+  const required = compressedBytes * 8;
+  try {
+    const fs = await statfs(rootDir);
+    const available = Number(fs.bavail) * Number(fs.bsize);
+    if (Number.isFinite(available) && available < required) {
+      throw new ExtensionDiskSpaceError(required, available);
+    }
+  } catch (err) {
+    if (err instanceof ExtensionDiskSpaceError) throw err;
+    // statfs unsupported (older Node, exotic filesystem): skip the check
+    // and let extraction surface the failure naturally.
   }
 }
 
@@ -207,20 +258,50 @@ async function downloadTarball(
   destPath: string,
   onBytes: (bytes: number, total: number | undefined) => void,
 ): Promise<void> {
+  // Resume: if a partial tarball exists, ask for the remaining range.
+  // Servers without Range support respond 200 with the full body — we
+  // detect that and start over.
+  let existing = 0;
+  if (existsSync(destPath)) {
+    try {
+      existing = (await stat(destPath)).size;
+      if (ext.sizeBytes > 0 && existing >= ext.sizeBytes) {
+        // Fully downloaded already — skip the network round trip and
+        // let the caller verify the checksum.
+        onBytes(existing, ext.sizeBytes);
+        return;
+      }
+    } catch {
+      existing = 0;
+    }
+  }
+
+  const headers: Record<string, string> = {};
+  if (existing > 0) headers["Range"] = `bytes=${existing}-`;
+
   let res: Response;
   try {
-    res = await fetch(ext.url, { redirect: "follow" });
+    res = await fetch(ext.url, { redirect: "follow", headers });
   } catch (err) {
     throw new ExtensionDownloadError(`Network error fetching ${ext.url}`, err);
   }
   if (!res.ok || !res.body) {
     throw new ExtensionDownloadError(`HTTP ${res.status} fetching ${ext.url}`);
   }
-  const totalHeader = res.headers.get("content-length");
-  const total = totalHeader ? Number.parseInt(totalHeader, 10) : ext.sizeBytes;
 
-  let downloaded = 0;
-  const out = createWriteStream(destPath);
+  const isPartial = res.status === 206;
+  const totalHeader = res.headers.get("content-length");
+  const remoteLength = totalHeader ? Number.parseInt(totalHeader, 10) : NaN;
+  const totalBytes = isPartial && Number.isFinite(remoteLength) ? existing + remoteLength : remoteLength;
+  const total = Number.isFinite(totalBytes) ? totalBytes : ext.sizeBytes;
+
+  // 200 means the server ignored our Range header — drop any partial
+  // bytes and start clean instead of corrupting the tarball.
+  const appendMode = isPartial && existing > 0;
+  if (!appendMode && existing > 0) existing = 0;
+
+  let downloaded = existing;
+  const out = createWriteStream(destPath, appendMode ? { flags: "a" } : {});
   const body = Readable.fromWeb(res.body as never);
   body.on("data", (chunk: Buffer) => {
     downloaded += chunk.length;
