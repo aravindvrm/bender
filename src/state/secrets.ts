@@ -10,10 +10,11 @@
  * Individual-entry storage prompted once per key, which was confusing
  * and alarming on every new unsigned build.
  *
- * Lazy migration: if a key is missing from the blob, the old
- * individual Entry is checked and, if found, absorbed into the blob and
- * the individual entry deleted. Existing installs migrate transparently
- * on first use of each key.
+ * Upgrade path: secrets stored under the previous per-account scheme
+ * are NOT migrated automatically — reading each one would prompt
+ * separately, which defeats the point. Users re-enter their keys in
+ * Settings once after upgrading; from then on it's a single item.
+ * Stale per-account entries are left orphaned in the keychain.
  */
 import { Entry } from "@napi-rs/keyring";
 
@@ -101,24 +102,6 @@ function _saveBlob(map: Map<string, string>): boolean {
   }
 }
 
-/**
- * Lazy migration: try reading an old individual Entry. If found, absorb
- * it into the blob and delete the individual entry so it's a one-time op.
- */
-function _migrateOldEntry(account: string, map: Map<string, string>): string | null {
-  try {
-    const old = new Entry(SERVICE, account);
-    const value = old.getPassword();
-    if (typeof value === "string" && value.length > 0) {
-      map.set(account, value);
-      _saveBlob(map);
-      try { old.deletePassword(); } catch { /* best-effort */ }
-      return value;
-    }
-  } catch { /* no old entry */ }
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // Public: secret CRUD
 // ---------------------------------------------------------------------------
@@ -127,9 +110,7 @@ export function getSecret(account: string): string | null {
   if (!ACCOUNT_PATTERN.test(account)) return null;
   if (!isKeychainAvailable()) return null;
   const map = _loadBlob();
-  const value = map.get(account);
-  if (value !== undefined) return value;
-  return _migrateOldEntry(account, map);
+  return map.get(account) ?? null;
 }
 
 /**
