@@ -1,7 +1,7 @@
 {
   "name": "bender",
   "productName": "Bender",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "AI-powered software factory — turns messy product ideas into maintainable codebases",
   "type": "module",
   "main": "dist-bundle/desktop/main.js",
