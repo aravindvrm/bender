@@ -130,6 +130,45 @@ async function checkKeychainLoad(electronBin, appBundle) {
   });
 }
 
+async function checkSqliteLoad(electronBin, appBundle) {
+  const probeScript = `
+    const Database = require('better-sqlite3');
+    const db = new Database(':memory:');
+    const row = db.prepare('SELECT 1 AS v').get();
+    if (!row || row.v !== 1) { console.error('sqlite readback mismatch'); process.exit(2); }
+    db.close();
+    console.log('sqlite ok');
+  `;
+  return new Promise((resolveP, reject) => {
+    const resourcesDir = join(appBundle, "Contents", "Resources");
+    const child = spawn(electronBin, ["-e", probeScript], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1",
+        NODE_PATH: join(resourcesDir, "app.asar.unpacked", "node_modules") + ":" +
+                   join(resourcesDir, "app.asar", "node_modules"),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (b) => { stdout += b; });
+    child.stderr.on("data", (b) => { stderr += b; });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0 && stdout.includes("sqlite ok")) {
+        process.stdout.write(`[verify] better-sqlite3 native module loads cleanly\n`);
+        resolveP();
+      } else {
+        reject(new Error(
+          `better-sqlite3 probe failed (exit ${code})\n` +
+          (stdout ? `stdout: ${stdout.trim()}\n` : "") +
+          (stderr ? `stderr: ${stderr.trim()}\n` : ""),
+        ));
+      }
+    });
+  });
+}
+
 function killChild(child) {
   return new Promise((resolveP) => {
     if (child.exitCode !== null || child.killed) {
@@ -170,6 +209,7 @@ async function main() {
   // platform binary isn't shipped, every secret operation fails silently
   // at runtime and credentials revert to plaintext. Catch that here.
   await checkKeychainLoad(electronBin, appBundle);
+  await checkSqliteLoad(electronBin, appBundle);
 
   const stdoutChunks = [];
   const stderrChunks = [];

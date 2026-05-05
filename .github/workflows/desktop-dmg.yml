@@ -34,6 +34,12 @@ jobs:
         id: version
         run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
 
+      - name: Stage DMG artifacts
+        run: |
+          mkdir -p dist-desktop
+          cp "$HOME/.bender-dist-desktop"/*.dmg dist-desktop/
+          ls -la dist-desktop/
+
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
