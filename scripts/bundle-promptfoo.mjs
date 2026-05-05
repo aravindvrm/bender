@@ -42,7 +42,10 @@ async function readVersion() {
 
 function run(cmd, args, opts = {}) {
   return new Promise((resolveP, reject) => {
-    const proc = spawn(cmd, args, { stdio: "inherit", ...opts });
+    // Both child stdout and stderr go to our stderr (fd 2), so we keep this
+    // script's stdout reserved for the final JSON metadata. CI consumers
+    // pipe stdout into jq; any leakage here would corrupt the parse.
+    const proc = spawn(cmd, args, { stdio: ["ignore", 2, 2], ...opts });
     proc.once("error", reject);
     proc.once("exit", (code) => {
       if (code === 0) resolveP();
