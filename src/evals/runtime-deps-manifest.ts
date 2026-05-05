@@ -39,16 +39,20 @@ export interface RuntimeExtensionManifest {
 /** Sentinel sha256 used while a bundle hasn't been published yet. */
 export const UNPUBLISHED_SHA256 = "unpublished";
 
-export const RUNTIME_EXTENSIONS = {
+const _MANIFEST = {
   promptfoo: {
     id: "promptfoo",
     label: "Eval support (promptfoo)",
     bundleVersion: 1,
     upstreamVersion: "0.120.19",
     url: "https://github.com/aravindvrm/bender/releases/download/promptfoo-bundle-v1/promptfoo-v1.tar.gz",
-    sha256: UNPUBLISHED_SHA256,
-    sizeBytes: 150_000_000,
+    sha256: "c0eb1c529cb21c1988cfc1b2bb4d29d9f0ba60253f5cb648262cb5b82f762a5d",
+    sizeBytes: 42_348_632,
   },
-} as const satisfies Record<string, RuntimeExtensionManifest>;
+} satisfies Record<string, RuntimeExtensionManifest>;
 
-export type RuntimeExtensionId = keyof typeof RUNTIME_EXTENSIONS;
+// Widened so `sha256 === UNPUBLISHED_SHA256` checks aren't narrowed away
+// when a manifest entry happens to have a real hash committed.
+export const RUNTIME_EXTENSIONS: Record<keyof typeof _MANIFEST, RuntimeExtensionManifest> = _MANIFEST;
+
+export type RuntimeExtensionId = keyof typeof _MANIFEST;
