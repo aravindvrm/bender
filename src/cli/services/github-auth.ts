@@ -3,6 +3,34 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getBenderHomePath } from "../../state/paths.js";
+import {
+  buildSecretRef,
+  deleteSecret,
+  isSecretRef,
+  parseSecretRef,
+  getSecret,
+  setSecret,
+} from "../../state/secrets.js";
+
+const GITHUB_CLIENT_SECRET_ACCOUNT = "github-clientSecret";
+const GITHUB_ACCESS_TOKEN_ACCOUNT = "github-accessToken";
+
+/**
+ * If the stored value is a `secret:` ref, return the keychain value.
+ * If it's plaintext, migrate it to keychain (best-effort) and return
+ * the plaintext. Returns undefined for empty/missing values.
+ */
+function hydrateOrMigrate(stored: string | undefined, account: string): string | undefined {
+  if (!stored || stored.length === 0) return undefined;
+  if (isSecretRef(stored)) {
+    const fetched = getSecret(parseSecretRef(stored));
+    return fetched ?? undefined;
+  }
+  // Legacy plaintext — migrate it on next write. We can't rewrite the file
+  // here because the writer is the source of truth; instead the writer
+  // function detects plaintext and converts it on save.
+  return stored;
+}
 
 export interface GitHubSession {
   accessToken: string;
@@ -47,7 +75,10 @@ export async function readStoredGitHubAuthConfig(): Promise<StoredGitHubAuthConf
     const parsed = JSON.parse(raw) as StoredGitHubAuthConfig;
     return {
       clientId: parsed.clientId?.trim() || undefined,
-      clientSecret: parsed.clientSecret?.trim() || undefined,
+      // clientSecret may be a `secret:` ref → resolve via keychain.
+      // Plaintext values are returned as-is and will be migrated on the
+      // next call to writeStoredGitHubAuthConfig.
+      clientSecret: hydrateOrMigrate(parsed.clientSecret?.trim(), GITHUB_CLIENT_SECRET_ACCOUNT),
       redirectUri: parsed.redirectUri?.trim() || undefined,
     };
   } catch {
@@ -60,7 +91,27 @@ export async function writeStoredGitHubAuthConfig(config: StoredGitHubAuthConfig
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }
-  await writeFile(GITHUB_AUTH_CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
+
+  // Redact clientSecret before persisting. Plaintext value → keychain;
+  // store the ref in the JSON. Empty value → drop both keychain entry
+  // and the field. Already-ref values pass through unchanged.
+  let storedClientSecret: string | undefined = config.clientSecret;
+  if (storedClientSecret && !isSecretRef(storedClientSecret)) {
+    if (setSecret(GITHUB_CLIENT_SECRET_ACCOUNT, storedClientSecret)) {
+      storedClientSecret = buildSecretRef(GITHUB_CLIENT_SECRET_ACCOUNT);
+    }
+    // If keychain unavailable, fall through and write plaintext (better
+    // than losing the user's value).
+  } else if (!storedClientSecret) {
+    deleteSecret(GITHUB_CLIENT_SECRET_ACCOUNT);
+  }
+
+  const onDisk: StoredGitHubAuthConfig = {
+    clientId: config.clientId,
+    clientSecret: storedClientSecret,
+    redirectUri: config.redirectUri,
+  };
+  await writeFile(GITHUB_AUTH_CONFIG_FILE, JSON.stringify(onDisk, null, 2), "utf-8");
 }
 
 export async function getGithubAuthConfig(port: number): Promise<{ clientId?: string; clientSecret?: string; redirectUri: string }> {
@@ -223,8 +274,10 @@ export async function readGitHubSession(): Promise<GitHubSession | null> {
     const raw = await readFile(GITHUB_SESSION_FILE, "utf-8");
     const parsed = JSON.parse(raw) as Partial<GitHubSession>;
     if (!parsed.accessToken) return null;
+    const accessToken = hydrateOrMigrate(parsed.accessToken, GITHUB_ACCESS_TOKEN_ACCOUNT);
+    if (!accessToken) return null;
     return {
-      accessToken: parsed.accessToken,
+      accessToken,
       tokenType: parsed.tokenType,
       scope: parsed.scope,
     };
@@ -238,7 +291,21 @@ export async function writeGitHubSession(session: GitHubSession): Promise<void> 
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }
-  await writeFile(GITHUB_SESSION_FILE, JSON.stringify(session, null, 2), "utf-8");
+
+  // Redact accessToken before persisting (same scheme as clientSecret).
+  let storedToken: string = session.accessToken;
+  if (!isSecretRef(storedToken)) {
+    if (setSecret(GITHUB_ACCESS_TOKEN_ACCOUNT, storedToken)) {
+      storedToken = buildSecretRef(GITHUB_ACCESS_TOKEN_ACCOUNT);
+    }
+    // Else keychain unavailable — write plaintext fallback.
+  }
+
+  const onDisk: GitHubSession = {
+    ...session,
+    accessToken: storedToken,
+  };
+  await writeFile(GITHUB_SESSION_FILE, JSON.stringify(onDisk, null, 2), "utf-8");
 }
 
 export async function clearGitHubSession(): Promise<void> {
@@ -249,6 +316,9 @@ export async function clearGitHubSession(): Promise<void> {
   } catch {
     // ignore cleanup failure
   }
+  // Also drop the keychain entry — leaving a stale token there would be
+  // a footgun for anyone who clears their session.
+  deleteSecret(GITHUB_ACCESS_TOKEN_ACCOUNT);
 }
 
 export async function githubApi<T>(path: string, token: string, init?: RequestInit): Promise<T> {

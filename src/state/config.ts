@@ -7,6 +7,13 @@ import { getBenderHomePath } from "./paths.js";
 import { LocalProjectDb } from "./local-db.js";
 import { HomeDb } from "./home-db.js";
 import { DEFAULT_THEME_ID } from "../themes/defaults.js";
+import {
+  buildSecretRef,
+  deleteSecret,
+  isSecretRef,
+  resolveSecret,
+  setSecret,
+} from "./secrets.js";
 
 export type ModelTier = "fast" | "default" | "strong";
 
@@ -180,15 +187,28 @@ export function getConfigPath(projectRoot: string): string {
 
 export async function readConfig(projectRoot: string): Promise<BenderConfig> {
   const { config } = await readProjectConfigRaw(projectRoot);
+  const merged = mergeConfig(DEFAULT_CONFIG, config ?? {});
+  // One-shot migration: if anything plaintext slipped in, redact and
+  // persist refs back to disk + DB before returning. Idempotent.
+  if (hasPlaintextSecrets(merged)) {
+    await writeConfig(projectRoot, merged);
+    return hydrateConfigSecrets(await rereadConfig(projectRoot));
+  }
+  return hydrateConfigSecrets(merged);
+}
+
+async function rereadConfig(projectRoot: string): Promise<BenderConfig> {
+  const { config } = await readProjectConfigRaw(projectRoot);
   return mergeConfig(DEFAULT_CONFIG, config ?? {});
 }
 
 export async function writeConfig(projectRoot: string, config: BenderConfig): Promise<void> {
+  const redacted = redactConfigSecrets(config);
   const db = LocalProjectDb.forProject(projectRoot);
   await db.init();
-  db.setKv(PROJECT_CONFIG_DB_KEY, JSON.stringify(config));
+  db.setKv(PROJECT_CONFIG_DB_KEY, JSON.stringify(redacted));
   const configPath = getConfigPath(projectRoot);
-  await writeConfigAtPath(configPath, config);
+  await writeConfigAtPath(configPath, redacted);
 }
 
 export function getGlobalConfigPath(): string {
@@ -197,24 +217,32 @@ export function getGlobalConfigPath(): string {
 
 export async function readGlobalConfig(): Promise<BenderConfig> {
   const { config } = await readGlobalConfigRaw();
-  return mergeConfig(DEFAULT_CONFIG, config ?? {});
+  const merged = mergeConfig(DEFAULT_CONFIG, config ?? {});
+  if (hasPlaintextSecrets(merged)) {
+    await writeGlobalConfig(merged);
+    const { config: refreshed } = await readGlobalConfigRaw();
+    return hydrateConfigSecrets(mergeConfig(DEFAULT_CONFIG, refreshed ?? {}));
+  }
+  return hydrateConfigSecrets(merged);
 }
 
 export async function writeGlobalConfig(config: BenderConfig): Promise<void> {
+  const redacted = redactConfigSecrets(config);
   const db = HomeDb.current();
   await db.init();
-  db.setJson(GLOBAL_CONFIG_DB_KEY, config);
-  await writeConfigAtPath(getGlobalConfigPath(), config);
+  db.setJson(GLOBAL_CONFIG_DB_KEY, redacted);
+  await writeConfigAtPath(getGlobalConfigPath(), redacted);
 }
 
 export async function readEffectiveConfig(projectRoot?: string | null): Promise<BenderConfig> {
   const globalConfig = await readGlobalConfig();
   if (!projectRoot) return globalConfig;
-  const project = await readProjectConfigRaw(projectRoot);
-  if (!project.exists) {
-    return globalConfig;
-  }
-  return mergeConfig(globalConfig, project.config ?? {});
+  // readConfig runs the project-level migration + hydration before
+  // returning, so we can merge two already-hydrated configs and
+  // get the right shape without re-resolving (which would falsely
+  // flag the plaintext values as un-migrated).
+  const projectConfig = await readConfig(projectRoot);
+  return mergeConfig(globalConfig, projectConfig);
 }
 
 async function readConfigAtPath(configPath: string): Promise<BenderConfig> {
@@ -355,4 +383,177 @@ function mergeConfig(defaults: BenderConfig, overrides: Partial<BenderConfig>): 
       },
     },
   };
+}
+
+// ── Secret redaction ──────────────────────────────────────────────────────────
+//
+// All secret-bearing fields in BenderConfig are stored as either:
+//   - empty string / undefined (no value),
+//   - a `secret:<account>` reference (preferred, value lives in OS keychain), or
+//   - a raw plaintext value (legacy; auto-migrated to keychain on next save).
+//
+// `redactConfigSecrets` walks the config and migrates any plaintext values it
+// finds, returning a copy whose secret fields are all refs (or empty). It is
+// idempotent: running on an already-redacted config is a no-op. Called from
+// every write path so cleartext credentials never reach the YAML or DB layer.
+
+interface SecretSlot {
+  /** Stable account name used as the keychain key. */
+  account: string;
+  /** Logical label for warnings / migration logs. */
+  label: string;
+  /** Current configured value (plaintext or ref or empty). */
+  value: string | undefined;
+}
+
+/** Walk a config, yielding every secret-bearing slot with a setter. */
+function forEachSecretSlot(
+  config: BenderConfig,
+  visit: (slot: SecretSlot, set: (next: string | undefined) => void) => void,
+): void {
+  // Top-level llm.apiKey
+  visit(
+    { account: "llm-apiKey", label: "llm.apiKey", value: config.llm.apiKey },
+    (next) => { config.llm.apiKey = next; },
+  );
+
+  // llm.models.<tier>.apiKey (only when the tier is a ModelConfig object,
+  // not a bare string)
+  for (const tier of ["fast", "default", "strong"] as const) {
+    const model = config.llm.models[tier];
+    if (typeof model === "string") continue;
+    visit(
+      {
+        account: `llm-models-${tier}-apiKey`,
+        label: `llm.models.${tier}.apiKey`,
+        value: model.apiKey,
+      },
+      (next) => { (config.llm.models[tier] as ModelConfig).apiKey = next; },
+    );
+  }
+
+  // providers.<name>.apiKey
+  if (config.providers) {
+    for (const [name, provider] of Object.entries(config.providers)) {
+      visit(
+        {
+          account: `providers-${name}-apiKey`,
+          label: `providers.${name}.apiKey`,
+          value: provider.apiKey,
+        },
+        (next) => { provider.apiKey = next; },
+      );
+    }
+  }
+
+  // mcp.servers[*].authorizationToken — keyed by the server's stable id,
+  // falling back to a slug of the name. Skip if neither is usable as an
+  // account name (would lose isolation).
+  if (config.mcp?.servers) {
+    for (const server of config.mcp.servers) {
+      const idCandidate = server.id ?? server.name ?? "";
+      const slug = idCandidate.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+      if (!slug) continue;
+      visit(
+        {
+          account: `mcp-${slug}-authorizationToken`,
+          label: `mcp.servers[${idCandidate}].authorizationToken`,
+          value: server.authorizationToken,
+        },
+        (next) => { server.authorizationToken = next; },
+      );
+    }
+  }
+}
+
+/**
+ * Migrate plaintext secrets in the config to the OS keychain, returning a
+ * deep-cloned copy whose secret fields are all refs (or undefined).
+ * Idempotent. Pure plaintext → ref. Existing refs are preserved as-is.
+ *
+ * If the keychain is unavailable, plaintext values are left in place and a
+ * warning is logged (already by setSecret). The returned config is then
+ * still safe to persist — it just won't be more secure than before.
+ */
+export function redactConfigSecrets(config: BenderConfig): BenderConfig {
+  const cloned = JSON.parse(JSON.stringify(config)) as BenderConfig;
+
+  forEachSecretSlot(cloned, (slot, set) => {
+    const { account, value } = slot;
+    if (value === undefined || value === "") {
+      // Empty: ensure the keychain entry is removed too so we don't keep
+      // a stale value around after the user clears the field.
+      deleteSecret(account);
+      set(undefined);
+      return;
+    }
+    if (isSecretRef(value)) {
+      // Already a ref. Leave as-is.
+      return;
+    }
+    // Plaintext: try to move it to the keychain. On success, replace
+    // with the ref. On failure, keep the plaintext (writing the ref
+    // would lose the value).
+    if (setSecret(account, value)) {
+      set(buildSecretRef(account));
+    }
+  });
+
+  return cloned;
+}
+
+/**
+ * True if the config contains any plaintext secret value (i.e. a non-empty
+ * string that is not a `secret:` ref). Used to decide whether to run the
+ * one-shot migration on read.
+ */
+export function hasPlaintextSecrets(config: BenderConfig): boolean {
+  let found = false;
+  forEachSecretSlot(config, (slot) => {
+    if (found) return;
+    if (slot.value && !isSecretRef(slot.value)) found = true;
+  });
+  return found;
+}
+
+/**
+ * Per-provider env-var override map. When the env var is set, it wins over
+ * both keychain entries and stored plaintext — useful for CI / scripted runs.
+ */
+const PROVIDER_ENV_VARS: Record<string, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  google: "GOOGLE_GENERATIVE_AI_API_KEY",
+  groq: "GROQ_API_KEY",
+};
+
+/**
+ * Resolve all secret references in a config to their actual plaintext
+ * values, returning a deep-cloned copy. Used at read boundaries so callers
+ * (LLM SDK setup, etc.) can keep accessing `config.providers.openai.apiKey`
+ * and get a usable string back.
+ *
+ * The clone is intentional — never mutate the persisted in-memory shape,
+ * because that shape is what gets compared in mergeConfig and may be
+ * re-serialized back through writeConfig.
+ */
+export function hydrateConfigSecrets(config: BenderConfig): BenderConfig {
+  const cloned = JSON.parse(JSON.stringify(config)) as BenderConfig;
+
+  forEachSecretSlot(cloned, (slot, set) => {
+    // Determine env var override: top-level llm.apiKey + per-provider keys
+    // honor the matching env var.
+    let envVar: string | undefined;
+    if (slot.account === "llm-apiKey") {
+      envVar = PROVIDER_ENV_VARS[config.llm.provider];
+    } else if (slot.account.startsWith("providers-")) {
+      const providerName = slot.account.replace(/^providers-/, "").replace(/-apiKey$/, "");
+      envVar = PROVIDER_ENV_VARS[providerName];
+    }
+
+    const resolved = resolveSecret(slot.value, { envVar, contextLabel: slot.label });
+    set(resolved ?? undefined);
+  });
+
+  return cloned;
 }

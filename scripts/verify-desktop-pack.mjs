@@ -80,6 +80,56 @@ async function pollHealth(port, deadline, child) {
   throw new Error(`Health endpoint did not return ok within ${HEALTH_TIMEOUT_MS}ms`);
 }
 
+/**
+ * Spawn a one-shot Electron-as-Node child that imports @napi-rs/keyring,
+ * does a round-trip with a sentinel account, and exits 0 on success. Any
+ * non-zero exit / missing-module error fails the verifier. Uses a
+ * throwaway service+account so it can't collide with real bender entries.
+ */
+async function checkKeychainLoad(electronBin, appBundle) {
+  const probeAccount = `__verify_probe_${Date.now()}__`;
+  const probeScript = `
+    const { Entry } = require('@napi-rs/keyring');
+    const e = new Entry('bender-verify', '${probeAccount}');
+    e.setPassword('ok');
+    if (e.getPassword() !== 'ok') { console.error('keyring readback mismatch'); process.exit(2); }
+    e.deletePassword();
+    if (e.getPassword() !== null) { console.error('keyring delete failed'); process.exit(3); }
+    console.log('keyring ok');
+  `;
+  return new Promise((resolveP, reject) => {
+    // Run the probe via -e so we don't have to copy a script into the asar.
+    // Set NODE_PATH so Electron-as-Node can find the unpacked native module
+    // wherever electron-builder put it.
+    const resourcesDir = join(appBundle, "Contents", "Resources");
+    const child = spawn(electronBin, ["-e", probeScript], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1",
+        NODE_PATH: join(resourcesDir, "app.asar.unpacked", "node_modules") + ":" +
+                   join(resourcesDir, "app.asar", "node_modules"),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (b) => { stdout += b; });
+    child.stderr.on("data", (b) => { stderr += b; });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0 && stdout.includes("keyring ok")) {
+        process.stdout.write(`[verify] keychain native module loads cleanly\n`);
+        resolveP();
+      } else {
+        reject(new Error(
+          `keychain probe failed (exit ${code})\n` +
+          (stdout ? `stdout: ${stdout.trim()}\n` : "") +
+          (stderr ? `stderr: ${stderr.trim()}\n` : ""),
+        ));
+      }
+    });
+  });
+}
+
 function killChild(child) {
   return new Promise((resolveP) => {
     if (child.exitCode !== null || child.killed) {
@@ -114,6 +164,12 @@ async function main() {
   const port = await findFreePort();
   process.stdout.write(`[verify] spawning backend from ${appBundle}\n`);
   process.stdout.write(`[verify] using port ${port}\n`);
+
+  // First, smoke-test that the OS keychain native module loads from inside
+  // the packaged app. If @napi-rs/keyring is mis-externalized or its
+  // platform binary isn't shipped, every secret operation fails silently
+  // at runtime and credentials revert to plaintext. Catch that here.
+  await checkKeychainLoad(electronBin, appBundle);
 
   const stdoutChunks = [];
   const stderrChunks = [];

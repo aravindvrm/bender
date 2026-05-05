@@ -38,6 +38,7 @@ const external = [
   "onnxruntime-node",
   "@anthropic-ai/claude-agent-sdk",
   "@napi-rs/canvas",
+  "@napi-rs/keyring",
   "promptfoo",
 ];
 
