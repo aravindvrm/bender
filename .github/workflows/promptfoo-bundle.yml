@@ -1,0 +1,89 @@
+name: promptfoo-bundle
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "extensions/promptfoo/**"
+      - "scripts/bundle-promptfoo.mjs"
+      - ".github/workflows/promptfoo-bundle.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Read bundle version
+        id: version
+        run: |
+          BUNDLE_VERSION=$(node -p "require('./extensions/promptfoo/version.json').bundleVersion")
+          UPSTREAM_VERSION=$(node -p "require('./extensions/promptfoo/version.json').upstreamVersion")
+          echo "bundleVersion=$BUNDLE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "upstreamVersion=$UPSTREAM_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=promptfoo-bundle-v$BUNDLE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if release already exists
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build promptfoo bundle
+        if: steps.existing.outputs.exists == 'false'
+        id: build
+        run: |
+          META_FILE=$(mktemp)
+          node scripts/bundle-promptfoo.mjs > "$META_FILE"
+          cat "$META_FILE"
+          # Expose individual fields for the release step.
+          echo "artifact=$(jq -r .artifact "$META_FILE")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(jq -r .sha256 "$META_FILE")" >> "$GITHUB_OUTPUT"
+          echo "sizeBytes=$(jq -r .sizeBytes "$META_FILE")" >> "$GITHUB_OUTPUT"
+          # Also publish the metadata JSON as a sidecar asset.
+          cp "$META_FILE" dist-extensions/promptfoo-v${{ steps.version.outputs.bundleVersion }}.json
+
+      - name: Create GitHub release
+        if: steps.existing.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "promptfoo bundle v${{ steps.version.outputs.bundleVersion }} (promptfoo ${{ steps.version.outputs.upstreamVersion }})"
+          body: |
+            Runtime-installable promptfoo bundle for Bender's eval support.
+
+            - Bundle version: `${{ steps.version.outputs.bundleVersion }}`
+            - Upstream promptfoo: `${{ steps.version.outputs.upstreamVersion }}`
+            - SHA-256: `${{ steps.build.outputs.sha256 }}`
+            - Size: `${{ steps.build.outputs.sizeBytes }}` bytes
+
+            Bender downloads this tarball into `~/.bender/runtime-deps/promptfoo/${{ steps.version.outputs.bundleVersion }}/`
+            when the user opens the Evals tab and clicks "Install eval support".
+
+            **After publishing this release**, update `src/evals/runtime-deps-manifest.ts`
+            with the matching `sha256` and `sizeBytes`, then commit and tag a bender
+            release that ships the updated manifest.
+          files: |
+            ${{ steps.build.outputs.artifact }}
+            dist-extensions/promptfoo-v${{ steps.version.outputs.bundleVersion }}.json
+
+      - name: Skip — release already exists
+        if: steps.existing.outputs.exists == 'true'
+        run: |
+          echo "Release ${{ steps.version.outputs.tag }} already exists; nothing to do."
+          echo "Bump bundleVersion in extensions/promptfoo/version.json to publish a new bundle."
