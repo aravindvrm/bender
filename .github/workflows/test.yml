@@ -1,0 +1,48 @@
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  unit-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # @napi-rs/keyring's Linux backend dynamically links libsecret-1.so.0.
+      # Without it the .node binary still loads (the package ships fallback
+      # shims), but any actual Entry operation throws. Our code already
+      # handles that gracefully (isKeychainAvailable() returns false; tests
+      # use it.skipIf to skip keychain-dependent assertions). Installing
+      # libsecret here means the module probe succeeds and we exercise the
+      # graceful-fallback paths against a real environment that has a
+      # secret service available, even if no DBus session is running.
+      - name: Install libsecret
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-0 libsecret-1-dev
+
+      - name: Install deps
+        run: npm ci
+
+      # tsc compiles src/ → dist/ (needed by integration tests that import
+      # from compiled files via "*.js" specifiers).
+      - name: Build CLI
+        run: npm run build:cli
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Integration tests
+        run: npm run test:integration
