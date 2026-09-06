@@ -1,195 +1,122 @@
 # Bender
 
-Bender is a local-first AI engineering workspace for planning, implementation, review, and evals across real repositories.
+A local-first AI engineering workspace — CLI, web dashboard, and desktop app on a
+single backend — built to work through agent architecture properly rather than
+read about it.
 
-It runs one shared backend across three interfaces:
-- CLI (`bender ...`)
-- Web dashboard (`bender bend`)
-- Electron desktop app (`npm run desktop:start`)
+**Status: exploratory, dormant.** This was a learning project: how do you
+decompose coding work across specialised agents, attach tools and skills to them,
+and — the part most agent tooling skips — *measure whether the output is any
+good?* It runs, it is tested, and it is not a maintained product.
 
-## Core Capabilities
+```
+26,000 lines TypeScript · 120 source modules · 56 test files · 8 role runtimes
+```
 
-- Project lifecycle commands: `init`, `analyze`, `plan`, `implement`, `status`
-- Role-based runtimes: analyzer, architect, planner, implementer, reviewer
-- Task planning + execution with persisted state
-- Built-in workflows with run history and API execution
-- Promptfoo-backed eval compare and suite execution
-- Skills catalog/library (curated + user + project packages)
-- Git and GitHub integration (including issue extraction/import flows)
-- Project-scoped and global chat with tool-backed operator actions
-- Local SQLite persistence (no external database required)
+---
 
-## Product Shape
+## What it explores
 
-- No-project mode is first-class: the app can start with `projectRoot: null`.
-- Home view supports recent projects, opening existing paths, creating a new project, and clone entrypoints.
-- Chat runs in the bottom operation drawer (not a standalone sidebar page).
-- Chat scope is explicit:
-  - Global scope uses `~/.bender/global-chat.db`
-  - Project scope uses `<project>/.bender/bender.db`
+**Role decomposition instead of one large agent.** Eight runtimes with distinct
+prompts, tools and skill defaults — `analyzer`, `architect`, `clarifier`,
+`flowcharter`, `planner`, `implementer`, `reviewer`, `office-hours` — sharing a
+common `base`. A plan produced by the architect is executed by the implementer
+and checked by the reviewer, each with its own context rather than one thread
+accumulating everything.
 
-## Requirements
+**Evals as a first-class subsystem, not an afterthought.** `src/evals/` is a
+runner, a scorer and an aggregator, wired to Promptfoo and exposed through both
+the API and the UI. `bender eval-ci --suite <id>` runs a suite as a CI gate, so a
+prompt change that scores worse can fail a build. Most agent tooling ships on
+vibes; this was an attempt not to.
 
-- Node.js `>=20`
-- npm
+**Skills and MCP as attachable capability.** Skills come from three sources
+(curated, user, project) with per-role defaults, and agents carry
+`mcpServerIds` pointing at a registry of MCP servers validated at runtime. The
+question being explored: what belongs in a prompt, what belongs in a tool, and
+what belongs in a skill package?
 
-## Quick Start
+**One backend, three surfaces.** The CLI, the web dashboard and the Electron app
+are clients of the same Express server and the same SQLite state, rather than
+three implementations that drift. Adding a capability once makes it available in
+all three.
+
+**Local-first throughout.** SQLite for state (`better-sqlite3`), the OS keyring
+for API credentials (`@napi-rs/keyring`), no external database and no hosted
+component. Provider abstraction over the Vercel AI SDK covers Anthropic, OpenAI,
+Google, Groq, Ollama and any OpenAI-compatible endpoint, in `fast` / `default` /
+`strong` tiers.
+
+---
+
+## Quick start
+
+Requires Node `>=20`.
 
 ```bash
 npm install
 npm run build
-npm run bend
+npm run bend          # dashboard at http://localhost:3142
+npm run desktop:start # or the Electron app
 ```
 
-Then open `http://localhost:3142` (or your configured port).
+## CLI
 
-For desktop:
-
-```bash
-npm run desktop:start
+```
+bender init      -d <dir>   scaffold .bender/ — brief, architecture, task plan
+bender analyze   -d <dir>   read an existing codebase into Bender state
+bender plan "…"  -d <dir>   plan a change against that state
+bender implement -d <dir>   run the implementation pipeline for the current plan
+bender status    -d <dir>   state, tasks, recent decisions
+bender bend      [-d <dir>] start the dashboard
+bender eval-ci --suite <id> run an eval suite as a CI gate
 ```
 
-## CLI Reference
+## Layout
 
-- `bender init -d <dir>`: initialize a project (`.bender/`, brief, architecture, task plan)
-- `bender analyze -d <dir>`: analyze an existing codebase into Bender state
-- `bender plan "<description>" -d <dir>`: plan a feature/change for an initialized project
-- `bender implement -d <dir>`: execute implementation pipeline for current plan/tasks
-- `bender status -d <dir>`: show state, tasks, and recent decisions
-- `bender bend [-d <dir>]`: run local dashboard server (aliases: `open`, `review`)
-- `bender stop`: stop dashboard server
-- `bender eval-ci --suite <suite-id> -d <dir>`: run eval suite as CI gate
+```
+src/roles/      the eight role runtimes, on a shared base
+src/evals/      runner, scoring, aggregation — Promptfoo-backed
+src/llm/        provider abstraction, tiers, MCP server wiring
+src/state/      SQLite persistence, skills, skill packages, secrets
+src/cli/        Express server, 22 route modules, commands
+src/web/        React dashboard
+src/desktop/    Electron main + backend spawn
+tests/          38 unit, 18 integration
+```
 
-## Web/Desktop UI
+State lives in `<project>/.bender/` per project and `~/.bender/` globally;
+`BENDER_HOME_DIR` overrides the latter.
 
-Primary views:
-- `Overview`
-- `Tasks`
-- `Workflows`
-- `Architecture`
-- `Evals`
-- `Agents`
-- `Settings`
-
-Behavior notes:
-- Settings and Agents are available without an open project.
-- Uninitialized projects show an explicit "Analyze Project" flow.
-- The top bar includes current project context and diff summary panel toggles.
-
-### Operation Drawer + Chat
-
-- Chat, operation output, and terminal panel live in the bottom drawer.
-- Thread lifecycle: create, rename, archive/restore, delete.
-- Keyboard shortcut for new thread: `Cmd/Ctrl+K`.
-- Chat supports deterministic command fallbacks and tool-backed actions.
-
-## Workflows
-
-Built-in workflow definitions are auto-seeded:
-- `issue-extract-candidates`
-- `task-to-implement`
-- `review-current-changes`
-
-API surface includes:
-- `GET/PUT/DELETE /api/workflows/:id`
-- `POST /api/workflows/:id/run`
-- `GET /api/workflow-runs`
-- `GET /api/workflow-runs/:runId`
-
-## Evals
-
-Evals are backed by Promptfoo and exposed through both API and UI:
-- Eval tasks, configs, and suites CRUD
-- Compare runs (`/api/run/evals/compare`)
-- Suite runs (`/api/run/evals/suites/:suiteId`)
-- Historical run inspection endpoints
-- CI gating via `bender eval-ci`
-
-## Backend and API
-
-Core server: `src/cli/server.ts`
-
-- Health endpoint: `GET /api/health` returns `{ ok: true }`
-- Port resolution order: `BENDER_PORT` -> `PORT` -> `3142`
-- Serves built web assets from `dist/web`
-- Structured per-request logging with request IDs
-
-High-level API domains:
-- Project and state: `/api/project*`, `/api/projects*`, `/api/state`
-- Chat: `/api/chat/*`
-- Run operations and answer handling: `/api/run/*`
-- Tasks and task-GitHub linking: `/api/tasks/*`
-- Workflows and workflow runs: `/api/workflows*`, `/api/workflow-runs*`
-- Git/GitHub: `/api/git/*`, `/api/github/*`, `/api/github/work-items/*`
-- Skills, agents, connectors, LLM, config, logs, terminal, evals, themes
-
-## Persistence Model
-
-Per-project:
-- `<project>/.bender/` artifacts (brief, architecture, tasks, logs, skills, etc.)
-- `<project>/.bender/bender.db` (structured local records)
-
-Global:
-- `~/.bender/bender-home.db` (home-level settings/registry)
-- `~/.bender/global-chat.db` (chat in no-project scope)
-
-Override global home path with `BENDER_HOME_DIR`.
-
-## LLM Providers
-
-Supported providers:
-- `anthropic`
-- `openai`
-- `google`
-- `groq`
-- `ollama`
-- `local`
-- `openai-compatible`
-
-Tiers:
-- `fast`
-- `default`
-- `strong`
-
-`openai-compatible` and `local` include capability probing and endpoint fallback logic for local/self-hosted servers.
-
-## Testing
+## Tests
 
 ```bash
 npm run test:unit
 npm run test:integration
-npm run test:harness
-npm run test:e2e:smoke
 npm run test:e2e:playwright
-npm run test:harness:full
 ```
 
-## Build, Packaging, Release
+---
 
-- `npm run build`: build CLI + web
-- `npm run build:cli`: build CLI only
-- `npm run build:web`: build web only
-- `npm run desktop:start`: launch Electron app
-- `npm run desktop:backend`: run desktop backend entrypoint
-- `npm run desktop:pack:dmg`: build macOS DMG into `dist-desktop/`
-- `npm run desktop:pack:dir`: build unpacked macOS app into `dist-desktop/`
+## What I would do differently
 
-CI workflows:
-- `.github/workflows/playwright-smoke.yml`
-- `.github/workflows/desktop-dmg.yml`
+The three-surface decision was the expensive one. A shared backend keeps the
+clients honest, but it also means every capability needs three presentations, and
+the Electron packaging in particular consumed time that the CLI and web app
+together would not have.
 
-## Environment Variables
+The eval subsystem is the part worth keeping. Scoring agent output is the
+difficult and interesting problem, and it is the piece that generalises beyond
+this codebase.
 
-- `BENDER_PORT`: preferred backend port
-- `PORT`: fallback backend port
-- `BENDER_HOME_DIR`: override default `~/.bender`
-- `BENDER_PROJECT_DIR`: optional initial project path for desktop backend
-- `BENDER_NODE_BIN`: explicit Node executable for desktop backend spawn
-- `BENDER_LOG_LEVEL`: log-level override (`debug|info|warn|error`)
+## Configuration
 
-## Troubleshooting
+| variable | purpose |
+|---|---|
+| `BENDER_PORT` / `PORT` | backend port (default `3142`) |
+| `BENDER_HOME_DIR` | override `~/.bender` |
+| `BENDER_NODE_BIN` | explicit Node binary for the desktop backend |
+| `BENDER_LOG_LEVEL` | `debug` / `info` / `warn` / `error` |
 
-- Backend health: check `GET /api/health`
-- Logs: inspect `.bender/bender.log` and `/api/logs`
-- Desktop backend startup failures: confirm Node path or set `BENDER_NODE_BIN`
-- Local provider model detection issues: verify base URL/model and provider settings in `Settings`
+API credentials are stored in the OS keyring, never in the repository or in
+environment files.
