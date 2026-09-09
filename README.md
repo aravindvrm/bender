@@ -10,7 +10,7 @@ and — the part most agent tooling skips — *measure whether the output is any
 good?* It runs, it is tested, and it is not a maintained product.
 
 ```
-26,000 lines TypeScript · 120 source modules · 56 test files · 8 role runtimes
+49,000 lines TypeScript · 156 source modules · 63 test files · 8 role runtimes
 ```
 
 ---
